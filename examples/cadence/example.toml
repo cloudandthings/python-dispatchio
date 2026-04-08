@@ -1,0 +1,12 @@
+title    = "Cadence & Cross-Cadence Dependencies"
+summary  = """\
+Demonstrates typed Cadence objects — DAILY, WEEKLY, MONTHLY, YESTERDAY — \
+and how a daily job can depend on the current month's run of a slower \
+upstream job (cross-cadence dependency). Each job independently resolves \
+its own run_id from the reference_time; a Dependency's cadence is \
+independent of the depending job's cadence, enabling fine-grained \
+synchronisation across different scheduling frequencies.\
+"""
+tags       = ["cadence", "DAILY", "MONTHLY", "WEEKLY", "YESTERDAY", "cross-cadence", "dependencies"]
+order      = 5
+show_files = ["jobs.py"]

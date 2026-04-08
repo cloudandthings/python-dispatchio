@@ -1,0 +1,19 @@
+# https://mise.jdx.dev
+# Task runner for Dispatchio development tasks.
+# Tasks live in mise-tasks/ and are auto-discovered.
+#
+# List tasks:       mise tasks
+# Run a task:       mise run <task>
+# Run with args:    mise run <task> -- <args>
+
+[tools]
+jq              = "1.8.1"
+pre-commit      = "4.5.1"
+python          = "3.13"
+starship        = "1.24.2"
+trivy           = "v0.69.3"
+
+# AI tools support
+fd              = "v10.4.2"
+github-cli      = "v2.89.0"
+ripgrep         = "15.1.0"

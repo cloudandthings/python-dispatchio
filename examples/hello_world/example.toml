@@ -1,0 +1,8 @@
+title    = "Hello World"
+summary  = """\
+The simplest possible Dispatchio pipeline: \
+The Job class creates two jobs and a dependency between them.\
+"""
+tags       = ["PythonJob", "dependencies", "getting-started"]
+order      = 1
+show_files = ["jobs.py", "my_work.py"]

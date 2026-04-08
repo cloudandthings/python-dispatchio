@@ -1,0 +1,12 @@
+title    = "Subprocess Jobs"
+summary  = """\
+Demonstrates SubprocessJob — the executor type for running external \
+processes or scripts. Key difference from PythonJob: the worker \
+script must call run_job() explicitly, and the job's env config must \
+inject DISPATCHIO_RUN_ID and DISPATCHIO_DROP_DIR so completion can be \
+reported back. Includes a job that deliberately fails to show retry \
+behaviour and the final ERROR state.\
+"""
+tags     = ["SubprocessJob", "retries", "error-handling"]
+order    = 3
+show_files = ["jobs.py", "my_work.py"]

@@ -1,0 +1,12 @@
+# Dispatchio configuration — subprocess_example (local dev)
+
+[dispatchio]
+log_level = "INFO"
+
+[dispatchio.state]
+backend = "filesystem"
+root    = ".dispatchio/state"
+
+[dispatchio.receiver]
+backend  = "filesystem"
+drop_dir = ".dispatchio/completions"

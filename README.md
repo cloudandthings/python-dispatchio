@@ -1,0 +1,565 @@
+# Dispatchio
+
+A lightweight, tick-based batch job orchestrator for Python.
+
+Dispatchio is designed for teams running daily/monthly ETL and batch jobs who want
+something simpler than Airflow or Prefect, without giving up dependency management,
+retry logic, or observability.
+
+## How it works
+
+A short-lived **orchestrator process** runs on a schedule (every 5 minutes via cron
+or EventBridge). Each run — called a **tick** — evaluates all your job definitions,
+submits any that are ready, and exits. There is no long-running daemon.
+
+Jobs run independently and signal completion by posting a **completion event**
+(a small JSON payload). The next tick picks this up and unblocks any waiting
+downstream jobs.
+
+```
+cron (every 5 min)
+    └─► Orchestrator.tick()
+            ├─ drain completion events from queue/filesystem
+            ├─ detect lost jobs (heartbeat timeout)
+            └─ for each job:
+                  ├─ skip if already active or done
+                  ├─ check time condition  (after="01:00")
+                  ├─ check dependencies   (job_a[day0] == DONE?)
+                  └─ submit if ready ──► ECS / Lambda / subprocess / HTTP
+                                              │
+                                              └─► posts CompletionEvent when done
+```
+
+## Installation
+
+```bash
+pip install dispatchio          # core (filesystem state, subprocess executor)
+pip install "dispatchio[aws]"   # adds DynamoDB, S3, SQS, ECS, Lambda
+```
+
+Requires Python 3.11+.
+
+## Quick start
+
+### 1. Define your jobs
+
+```python
+# jobs.py
+from pathlib import Path
+from dispatchio import Job, SubprocessJob, Dependency, TimeCondition, local_orchestrator
+
+JOBS = [
+    # Run a data ingest script every day after 1am
+    Job(
+        name="ingest",
+        condition=TimeCondition(after="01:00"),
+        executor=SubprocessJob(command=["python", "ingest.py", "--date", "{run_id}"]),
+    ),
+
+    # Run transform once ingest is done for the same day
+    Job(
+        name="transform",
+        depends_on=[Dependency(job_name="ingest", run_id_expr="day0")],
+        executor=SubprocessJob(command=["python", "transform.py", "--date", "{run_id}"]),
+    ),
+]
+
+orchestrator = local_orchestrator(JOBS, base_dir=Path("/var/dispatchio"))
+```
+
+`local_orchestrator` wires up filesystem-backed state, a subprocess executor, and a
+file-drop completion receiver under `base_dir/state/` and `base_dir/completions/`.
+For custom backends (DynamoDB, SQS, ECS) use `Orchestrator(...)` directly — see
+[Extending Dispatchio](#extending-dispatchio).
+
+### 2. Tick on a schedule
+
+**Cron** (every 5 minutes):
+```
+*/5 * * * * cd /app && python -c "
+from jobs import orchestrator
+orchestrator.tick()
+"
+```
+
+**Or run a tick manually:**
+```bash
+DISPATCHIO_ORCHESTRATOR=jobs:orchestrator dispatchio tick
+```
+
+### 3. Signal completion from your job
+
+Jobs must post a completion event when they finish. The simplest way is to
+write a JSON file to the completions directory:
+
+```python
+# At the end of ingest.py
+import json, pathlib, sys
+
+run_id  = sys.argv[sys.argv.index("--date") + 1]
+drop    = pathlib.Path("/var/dispatchio/completions")
+drop.mkdir(exist_ok=True)
+
+(drop / f"ingest__{run_id}__done.json").write_text(json.dumps({
+    "job_name": "ingest",
+    "run_id":   run_id,
+    "status":   "done",
+}))
+```
+
+Or signal an error:
+```python
+(drop / f"ingest__{run_id}__error.json").write_text(json.dumps({
+    "job_name":     "ingest",
+    "run_id":       run_id,
+    "status":       "error",
+    "error_reason": "database connection failed",
+}))
+```
+
+---
+
+## Core concepts
+
+### Run IDs
+
+Every job execution is identified by a **run_id** — a string derived from the
+tick's reference time using an expression.
+
+| Expression | Resolves to (ref = 2025-01-15 09:30) |
+|---|---|
+| `day0` | `20250115` (today) |
+| `day1` | `20250114` (yesterday) |
+| `day3` | `20250112` (3 days ago) |
+| `mon0` | `202501` (current month) |
+| `mon1` | `202412` (previous month) |
+| `week0` | `20250113` (Monday of current week) |
+| `hour0` | `2025011509` (current hour) |
+| `my-id` | `my-id` (literal — for ad-hoc runs) |
+
+The same expression system is used in dependencies, so cross-job temporal
+relationships are expressed cleanly:
+
+```python
+# transform depends on ingest for the same day
+Dependency(job_name="ingest", run_id_expr="day0")
+
+# report depends on ingest from 3 days ago
+Dependency(job_name="ingest", run_id_expr="day3")
+
+# monthly rollup depends on daily load for this month
+Dependency(job_name="daily_load", run_id_expr="mon0")
+```
+
+### Job status lifecycle
+
+```
+PENDING → SUBMITTED → RUNNING → DONE
+                    ↘          ↘
+                     ERROR       (retry → SUBMITTED)
+                     LOST        (heartbeat timeout → retry or alert)
+                     SKIPPED
+```
+
+### Time conditions
+
+Gate a job behind a wall-clock window within each day:
+
+```python
+TimeCondition(after="01:00")             # not before 1am
+TimeCondition(after="02:00", before="06:00")  # only between 2am and 6am
+```
+
+### Dependencies
+
+A job is only submitted once all its declared dependencies are in the required
+status for their respective run_ids:
+
+```python
+Job(
+    name="report",
+    depends_on=[
+        Dependency(job_name="ingest",    run_id_expr="day0"),
+        Dependency(job_name="transform", run_id_expr="day0"),
+    ],
+    ...
+)
+```
+
+Both `ingest` and `transform` must be `DONE` for today before `report` is submitted.
+
+### Retry policy
+
+```python
+from dispatchio import RetryPolicy
+
+RetryPolicy(max_attempts=1)                    # default — no retries
+RetryPolicy(max_attempts=3)                    # retry up to 3 times on any error
+RetryPolicy(max_attempts=3, retry_on=["timeout", "503"])  # only retry on matching errors
+```
+
+`retry_on` matches substrings of the `error_reason` field in the completion event.
+If `retry_on` is empty, any error triggers a retry (up to `max_attempts`).
+
+### Heartbeating
+
+For long-running jobs, enable heartbeat monitoring so Dispatchio can detect a job
+that started but died silently:
+
+```python
+from dispatchio import HeartbeatPolicy
+
+Job(
+    name="long_etl",
+    heartbeat=HeartbeatPolicy(
+        timeout_seconds=1800,    # mark LOST if no heartbeat for 30 min
+        interval_seconds=300,    # job should heartbeat every 5 min
+    ),
+    retry_policy=RetryPolicy(max_attempts=3),
+    ...
+)
+```
+
+From the job, send a heartbeat by posting a `status=running` event:
+
+```python
+# periodic heartbeat from within your job
+(drop / f"long_etl__{run_id}__running.json").write_text(json.dumps({
+    "job_name": "long_etl",
+    "run_id":   run_id,
+    "status":   "running",
+}))
+```
+
+If no heartbeat arrives within `timeout_seconds`, the job is marked `LOST` and
+the retry policy is applied (same as for `ERROR`).
+
+### Alerts
+
+```python
+from dispatchio import AlertCondition, AlertOn
+
+Job(
+    name="critical_load",
+    alerts=[
+        AlertCondition(on=AlertOn.ERROR, channels=["ops-slack"]),
+        AlertCondition(on=AlertOn.NOT_STARTED_BY, not_by="03:00", channels=["ops-pager"]),
+        AlertCondition(on=AlertOn.SUCCESS, channels=["data-team"]),
+    ],
+    ...
+)
+```
+
+Alert conditions:
+- `ERROR` — fired when retries are exhausted
+- `LOST` — fired when a job exceeds its heartbeat timeout
+- `NOT_STARTED_BY` — fired when the job hasn't been submitted by a given time
+- `SUCCESS` — fired when the job completes successfully
+
+By default alerts are written to the Python log. Replace `LogAlertHandler` with
+your own implementation (SNS, Apprise, PagerDuty) and pass it to the orchestrator:
+
+```python
+class MySNSAlertHandler:
+    def handle(self, event: AlertEvent) -> None:
+        sns.publish(TopicArn="...", Message=event.model_dump_json())
+
+orchestrator = Orchestrator(..., alert_handler=MySNSAlertHandler())
+```
+
+---
+
+## Template variables
+
+The following variables are interpolated into executor `command` strings and HTTP
+`url`/`body` values at submission time:
+
+| Variable | Value |
+|---|---|
+| `{run_id}` | Resolved run_id for this job (e.g. `20250115`) |
+| `{job_name}` | The job's name |
+| `{reference_time}` | ISO-8601 reference datetime of the tick |
+
+```python
+SubprocessJob(command=["python", "etl.py", "--date", "{run_id}", "--job", "{job_name}"])
+HttpJob(url="https://api.example.com/jobs/{job_name}/run/{run_id}", method="POST")
+```
+
+---
+
+## Configuration
+
+Dispatchio separates **infrastructure config** (state backend, receiver, log level)
+from **job logic** (job definitions, dependencies, retry policies). Infrastructure
+config belongs in a file or environment variables; job logic stays in Python.
+
+### Config file
+
+Create `dispatchio.toml` in your project directory (or wherever you run Dispatchio from):
+
+```toml
+# dispatchio.toml
+
+[dispatchio]
+log_level = "INFO"
+
+[dispatchio.state]
+backend = "filesystem"
+root    = ".dispatchio/state"       # relative paths resolve from this file's location
+
+[dispatchio.receiver]
+backend  = "filesystem"
+drop_dir = ".dispatchio/completions"
+```
+
+For AWS deployments:
+
+```toml
+[dispatchio.state]
+backend    = "dynamodb"
+table_name = "dispatchio-state"
+region     = "eu-west-1"
+
+[dispatchio.receiver]
+backend   = "sqs"
+queue_url = "https://sqs.eu-west-1.amazonaws.com/123456789/dispatchio-completions"
+region    = "eu-west-1"
+```
+
+The config file can also live as a `[dispatchio]` section inside an existing
+`pyproject.toml` — Dispatchio extracts its section automatically.
+
+**Relative paths** in the config file (e.g. `root`, `drop_dir`) are resolved
+relative to the directory containing the config file, not the process working
+directory. This ensures consistent behaviour regardless of where you invoke Dispatchio.
+
+### Config file discovery
+
+`load_config()` and `orchestrator_from_config()` find the config file in this
+order (first match wins):
+
+1. Explicit `config=` argument: `orchestrator_from_config(JOBS, config="prod.toml")`
+2. `DISPATCHIO_CONFIG` environment variable (local path or `ssm://` with `dispatchio[aws]`)
+3. `./dispatchio.toml` in the current working directory
+4. `~/.dispatchio.toml` user-level fallback
+
+If no file is found, settings come from environment variables and built-in
+defaults only — valid for container deployments that configure everything via env.
+
+### Environment variable overrides
+
+Any config value can be overridden with an environment variable. The convention
+is `DISPATCHIO_` prefix for top-level fields and double-underscore (`__`) to address
+nested fields:
+
+| Environment variable | Config equivalent |
+|---|---|
+| `DISPATCHIO_LOG_LEVEL=DEBUG` | `log_level = "DEBUG"` |
+| `DISPATCHIO_STATE__BACKEND=dynamodb` | `[dispatchio.state] backend = "dynamodb"` |
+| `DISPATCHIO_STATE__TABLE_NAME=my-table` | `[dispatchio.state] table_name = "my-table"` |
+| `DISPATCHIO_STATE__ROOT=/var/state` | `[dispatchio.state] root = "/var/state"` |
+| `DISPATCHIO_RECEIVER__BACKEND=sqs` | `[dispatchio.receiver] backend = "sqs"` |
+| `DISPATCHIO_RECEIVER__QUEUE_URL=https://...` | `[dispatchio.receiver] queue_url = "..."` |
+| `DISPATCHIO_RECEIVER__DROP_DIR=/tmp/drops` | `[dispatchio.receiver] drop_dir = "/tmp/drops"` |
+
+Environment variables always win over the config file.
+
+### Using `orchestrator_from_config`
+
+This is the recommended way to build an Orchestrator for anything beyond local dev:
+
+```python
+# jobs.py
+from dispatchio import Job, SubprocessJob, Dependency, orchestrator_from_config
+
+JOBS = [
+    Job(
+        name="ingest",
+        executor=SubprocessJob(command=["python", "ingest.py", "--date", "{run_id}"]),
+    ),
+    Job(
+        name="transform",
+        depends_on=[Dependency(job_name="ingest", run_id_expr="day0")],
+        executor=SubprocessJob(command=["python", "transform.py", "--date", "{run_id}"]),
+    ),
+]
+
+# Auto-discovers dispatchio.toml; env vars override config file values
+orchestrator = orchestrator_from_config(JOBS)
+```
+
+Or load settings programmatically and pass them directly:
+
+```python
+from dispatchio import DispatchioSettings, orchestrator_from_config
+from dispatchio.config import StateSettings, ReceiverSettings
+
+settings = DispatchioSettings(
+    log_level="DEBUG",
+    state=StateSettings(backend="memory"),        # useful in tests
+    receiver=ReceiverSettings(backend="none"),
+)
+orchestrator = orchestrator_from_config(JOBS, config=settings)
+```
+
+### AWS Parameter Store (SSM)
+
+With `dispatchio[aws]` installed, point `DISPATCHIO_CONFIG` at an SSM parameter that
+contains the TOML config as its value:
+
+```bash
+# Store config in SSM (one-time setup)
+aws ssm put-parameter \
+    --name /myapp/dispatchio/config \
+    --type SecureString \
+    --value "$(cat dispatchio.prod.toml)"
+
+# Use it at runtime
+export DISPATCHIO_CONFIG=ssm:///myapp/dispatchio/config
+```
+
+The SSM source is fetched once at startup. Individual fields can still be
+overridden via environment variables after the SSM config is loaded.
+
+---
+
+## CLI reference
+
+The CLI connects to a Dispatchio instance by importing an `Orchestrator` object
+from a Python module. Configure it via flag or environment variable.
+
+```bash
+export DISPATCHIO_ORCHESTRATOR=myproject.jobs:orchestrator
+export DISPATCHIO_STATE_DIR=/var/dispatchio/state
+```
+
+### `dispatchio tick`
+
+Run one orchestrator tick.
+
+```bash
+dispatchio tick
+dispatchio tick --reference-time "2025-01-15T02:00:00"   # replay a specific time
+dispatchio tick --orchestrator myproject.jobs:orchestrator
+```
+
+### `dispatchio status`
+
+Show the status of job runs.
+
+```bash
+dispatchio status
+dispatchio status --job ingest
+dispatchio status --job ingest --run-id 20250115
+dispatchio status --status error
+```
+
+### `dispatchio record set`
+
+Manually override a run record. Useful to unblock a stuck job or mark a
+completed job as done when the completion event was lost.
+
+```bash
+dispatchio record set ingest 20250115 done
+dispatchio record set ingest 20250115 error --reason "manual reset"
+```
+
+### `dispatchio heartbeat`
+
+Send a manual heartbeat for a running job.
+
+```bash
+dispatchio heartbeat long_etl 20250115
+```
+
+---
+
+## Multi-master setup
+
+Run multiple independent orchestrators that share the same state store.
+Each owns its own list of jobs; cross-master dependencies work automatically
+because they all read from the same store.
+
+```python
+# master_a.py — owns ingest + transform
+orchestrator = Orchestrator(jobs=[ingest, transform], state=shared_store, ...)
+
+# master_b.py — owns report, depends on transform from master_a
+report = Job(
+    name="report",
+    depends_on=[Dependency(job_name="transform", run_id_expr="day0")],
+    ...
+)
+orchestrator = Orchestrator(jobs=[report], state=shared_store, ...)
+```
+
+No direct coupling between masters — `transform`'s state is just a record in
+the shared store.
+
+---
+
+## Hello-world example
+
+A working two-job example is in [examples/hello_world/](examples/hello_world/).
+
+```bash
+pip install -e ".[dev]"
+python examples/hello_world/run.py
+```
+
+This runs a local tick loop, submitting `hello_world` then `goodbye_world` once
+the first is done, using filesystem state and file-drop completion events.
+
+---
+
+## Extending Dispatchio
+
+### Custom executor
+
+```python
+from dispatchio.executor.base import Executor
+from dispatchio.models import Job
+from datetime import datetime
+
+class MyExecutor:
+    def submit(self, job: Job, run_id: str, reference_time: datetime) -> None:
+        # kick off the job however you like — must return immediately
+        ...
+
+orchestrator = Orchestrator(..., executors={"my_type": MyExecutor()})
+```
+
+Add `type: Literal["my_type"]` to a custom config class and use it in
+`Job.executor`.
+
+### Custom state backend
+
+```python
+from dispatchio.models import RunRecord, Status
+
+class MyStateStore:
+    def get(self, job_name: str, run_id: str) -> RunRecord | None: ...
+    def put(self, record: RunRecord) -> None: ...
+    def heartbeat(self, job_name: str, run_id: str, at=None) -> None: ...
+    def list_records(self, job_name=None, status=None) -> list[RunRecord]: ...
+```
+
+Any object implementing these four methods works — no base class required.
+
+### Custom completion receiver
+
+```python
+class MyReceiver:
+    def drain(self) -> list[CompletionEvent]:
+        # return pending events and clear them
+        ...
+```
+
+---
+
+## Roadmap
+
+- `dispatchio[aws]` — DynamoDB state store, SQS receiver, ECS and Lambda executors + SSM config source
+- HTTP receiver — FastAPI-based endpoint for non-AWS environments
+- Cron-style schedule conditions
+- Web UI / status dashboard

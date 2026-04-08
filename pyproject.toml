@@ -1,0 +1,55 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dispatchio"
+version = "0.1.0"
+authors = [
+    { name="Bjorn Olsen", email="bjorn@cloudandthings.io" }
+]
+maintainers = [
+    { name="Bjorn Olsen", email="bjorn@cloudandthings.io" }
+]
+description = "A lightweight, tick-based batch job orchestrator"
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Office/Business :: Scheduling",
+    "Topic :: Utilities", 
+]
+dependencies = [
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "click>=8.0",
+]
+keywords = [
+    "batch", "scheduler", "orchestrator", "ETL", "data pipeline",
+    "workflow", "cron", "jobs", "dependencies", "AWS", "tick",
+]
+licence = "MIT"
+licence-files = ["LICEN[CS]E*"]
+
+[project.urls]
+Homepage = "https://github.com/cloudandthings/dispatchio"
+Issues = "https://github.com/cloudandthings/dispatchio/issues"
+
+[project.optional-dependencies]
+aws = ["boto3>=1.26"]
+dev = [
+    "pytest>=7.0",
+    "freezegun>=1.2",
+    "pytest-cov>=4.0",
+]
+
+[project.scripts]
+dispatchio = "dispatchio.cli.main:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["dispatchio"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

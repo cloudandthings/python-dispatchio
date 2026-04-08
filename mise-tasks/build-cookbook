@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Regenerate COOKBOOK.md from examples/*/example.toml"
+# Usage: mise run build-cookbook [-- --output <path>]
+set -euo pipefail
+
+uv run python scripts/build_cookbook.py "$@"

@@ -1,0 +1,11 @@
+title    = "Schedule Conditions"
+summary  = """\
+Gates job execution with typed conditions: TimeOfDayCondition restricts \
+a job to a time window, DayOfWeekCondition limits it to certain weekdays, \
+and AllOf composes multiple gates with logical AND. If a condition is not \
+met on a given tick, the job is skipped (SKIPPED_CONDITION) and \
+re-evaluated next tick — no state is written and no retries are consumed.\
+"""
+tags       = ["conditions", "TimeOfDayCondition", "DayOfWeekCondition", "AllOf", "scheduling"]
+order      = 4
+show_files = ["jobs.py"]
