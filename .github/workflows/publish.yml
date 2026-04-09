@@ -1,8 +1,8 @@
 name: publish
 
 # Triggered when a GitHub release is published (by release-please or manually).
-# Publishes to TestPyPI first, then PyPI using OIDC Trusted Publisher — no API token needed.
-# Before this will succeed, configure Trusted Publishers on PyPI and TestPyPI:
+# Publishes to PyPI using OIDC Trusted Publisher — no API token needed.
+# Before this will succeed, configure a Trusted Publisher on PyPI:
 # https://docs.pypi.org/trusted-publishers/adding-a-trusted-publisher/
 
 on:
@@ -15,34 +15,8 @@ on:
         required: true
 
 jobs:
-  publish-testpypi:
-    name: 📦 publish to TestPyPI
-    runs-on: ubuntu-latest
-    environment:
-      name: testpypi
-      url: https://test.pypi.org/project/dispatchio/
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.release.tag_name || github.event.inputs.tag }}
-
-      - uses: jdx/mise-action@v3
-        with:
-          cache: true
-
-      - name: Build package
-        run: uv build
-
-      - name: Publish to TestPyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://upload.test.pypi.org/legacy/
-
   publish-pypi:
     name: 📦 publish to PyPI
-    needs: [publish-testpypi]
     runs-on: ubuntu-latest
     environment:
       name: pypi
