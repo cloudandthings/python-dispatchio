@@ -54,6 +54,38 @@ pytest tests/
 
 ## Releases
 
-Releases are automated via [release-please](https://github.com/googleapis/release-please) based
-on [conventional commits](https://www.conventionalcommits.org/). A release will bump the version
-in `pyproject.toml`, generate a changelog entry, and publish the package to PyPI.
+Releases are fully automated using [release-please](https://github.com/googleapis/release-please)
+and [PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/) (OIDC — no API token needed).
+
+### How it works
+
+1. **Commit to `main`** using [conventional commits](https://www.conventionalcommits.org/)
+   (e.g. `feat:`, `fix:`, `chore:`). release-please opens or updates a **Release PR** that:
+   - bumps the version in `pyproject.toml` according to semver
+   - generates a `CHANGELOG.md` entry
+
+2. **Merge the Release PR** when you are ready to ship. release-please automatically:
+   - creates a Git tag (e.g. `v1.2.0`)
+   - publishes a GitHub release with the changelog
+
+3. **The GitHub release triggers `publish.yml`**, which:
+   - builds the package with `uv build`
+   - publishes to [TestPyPI](https://test.pypi.org/project/dispatchio/)
+   - on success, publishes to [PyPI](https://pypi.org/project/dispatchio/)
+
+### Commit types and version bumps
+
+| Commit prefix | Version bump |
+|---|---|
+| `fix:` | patch (`1.0.x`) |
+| `feat:` | minor (`1.x.0`) |
+| `feat!:` or `BREAKING CHANGE:` footer | major (`x.0.0`) |
+| `chore:`, `docs:`, `refactor:`, etc. | none |
+
+### Prerequisites (one-time setup)
+
+Trusted Publishers must be configured on both PyPI and TestPyPI for this repository before the
+publish step will succeed. See the
+[PyPI documentation](https://docs.pypi.org/trusted-publishers/adding-a-trusted-publisher/) for
+instructions. The workflow name is `publish.yml` and the environment names are `pypi` and
+`testpypi`.
