@@ -31,7 +31,7 @@ jobs:
 
       - uses: jdx/mise-action@v3
         with:
-          log_level: debug
+          log_level: info
           cache: true
 
       - name: pre-commit run
