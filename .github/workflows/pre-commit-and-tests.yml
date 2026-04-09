@@ -1,0 +1,60 @@
+name: pre-commit & tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  #--------------------------------------------------------------
+  # PRE-COMMIT
+  #--------------------------------------------------------------
+  pre_commit:
+    name: 💍 pre-commit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v3
+        with:
+          log_level: debug
+          cache: true
+
+      - name: pre-commit run
+        run: |
+          echo ...running pre-commit checks...
+          pre-commit run --config .pre-commit-config.yaml --all-files --show-diff-on-failure
+
+  #--------------------------------------------------------------
+  # TESTS
+  #--------------------------------------------------------------
+  tests:
+    name: 🧪 tests
+    needs: [pre_commit]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v3
+        with:
+          cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Run tests
+        run: mise test

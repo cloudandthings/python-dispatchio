@@ -48,3 +48,15 @@ repos:
       - id: ruff
         args: ["--fix", "--exit-non-zero-on-fix"]
       - id: ruff-format
+
+  # SECURITY
+  # Mirrors the trivy config scan in trivy-scan.yml CI workflow.
+  # Only the 'config' scan type is run here (IaC misconfig); the 'fs' vuln scan runs in CI only.
+  - repo: local
+    hooks:
+      - id: trivy-config
+        name: trivy config scan
+        entry: trivy config --severity HIGH,CRITICAL --exit-code 1 --config trivy.yaml .
+        language: system
+        pass_filenames: false
+        always_run: true

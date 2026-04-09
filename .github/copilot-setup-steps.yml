@@ -1,0 +1,8 @@
+steps:
+  - uses: jdx/mise-action@v3
+    with:
+      cache: true
+      github_token: ${{ secrets.GITHUB_TOKEN }}
+
+  - name: Setup development environment
+    run: ./dev-bootstrap.sh
