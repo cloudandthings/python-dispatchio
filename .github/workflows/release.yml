@@ -1,0 +1,80 @@
+name: release
+
+# Overview ref: https://github.com/googleapis/release-please
+# Configuration ref: https://github.com/googleapis/release-please-action
+# release-type: python bumps `version` in pyproject.toml automatically.
+# The publish job uses PyPI Trusted Publisher (OIDC) — no API token needed.
+# Before the publish job will succeed, configure a Trusted Publisher on PyPI:
+# https://docs.pypi.org/trusted-publishers/adding-a-trusted-publisher/
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+
+jobs:
+  release:
+    name: 🙏 release-please
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release-please.outputs.release_created }}
+      tag_name: ${{ steps.release-please.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: release-please
+        uses: googleapis/release-please-action@v4
+        id: release-please
+        with:
+          release-type: python
+
+  publish-testpypi:
+    name: 📦 publish to TestPyPI
+    needs: [release]
+    if: ${{ needs.release.outputs.release_created }}
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/dispatchio/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v3
+        with:
+          cache: true
+
+      - name: Build package
+        run: uv build
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://upload.test.pypi.org/legacy/
+
+  publish:
+    name: 📦 publish to PyPI
+    needs: [release, publish-testpypi]
+    if: ${{ needs.release.outputs.release_created }}
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/dispatchio/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v3
+        with:
+          cache: true
+
+      - name: Build package
+        run: uv build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

@@ -61,9 +61,14 @@ class PythonJobExecutor:
             cmd = [sys.executable, "-m", "dispatchio", "run", cfg.entry_point]
         else:
             cmd = [
-                sys.executable, "-m", "dispatchio", "run",
-                "--script",   cfg.script,
-                "--function", cfg.function,
+                sys.executable,
+                "-m",
+                "dispatchio",
+                "run",
+                "--script",
+                cfg.script,
+                "--function",
+                cfg.function,
             ]
 
         env = {**os.environ, **self._reporter_env, "DISPATCHIO_RUN_ID": run_id}

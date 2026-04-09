@@ -11,6 +11,7 @@ Usage (dispatched by SubprocessJob in jobs.py):
     python my_work.py generate
     python my_work.py summarize
 """
+
 import sys
 
 from dispatchio.worker.harness import run_job

@@ -6,10 +6,43 @@
 # Run a task:       mise run <task>
 # Run with args:    mise run <task> -- <args>
 
+[env]
+# Use the project name derived from the current directory
+PROJECT_NAME = "{{ config_root | basename }}"
+
+# Automatic virtualenv activation
+_.python.venv = { path = ".venv", create = true }
+
+[settings]
+lockfile = true
+python.uv_venv_auto = "create|source"
+
+[tasks.install]
+description = "Install dependencies"
+alias = "i"
+run = "uv pip install -r requirements.txt"
+
+[tasks.test]
+description = "Run tests"
+run = "pytest tests/"
+
+[tasks.lint]
+description = "Lint the code"
+run = "ruff src/"
+
+[tasks.info]
+description = "Print project information"
+run = '''
+echo "Project: $PROJECT_NAME"
+echo "Virtual Environment: $VIRTUAL_ENV"
+'''
+
 [tools]
 jq              = "1.8.1"
 pre-commit      = "4.5.1"
 python          = "3.13"
+uv              = "latest"
+ruff            = "latest"
 starship        = "1.24.2"
 trivy           = "v0.69.3"
 

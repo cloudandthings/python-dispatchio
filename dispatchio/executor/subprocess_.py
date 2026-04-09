@@ -24,7 +24,6 @@ from dispatchio.models import Job, SubprocessJob
 
 
 class SubprocessExecutor:
-
     def submit(
         self,
         job: Job,
@@ -39,8 +38,8 @@ class SubprocessExecutor:
             )
 
         ctx = {
-            "job_name":       job.name,
-            "run_id":         run_id,
+            "job_name": job.name,
+            "run_id": run_id,
             "reference_time": reference_time.isoformat(),
         }
 

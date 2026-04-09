@@ -6,7 +6,6 @@ import pytest
 from datetime import datetime, timezone
 
 from dispatchio.state.memory import MemoryStateStore
-from dispatchio.executor.subprocess_ import SubprocessExecutor
 from dispatchio.models import Job, SubprocessJob
 
 

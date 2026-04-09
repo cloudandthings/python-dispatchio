@@ -32,7 +32,6 @@ logger = logging.getLogger(__name__)
 
 
 class FilesystemReceiver:
-
     def __init__(self, drop_dir: str | Path) -> None:
         self.drop_dir = Path(drop_dir)
         self.drop_dir.mkdir(parents=True, exist_ok=True)

@@ -28,9 +28,10 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from collections.abc import Iterable
 
 from dispatchio.alerts.base import AlertEvent, AlertHandler, LogAlertHandler
-from dispatchio.cadence import DAILY, Cadence, DateCadence
+from dispatchio.cadence import DAILY, Cadence
 from dispatchio.conditions import TimeOfDayCondition
 from dispatchio.executor.base import Executor
 from dispatchio.models import (
@@ -40,7 +41,6 @@ from dispatchio.models import (
     JobAction,
     Job,
     JobTickResult,
-    RetryPolicy,
     RunRecord,
     Status,
     TickResult,
@@ -78,6 +78,10 @@ class Orchestrator:
         submit_timeout:         Per-submission deadline (seconds) forwarded to
                                 executor.submit(). Not yet enforced by local executors;
                                 reserved for cloud executors where the API call can block.
+        strict_dependencies:    If True, unresolved dependencies raise ValueError
+                    If False, unresolved deps warn so cross-orchestrator dependencies stay possible.
+        allow_runtime_mutation: If True, jobs can be added/removed after tick() has run.
+                    If False, the job graph is frozen after the first tick.
     """
 
     def __init__(
@@ -91,6 +95,8 @@ class Orchestrator:
         max_submissions_per_tick: int | None = None,
         submit_timeout: float | None = None,
         default_cadence: Cadence = DAILY,
+        strict_dependencies: bool = True,
+        allow_runtime_mutation: bool = False,
     ) -> None:
         self.jobs = jobs
         self.state = state
@@ -101,29 +107,102 @@ class Orchestrator:
         self.max_submissions_per_tick = max_submissions_per_tick
         self.submit_timeout = submit_timeout
         self.default_cadence = default_cadence
+        self.strict_dependencies = strict_dependencies
+        self.allow_runtime_mutation = allow_runtime_mutation
 
-        self._job_index: dict[str, Job] = {j.name: j for j in jobs}
-        self._warn_unresolved_dependencies()
+        self._job_index: dict[str, Job] = {}
+        self._jobs_dirty = False
+        self._has_ticked = False
 
-    def _warn_unresolved_dependencies(self) -> None:
+        self._rebuild_job_index()
+        self._validate_dependencies()
+
+    def add_job(self, job: Job) -> None:
+        """Add a job definition to the orchestrator."""
+        self.add_jobs([job])
+
+    def add_jobs(self, jobs: Iterable[Job]) -> None:
         """
-        Warn at construction time if any dependency refers to a job name that
-        is not registered in this orchestrator.
+        Add job definitions to the orchestrator.
 
-        A warning (not an error) is raised so that cross-orchestrator
-        dependencies — where the upstream job is managed by a separate
-        Orchestrator instance — remain valid.
+        Duplicate job names are rejected immediately.
         """
+        self._ensure_mutation_allowed()
+        new_jobs = list(jobs)
+        self._validate_duplicate_job_names(self.jobs + new_jobs)
+        self.jobs.extend(new_jobs)
+        self._jobs_dirty = True
+
+    def remove_job(self, job_name: str) -> Job:
+        """
+        Remove a job by name and return the removed definition.
+
+        Raises KeyError when the job is not registered.
+        """
+        self._ensure_mutation_allowed()
+        for idx, job in enumerate(self.jobs):
+            if job.name == job_name:
+                removed = self.jobs.pop(idx)
+                self._jobs_dirty = True
+                return removed
+        raise KeyError(f"Unknown job: {job_name}")
+
+    def _ensure_mutation_allowed(self) -> None:
+        if self._has_ticked and not self.allow_runtime_mutation:
+            raise RuntimeError(
+                "Job mutation is disabled after the first tick. "
+                "Set allow_runtime_mutation=True to enable dynamic changes."
+            )
+
+    def _rebuild_job_index(self) -> None:
+        self._validate_duplicate_job_names(self.jobs)
+        self._job_index = {j.name: j for j in self.jobs}
+
+    def _validate_duplicate_job_names(self, jobs: list[Job]) -> None:
+        seen: set[str] = set()
+        duplicates: set[str] = set()
+        for job in jobs:
+            if job.name in seen:
+                duplicates.add(job.name)
+            seen.add(job.name)
+        if duplicates:
+            names = ", ".join(sorted(duplicates))
+            raise ValueError(f"Duplicate job names found: {names}")
+
+    def _unresolved_dependencies(self) -> list[tuple[str, str]]:
+        unresolved: list[tuple[str, str]] = []
         for job in self.jobs:
             for dep in job.depends_on:
                 if dep.job_name not in self._job_index:
-                    logger.warning(
-                        "Job %r depends on %r, which is not registered in this "
-                        "orchestrator. If this is a cross-orchestrator dependency "
-                        "this warning can be ignored.",
-                        job.name,
-                        dep.job_name,
-                    )
+                    unresolved.append((job.name, dep.job_name))
+        return unresolved
+
+    def _validate_dependencies(self) -> None:
+        unresolved = self._unresolved_dependencies()
+        if not unresolved:
+            return
+
+        if self.strict_dependencies:
+            detail = ", ".join(f"{job}->{dep}" for job, dep in unresolved)
+            raise ValueError(
+                f"Unresolved dependencies in orchestrator job graph: {detail}"
+            )
+
+        for job_name, dep_name in unresolved:
+            logger.warning(
+                "Job %r depends on %r, which is not registered in this "
+                "orchestrator. If this is a cross-orchestrator dependency "
+                "this warning can be ignored.",
+                job_name,
+                dep_name,
+            )
+
+    def _refresh_job_graph_if_dirty(self) -> None:
+        if not self._jobs_dirty:
+            return
+        self._rebuild_job_index()
+        self._validate_dependencies()
+        self._jobs_dirty = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -139,6 +218,8 @@ class Orchestrator:
         """
         if reference_time is None:
             reference_time = datetime.now(tz=timezone.utc)
+
+        self._refresh_job_graph_if_dirty()
 
         result = TickResult(reference_time=reference_time)
 
@@ -178,6 +259,7 @@ class Orchestrator:
             # None  → silently skipped (e.g. SKIPPED status)
             # _PendingSubmission still in outcomes → was beyond the cap; deferred
 
+        self._has_ticked = True
         return result
 
     # ------------------------------------------------------------------
@@ -309,7 +391,6 @@ class Orchestrator:
         cadence: Cadence,
         reference_time: datetime,
     ) -> JobTickResult | _PendingSubmission | None:
-
         existing = self.state.get(job.name, run_id)
 
         if existing and existing.is_active():
@@ -383,8 +464,7 @@ class Orchestrator:
         if policy.retry_on and record.error_reason:
             if not any(pat in record.error_reason for pat in policy.retry_on):
                 detail = (
-                    f"error_reason does not match retry_on patterns: "
-                    f"{policy.retry_on}"
+                    f"error_reason does not match retry_on patterns: {policy.retry_on}"
                 )
                 self._emit_alert(AlertOn.ERROR, job, run_id, detail, record)
                 return JobTickResult(
@@ -564,7 +644,7 @@ class Orchestrator:
 
     def _check_dependencies(
         self, job: Job, run_id: str, reference_time: datetime
-    ) -> "JobTickResult | None":
+    ) -> JobTickResult | None:
         """
         Returns a blocking JobTickResult if deps are not satisfied, or None if clear to proceed.
         For THRESHOLD unreachability, also writes a SKIPPED RunRecord to state.

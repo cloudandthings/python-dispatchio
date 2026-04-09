@@ -24,24 +24,26 @@ from pydantic import BaseModel, Field
 
 
 class Frequency(str, Enum):
-    HOURLY  = "hourly"
-    DAILY   = "daily"
-    WEEKLY  = "weekly"
+    HOURLY = "hourly"
+    DAILY = "daily"
+    WEEKLY = "weekly"
     MONTHLY = "monthly"
 
 
 class DateCadence(BaseModel):
     """Date-based cadence — one run per calendar period."""
-    type:      Literal["date"] = "date"
+
+    type: Literal["date"] = "date"
     frequency: Frequency = Frequency.DAILY
-    offset:    int = 0
+    offset: int = 0
     # 0 = current period, -1 = previous, -2 = two ago, …
     # Positive values reference future periods (rare).
 
 
 class FixedCadence(BaseModel):
     """Fixed run_id — for ad-hoc / event-driven jobs."""
-    type:  Literal["literal"] = "literal"
+
+    type: Literal["literal"] = "literal"
     value: str
 
 
@@ -50,8 +52,9 @@ class IncrementalCadence(BaseModel):
     Batch-triggered — run_id sourced from MetadataStore.
     Implementation deferred to Phase 4 (MetadataStore required).
     """
+
     type: Literal["incremental"] = "incremental"
-    key:  str   # MetadataStore key written by a discovery job
+    key: str  # MetadataStore key written by a discovery job
 
 
 Cadence = Annotated[
@@ -64,11 +67,11 @@ Cadence = Annotated[
 # Convenience constants
 # ---------------------------------------------------------------------------
 
-HOURLY  = DateCadence(frequency=Frequency.HOURLY)
-DAILY   = DateCadence(frequency=Frequency.DAILY)
-WEEKLY  = DateCadence(frequency=Frequency.WEEKLY)
+HOURLY = DateCadence(frequency=Frequency.HOURLY)
+DAILY = DateCadence(frequency=Frequency.DAILY)
+WEEKLY = DateCadence(frequency=Frequency.WEEKLY)
 MONTHLY = DateCadence(frequency=Frequency.MONTHLY)
 
-YESTERDAY  = DateCadence(frequency=Frequency.DAILY,   offset=-1)
-LAST_WEEK  = DateCadence(frequency=Frequency.WEEKLY,  offset=-1)
+YESTERDAY = DateCadence(frequency=Frequency.DAILY, offset=-1)
+LAST_WEEK = DateCadence(frequency=Frequency.WEEKLY, offset=-1)
 LAST_MONTH = DateCadence(frequency=Frequency.MONTHLY, offset=-1)

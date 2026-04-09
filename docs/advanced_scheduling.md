@@ -35,51 +35,69 @@ This has been implemented.
 
 ### Problem
 
-Dispatchio's job list is currently fixed at `Orchestrator` construction time.
+Dispatchio's job list was previously fixed at `Orchestrator` construction time. We have recently added some related behaviour which allows jobs to be added to an orchestrator, although it is not clear if this is done "per tick".
+
 Generating jobs dynamically from metadata (e.g. "process all changed
-entities for today") requires a way to re-derive the job list on each tick.
+entities for today") could require a way to re-derive the job list on each tick. Unless there is another pattern / approach that should be used that perhaps works within the existing related behaviour.
 
-### Proposed change
+### Related behaviour
 
-Allow `jobs` to be a callable as well as a plain list.
+Dynamic job graphs are now supported via explicit mutation APIs on
+`Orchestrator`:
+
+- `add_job(job)` / `add_jobs(jobs)`
+- `remove_job(job_name)`
+- duplicate names raise `ValueError`
+- dependency validation is re-run before `tick()` if and when the job graph changed.
+
+Two constructor flags control strictness:
+
+- `strict_dependencies` (default `True`): unresolved dependencies raise when strict mode is enabled, or if False then warn (cross-orchestrator friendly)
+- `allow_runtime_mutation` (default `False`): if enabled, jobs can be added or
+    removed after ticks have already run.
+
+This enables an orchestrator-first workflow from config:
 
 ```python
-# Type alias (illustrative)
-JobFactory = Callable[[datetime], list[Job]]
+orchestrator = orchestrator_from_config(
+        config="dispatchio.toml",
+        allow_runtime_mutation=True,
+)
 
-class Orchestrator:
-    def __init__(
-        self,
-        jobs: list[Job] | JobFactory,
-        ...
-    )
+orchestrator.add_jobs(initial_jobs)
+
+# Later, after some ticks already ran:
+orchestrator.add_job(dynamic_job)
 ```
 
-At the start of each tick, if `jobs` is callable, invoke it with
-`reference_time` to obtain the current job list. The `_job_index` is
-rebuilt from this list before evaluation begins.
+`orchestrator_from_config` now also accepts no initial jobs, making this flow
+natural for pipelines that discover work at runtime.
 
-The factory receives `reference_time` so it can scope its queries to
-the correct logical period.
+### Alternative approach (factory callable)
+
+Callable job factories remain a valid future extension when teams want to
+regenerate the full graph each tick from artifacts/metadata. With the current
+APIs, many of those use cases can be handled by mutating the graph explicitly
+instead of replacing it wholesale.
 
 ### Behaviour details
 
 | Concern | Behaviour |
 |---|---|
-| Unresolved dependency warnings | Moved from `__init__` to the start of each tick when a factory is in use |
+| Unresolved dependency warnings | Validated before `tick()` when the graph changed; warning or error depending on `strict_dependencies` |
 | Jobs that disappear between ticks | Their existing `RunRecord` in the state store is preserved; they are simply not evaluated that tick |
 | State store | Unchanged — dynamic jobs write the same `RunRecord` format as static jobs |
-| `orchestrator_from_config` | Not affected — factories bypass config and are passed directly to `Orchestrator` |
-| `_warn_unresolved_dependencies` | Still fires; for factories, fires per-tick |
+| `orchestrator_from_config` | Can now create an empty orchestrator (`jobs` omitted) for orchestrator-first registration |
+| Duplicate names | Rejected immediately with `ValueError` |
 
-### Simple fan-in example
+### Simple fan-in example (factory alternative)
 
 ```python
-def job_factory(reference_time: datetime) -> list[Job]:
+def job_factory(reference_time: datetime, artifacts: ArtifactStore) -> list[Job]:
     run_id = reference_time.strftime("%Y%m%d")
 
-    # Read which entities changed today (see Phase 4 for MetadataStore)
-    changed = metadata_store.get(
+    # Read which entities changed today (see Phase 4 for ArtifactStore)
+    changed = artifacts.read(
         job="discover_entities",
         run_id=run_id,
         key="entities",
@@ -98,32 +116,63 @@ def job_factory(reference_time: datetime) -> list[Job]:
 
     return [*entity_jobs, collector]
 
-orchestrator = Orchestrator(jobs=job_factory, ...)
+orchestrator = Orchestrator(jobs=job_factory, artifact_store=FilesystemArtifactStore(...), ...)
 ```
 
 ### Scope of change
 
-- `dispatchio/orchestrator.py` — accept callable `jobs`; rebuild `_job_index` per tick when factory is in use
-- `tests/test_orchestrator.py` — factory tests
-- `examples/` — new example directory `dynamic_jobs`
+- `dispatchio/orchestrator.py` — mutable APIs (`add_job`, `add_jobs`, `remove_job`), duplicate checks, pre-tick graph refresh
+- `dispatchio/config/loader.py` — `orchestrator_from_config` now allows empty initial jobs
+- `tests/test_orchestrator.py` — mutation lifecycle, strict dependencies, duplicate-name tests
+- `tests/test_config.py` — empty-jobs factory test
+- `examples/` — new example directory `dynamic_registration`
 
 ---
 
-## Phase 4 — Metadata store
+## Phase 4 — Artifact store
 
 ### Problem
 
-Dynamic job factories need to read metadata that was written by a
-previous job (e.g. a discovery job that determines which entities
-changed). Currently there is no Dispatchio-native place to put this data.
+Dynamic job factories need to read structured data that was written by a
+previous job (e.g. a discovery job that determines which entities changed).
+Currently there is no Dispatchio-native place to put this data.
+
+The name `MetadataStore` was considered and rejected — "metadata" in most
+systems means data *about* jobs (status, timestamps), which is already
+`StateStore`'s domain. What factories need is a store for named, structured
+outputs produced by one job and consumed by another — the standard term in
+data and CI/CD pipelines is *artifact*. `ArtifactStore` with `write`/`read`
+method names is the clearest expression of this without implying a specific
+value type or file-based storage.
+
+### Namespacing
+
+An `ArtifactStore` is constructed with a `namespace` (default `"default"`).
+Multiple top-level `Orchestrator` instances that share the same backing
+store can use distinct namespaces so that their artifact keys never collide:
+
+```python
+orchestrator_a = Orchestrator(jobs=..., artifact_store=FilesystemArtifactStore(
+    path=ARTIFACT_DIR, namespace="pipeline_a"
+))
+orchestrator_b = Orchestrator(jobs=..., artifact_store=FilesystemArtifactStore(
+    path=ARTIFACT_DIR, namespace="pipeline_b"
+))
+```
+
+The full internal key structure is `<namespace>/<producer_job>/<run_id>/<key>`.
+A factory reading artifacts never needs to know the namespace — it comes
+from the store instance injected into the orchestrator.
 
 ### Proposed interface
 
 ```python
-class MetadataStore(Protocol):
-    # Opinionated API (XCom-like): identify values by producer + logical key,
+class ArtifactStore(Protocol):
+    namespace: str  # set at construction; default "default"
+
+    # Opinionated API: identify values by producer job + logical key,
     # scoped by run_id.
-    def push(
+    def write(
         self,
         value: Any,
         *,
@@ -132,7 +181,7 @@ class MetadataStore(Protocol):
         key: str = "return_value",
     ) -> None: ...
 
-    def pull(
+    def read(
         self,
         *,
         job: str,
@@ -141,9 +190,10 @@ class MetadataStore(Protocol):
     ) -> Any | None: ...
 
     # Escape hatch: direct key/value access for custom naming schemes.
-    def get(self, full_key: str) -> Any | None: ...
-    def put(self, full_key: str, value: Any) -> None: ...
-    def delete(self, full_key: str) -> None: ...
+    # Keys are always interpreted within the store's namespace.
+    def get(self, key: str) -> Any | None: ...
+    def put(self, key: str, value: Any) -> None: ...
+    def delete(self, key: str) -> None: ...
     def list_keys(self, prefix: str = "") -> list[str]: ...
 ```
 
@@ -151,61 +201,123 @@ Values are any JSON-serialisable Python object.
 Dispatchio's default key strategy (inspired by Airflow XCom lookup semantics)
 is:
 
-- `producer_job` + `run_id` + `key`
+- `namespace` + `producer_job` + `run_id` + `key`
 - default `key` is `"return_value"`
 - default `run_id` in worker context comes from `DISPATCHIO_RUN_ID`
+- default `namespace` in worker context comes from `DISPATCHIO_ARTIFACT_NAMESPACE`
 
 By default this resolves to a full key like
-`"discover_entities/20260115/entities"`.
+`"default/discover_entities/20260115/entities"`.
 
 Users who want a different convention can either:
 
-- pass explicit `full_key` to `get/put/delete`, or
-- configure a custom key strategy callable in metadata settings.
+- pass explicit `key` to `get/put/delete` (it is still scoped to the namespace), or
+- configure a custom key strategy callable in artifact settings.
 
-### Implementations
+### Tick-level I/O caching
 
-Same progression as `StateStore`:
+The artifact store is read at tick start (by the job factory) and written
+at tick end (by completion events received from workers). A naive
+implementation that issues a network or filesystem call for every individual
+`write`/`read` will become a bottleneck in fan-out scenarios with many
+dynamic child jobs.
+
+The preferred pattern is a **load/flush cycle** tied to the tick boundary:
+
+```python
+class ArtifactStoreCache(ArtifactStore):
+    """
+    Wraps any ArtifactStore. Loads the full namespace into memory at
+    construction (or on load()), buffers all writes, and flushes on flush()
+    or __exit__. Individual write/read calls touch only the in-memory dict.
+    """
+    def __init__(self, store: ArtifactStore) -> None: ...
+    def load(self) -> None: ...   # reads namespace from backing store once
+    def flush(self) -> None: ...  # writes buffered changes back in one batch
+    def __enter__(self) -> "ArtifactStoreCache": ...
+    def __exit__(self, *_: Any) -> None: ...  # calls flush()
+```
+
+`Orchestrator` accepts an optional `ArtifactStoreCache` and, when present,
+calls `load()` before the factory callable and `flush()` after phase 5
+(submissions). Implementations that do not use the cache can be passed
+directly; the load/flush hooks become no-ops.
+
+The factory callable receives the orchestrator's artifact store directly
+(as an injected argument), so user code never manages the cache lifecycle
+manually:
+
+```python
+def job_factory(reference_time: datetime, artifacts: ArtifactStore) -> list[Job]:
+    entities = artifacts.read(job="discover_entities", run_id=run_id, key="entities") or []
+    ...
+```
+
+The updated factory type alias is:
+
+```python
+JobFactory = Callable[[datetime, ArtifactStore], list[Job]]
+```
+
+### Backend recommendations
 
 | Class | Use case |
 |---|---|
-| `MemoryMetadataStore` | Tests, in-process demos |
-| `FilesystemMetadataStore` | Local dev (stores JSON files alongside state) |
-| `DynamoDBMetadataStore` | Production AWS (future, same phase as DynamoDB StateStore) |
+| `MemoryArtifactStore` | Tests, in-process demos |
+| `FilesystemArtifactStore` | Local dev (JSON files, one file per key) |
+| `SQLiteArtifactStore` | Production single-node and S3-synced deployments |
+| `DynamoDBArtifactStore` | Distributed / multi-node deployments (future) |
+
+**SQLite is the preferred production backend** for the load/flush pattern.
+Loading an entire namespace is a single `SELECT WHERE namespace = ?`; flushing
+is a single `BEGIN … COMMIT` transaction. This compares very favourably to
+DynamoDB, where a full-namespace scan is expensive and each write is an
+individual `PutItem` call.
+
+For serverless / ephemeral orchestrators (Lambda, ECS task), the natural
+pattern is: copy the SQLite file from S3 at tick start, load into
+`ArtifactStoreCache`, run the tick, flush, upload back to S3. This keeps
+I/O outside the hot path and keeps latency predictable.
+
+DynamoDB remains appropriate when multiple orchestrator instances run
+concurrently and write payloads independently (true horizontal scaling);
+at that point the load/flush cycle is no longer safe without additional
+locking, and per-item access is the right model.
 
 ### Harness integration
 
-For a job to write metadata it needs a reference to the store.
-The cleanest approach is to inject the store path/config via an env var
-(`DISPATCHIO_METADATA_DIR` for filesystem), analogous to how `DISPATCHIO_DROP_DIR`
-is injected today. The worker then imports `MetadataStore` from dispatchio and
-writes directly:
+For a job to write payloads it needs a reference to the store.
+The cleanest approach is to inject the store path/config via env vars
+(`DISPATCHIO_ARTIFACT_DIR` and `DISPATCHIO_ARTIFACT_NAMESPACE` for filesystem),
+analogous to how `DISPATCHIO_DROP_DIR` is injected today. The worker then
+imports `get_artifact_store` from dispatchio and writes directly:
 
 ```python
 # Inside a discovery job worker function
-from dispatchio.metadata import get_metadata_store
+from dispatchio.artifact import get_artifact_store
 
 def discover(run_id: str) -> None:
-    store = get_metadata_store()   # reads DISPATCHIO_METADATA_DIR from env
+    store = get_artifact_store()   # reads DISPATCHIO_ARTIFACT_DIR / NAMESPACE from env
     entities = query_database_for_changes(run_id)
-    # Default key becomes: discover_entities/<run_id>/entities
-    store.push(entities, producer_job="discover_entities", run_id=run_id, key="entities")
+    # Full key: <namespace>/discover_entities/<run_id>/entities
+    store.write(entities, job="discover_entities", run_id=run_id, key="entities")
 
 def build_jobs(run_id: str) -> list[str]:
-    store = get_metadata_store()
-    # Equivalent to XCom pull(task_id="discover_entities", key="entities")
-    return store.pull(producer_job="discover_entities", run_id=run_id, key="entities") or []
+    store = get_artifact_store()
+    return store.read(job="discover_entities", run_id=run_id, key="entities") or []
 ```
 
 ### Scope of change
 
-- `dispatchio/metadata/base.py` — `MetadataStore` protocol + `MetadataRecord` model
-- `dispatchio/metadata/memory.py` — `MemoryMetadataStore`
-- `dispatchio/metadata/filesystem.py` — `FilesystemMetadataStore`
-- `dispatchio/metadata/__init__.py` — `get_metadata_store()` factory (reads env) + key strategy wiring
-- `dispatchio/executor/python_.py` + `subprocess_.py` — inject `DISPATCHIO_METADATA_DIR`
-- `dispatchio/config/settings.py` — optional `[dispatchio.metadata]` config section
-- `dispatchio/__init__.py` — re-export `MetadataStore`
+- `dispatchio/artifact/base.py` — `ArtifactStore` protocol + `ArtifactRecord` model + `ArtifactStoreCache`
+- `dispatchio/artifact/memory.py` — `MemoryArtifactStore`
+- `dispatchio/artifact/filesystem.py` — `FilesystemArtifactStore`
+- `dispatchio/artifact/sqlite_.py` — `SQLiteArtifactStore`
+- `dispatchio/artifact/__init__.py` — `get_artifact_store()` factory (reads env) + key strategy wiring
+- `dispatchio/orchestrator.py` — accept `artifact_store` arg; inject into `JobFactory`; call `load()`/`flush()` around tick when `ArtifactStoreCache` is provided
+- `dispatchio/executor/python_.py` + `subprocess_.py` — inject `DISPATCHIO_ARTIFACT_DIR` + `DISPATCHIO_ARTIFACT_NAMESPACE`
+- `dispatchio/config/settings.py` — optional `[dispatchio.artifact]` config section
+- `dispatchio/__init__.py` — re-export `ArtifactStore`, `ArtifactStoreCache`
 
 ---
 
@@ -416,7 +528,7 @@ the execution `run_id`.
 | 1 — Extended schedule conditions | `Condition` Protocol + concrete types, orchestrator, tests, 1 example | None |
 | 2 — RunID abstraction | `Frequency`, `DateCadence`, `Cadence`, constants, `cadence` field, tests | None (independent of Phase 1) |
 | 3 — Factory callable | `Orchestrator` factory support, tests, 1 example | Phase 2 (jobs carry `cadence`) |
-| 4 — Metadata store | New `dispatchio/metadata/` package, harness injection, 1 example | Phase 3 (factory reads from it) |
+| 4 — Artifact store | New `dispatchio/artifact/` package, `ArtifactStoreCache`, namespace support, harness injection, 1 example | Phase 3 (factory reads from it) |
 | 5 — Cascading skip | Orchestrator change, tests | None |
 | 6 — Dependency modes | Model change, orchestrator, tests | Phase 5 (replaces it) |
 | 7 — Backfill helper | `simulate.py` extension, tests | Phase 1 (date stepping) |
@@ -444,10 +556,22 @@ Phase 4 depends on Phase 3 in that its primary consumer is the factory pattern.
    the discovery job hasn't written metadata yet), the tick is a no-op.
    This is correct behaviour, but should it log a warning?
 
-4. **Metadata store config** — should the metadata store be configured
+4. **Artifact store config** — should the artifact store be configured
    under the same `dispatchio.toml` as the state store, or separately?
    Sharing the same section (with sub-keys) seems cleaner.
 
-5. **Hierarchical option B (week_day expressions)** — worth a follow-up
+5. **`ArtifactStoreCache` flush on error** — if an exception occurs mid-tick
+   after some writes have been buffered, should `flush()` still be called
+   (preserving partial results) or skipped (keeping the store clean)?
+   The safer default is to flush — partial artifacts are preferable to lost
+   artifacts because `write` is idempotent for a given (namespace, job, run_id, key).
+
+6. **SQLite + S3 sync protocol** — copy-on-open / upload-on-close works for
+   single-orchestrator deployments. If two orchestrators share a SQLite file
+   via S3, a last-writer-wins race is possible. This should be called out
+   clearly in docs; the DynamoDB backend is the answer when true concurrency
+   is required.
+
+7. **Hierarchical option B (week_day expressions)** — worth a follow-up
    design pass once the factory pattern is in use and we can see which
    mappings are written repeatedly.

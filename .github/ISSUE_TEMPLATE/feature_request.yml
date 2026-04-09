@@ -1,0 +1,22 @@
+name: Feature Request
+description: Suggest an idea or enhancement
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What would you like?
+      description: Describe the feature and why it would be useful.
+    validations:
+      required: true
+
+  - type: textarea
+    id: example
+    attributes:
+      label: Example usage
+      render: python
+      placeholder: |
+        from dispatchio import ...
+    validations:
+      required: false

@@ -13,12 +13,13 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from dispatchio.cadence import Cadence, DateCadence, FixedCadence, Frequency
+    from dispatchio.cadence import Cadence
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _subtract_months(dt: datetime, n: int) -> datetime:
     """
@@ -30,7 +31,7 @@ def _subtract_months(dt: datetime, n: int) -> datetime:
     n = 0 → no change
     """
     month = dt.month - n
-    year  = dt.year + (month - 1) // 12
+    year = dt.year + (month - 1) // 12
     month = ((month - 1) % 12) + 1
     max_day = calendar.monthrange(year, month)[1]
     return dt.replace(year=year, month=month, day=min(dt.day, max_day))
@@ -40,7 +41,8 @@ def _subtract_months(dt: datetime, n: int) -> datetime:
 # Public API
 # ---------------------------------------------------------------------------
 
-def resolve_run_id(cadence: "Cadence", reference_time: datetime) -> str:
+
+def resolve_run_id(cadence: Cadence, reference_time: datetime) -> str:
     """
     Resolve a Cadence to a concrete run_id string.
 
@@ -58,19 +60,23 @@ def resolve_run_id(cadence: "Cadence", reference_time: datetime) -> str:
     >>> resolve_run_id(HOURLY, ref)
     '2025011502'
     """
-    from dispatchio.cadence import DateCadence, FixedCadence, Frequency, IncrementalCadence
+    from dispatchio.cadence import (
+        DateCadence,
+        FixedCadence,
+        Frequency,
+        IncrementalCadence,
+    )
 
     if isinstance(cadence, FixedCadence):
         return cadence.value
 
     if isinstance(cadence, IncrementalCadence):
         raise NotImplementedError(
-            "IncrementalCadence requires MetadataStore (Phase 4). "
-            f"Key: {cadence.key!r}"
+            f"IncrementalCadence requires MetadataStore (Phase 4). Key: {cadence.key!r}"
         )
 
     if isinstance(cadence, DateCadence):
-        lookback = -cadence.offset   # negative offset → positive lookback
+        lookback = -cadence.offset  # negative offset → positive lookback
         freq = cadence.frequency
 
         if freq == Frequency.DAILY:
@@ -89,29 +95,34 @@ def resolve_run_id(cadence: "Cadence", reference_time: datetime) -> str:
     raise ValueError(f"Cannot resolve cadence: {cadence!r}")  # pragma: no cover
 
 
-def describe_cadence(cadence: "Cadence") -> str:
+def describe_cadence(cadence: Cadence) -> str:
     """Human-readable description of a cadence (used in CLI/log output)."""
-    from dispatchio.cadence import DateCadence, FixedCadence, Frequency, IncrementalCadence
+    from dispatchio.cadence import DateCadence, FixedCadence, IncrementalCadence
 
     if isinstance(cadence, FixedCadence):
         return f"literal '{cadence.value}'"
     if isinstance(cadence, IncrementalCadence):
         return f"incremental[{cadence.key!r}]"
     if isinstance(cadence, DateCadence):
-        freq   = cadence.frequency.value
+        freq = cadence.frequency.value
         offset = cadence.offset
         if offset == 0:
             return {
-                "hourly": "current hour", "daily": "today",
-                "weekly": "current week", "monthly": "current month",
+                "hourly": "current hour",
+                "daily": "today",
+                "weekly": "current week",
+                "monthly": "current month",
             }.get(freq, freq)
         if offset == -1:
             return {
-                "hourly": "previous hour", "daily": "yesterday",
-                "weekly": "last week",     "monthly": "last month",
+                "hourly": "previous hour",
+                "daily": "yesterday",
+                "weekly": "last week",
+                "monthly": "last month",
             }.get(freq, f"{freq} (offset {offset})")
-        n    = -offset
-        unit = {"hourly": "hour", "daily": "day",
-                "weekly": "week", "monthly": "month"}[freq]
+        n = -offset
+        unit = {"hourly": "hour", "daily": "day", "weekly": "week", "monthly": "month"}[
+            freq
+        ]
         return f"{n} {unit}{'s' if n > 1 else ''} ago"
     return repr(cadence)  # pragma: no cover

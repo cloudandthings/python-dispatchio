@@ -42,6 +42,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Sub-models (plain BaseModel — not BaseSettings themselves)
 # ---------------------------------------------------------------------------
 
+
 class StateSettings(BaseModel):
     """
     State store backend configuration.
@@ -50,14 +51,15 @@ class StateSettings(BaseModel):
     backend="memory"      — in-process only, lost on restart; useful for tests.
     backend="dynamodb"    — AWS DynamoDB; requires dispatchio[aws].
     """
+
     backend: Literal["filesystem", "memory", "dynamodb"] = "filesystem"
 
     # filesystem
     root: str = ".dispatchio/state"
 
     # dynamodb (dispatchio[aws])
-    table_name: str        = "dispatchio-state"
-    region:     str | None = None
+    table_name: str = "dispatchio-state"
+    region: str | None = None
 
 
 class ReceiverSettings(BaseModel):
@@ -68,6 +70,7 @@ class ReceiverSettings(BaseModel):
     backend="sqs"         — AWS SQS queue; requires dispatchio[aws].
     backend="none"        — no receiver; jobs must write directly to the state store.
     """
+
     backend: Literal["filesystem", "sqs", "none"] = "filesystem"
 
     # filesystem
@@ -75,12 +78,13 @@ class ReceiverSettings(BaseModel):
 
     # sqs (dispatchio[aws])
     queue_url: str | None = None
-    region:    str | None = None
+    region: str | None = None
 
 
 # ---------------------------------------------------------------------------
 # Top-level settings
 # ---------------------------------------------------------------------------
+
 
 class SubmissionSettings(BaseModel):
     """
@@ -94,9 +98,10 @@ class SubmissionSettings(BaseModel):
                   Not yet enforced by local executors; reserved for cloud
                   executors (e.g. ECS) where the API call can be slow.
     """
-    concurrency: int        = 8
+
+    concurrency: int = 8
     max_per_tick: int | None = None
-    timeout:      float | None = None
+    timeout: float | None = None
 
 
 class DispatchioSettings(BaseSettings):
@@ -126,17 +131,18 @@ class DispatchioSettings(BaseSettings):
         extra="ignore",
     )
 
-    log_level:       str                = "INFO"
-    state:           StateSettings      = Field(default_factory=StateSettings)
-    receiver:        ReceiverSettings   = Field(default_factory=ReceiverSettings)
-    submission:      SubmissionSettings = Field(default_factory=SubmissionSettings)
-    default_cadence: Any                = "daily"
+    log_level: str = "INFO"
+    state: StateSettings = Field(default_factory=StateSettings)
+    receiver: ReceiverSettings = Field(default_factory=ReceiverSettings)
+    submission: SubmissionSettings = Field(default_factory=SubmissionSettings)
+    default_cadence: Any = "daily"
     # Accepts a frequency string ("daily", "monthly", etc.) or a full
     # Cadence dict.  Coerced to a DateCadence by _coerce_cadence below.
 
     @model_validator(mode="after")
-    def _coerce_cadence(self) -> "DispatchioSettings":
+    def _coerce_cadence(self) -> DispatchioSettings:
         from dispatchio.cadence import DateCadence, Frequency
+
         v = self.default_cadence
         if isinstance(v, str):
             self.default_cadence = DateCadence(frequency=Frequency(v))
