@@ -31,7 +31,7 @@ Two jobs:
   1. hello_world   — runs immediately, prints a greeting.
   2. goodbye_world — runs after hello_world is done for the same day.
 
-The Job class creates two jobs, and a dependency between them. 
+The Job class creates two jobs, and a dependency between them.
 
 Configuration is loaded from dispatchio.toml in this directory.
 For example, default_cadence is set to DAILY so it doesn't have to be specified in the Job definitions.
@@ -50,7 +50,7 @@ CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))
 hello_world = Job.create(
         "hello_world",
         # default_cadence is set to DAILY in dispatchio.toml
-        # cadence=DAILY, 
+        # cadence=DAILY,
         executor=PythonJob(
             script=str(BASE / "my_work.py"),
             function="hello_world",
@@ -65,7 +65,7 @@ goodbye_world = Job.create(
         ),
         depends_on=hello_world,
         # default_cadence is set to DAILY in dispatchio.toml
-        # cadence=DAILY,  
+        # cadence=DAILY,
     )
 
 JOBS = [hello_world, goodbye_world]

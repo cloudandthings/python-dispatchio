@@ -32,12 +32,13 @@ class CompletionEvent(BaseModel):
         error_reason — optional message when status=ERROR
         metadata     — arbitrary key/value pairs stored on the RunRecord
     """
-    job_name:     str
-    run_id:       str
-    status:       Status
-    error_reason: str | None           = None
-    metadata:     dict[str, Any]       = {}
-    occurred_at:  datetime | None      = None  # defaults to now() if omitted
+
+    job_name: str
+    run_id: str
+    status: Status
+    error_reason: str | None = None
+    metadata: dict[str, Any] = {}
+    occurred_at: datetime | None = None  # defaults to now() if omitted
 
 
 @runtime_checkable

@@ -39,7 +39,7 @@ from dispatchio import (
     orchestrator_from_config,
 )
 
-BASE        = Path(__file__).parent
+BASE = Path(__file__).parent
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))
 
 # One run per calendar month — run_id = "202501", "202502", …

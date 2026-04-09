@@ -5,28 +5,31 @@ orchestrator_from_config factory.
 
 from __future__ import annotations
 
-import os
 import textwrap
 from pathlib import Path
 
 import pytest
 
-from dispatchio.config.settings import DispatchioSettings, ReceiverSettings, StateSettings
+from dispatchio.config.settings import (
+    DispatchioSettings,
+    ReceiverSettings,
+    StateSettings,
+)
 from dispatchio.config.loader import (
     _find_config_file,
-    _read_toml,
     load_config,
     orchestrator_from_config,
 )
 from dispatchio.models import Job, SubprocessJob
 from dispatchio.orchestrator import Orchestrator
-from dispatchio.state import FilesystemStateStore, MemoryStateStore
+from dispatchio.state import FilesystemStateStore
 from dispatchio.receiver import FilesystemReceiver
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 def _toml(content: str, path: Path) -> Path:
     """Write TOML content to a file and return the path."""
@@ -45,6 +48,7 @@ def simple_job():
 # ---------------------------------------------------------------------------
 # Default settings
 # ---------------------------------------------------------------------------
+
 
 class TestDefaultSettings:
     def test_log_level_default(self):
@@ -65,6 +69,7 @@ class TestDefaultSettings:
 # ---------------------------------------------------------------------------
 # Environment variable overrides
 # ---------------------------------------------------------------------------
+
 
 class TestEnvVarOverrides:
     def test_top_level_env_var(self, monkeypatch):
@@ -95,22 +100,28 @@ class TestEnvVarOverrides:
     def test_case_insensitive(self, monkeypatch):
         monkeypatch.setenv("DISPATCHIO_LOG_LEVEL", "warning")
         s = DispatchioSettings()
-        assert s.log_level == "warning"   # stored as-is; logging.getLevelName handles case
+        assert (
+            s.log_level == "warning"
+        )  # stored as-is; logging.getLevelName handles case
 
 
 # ---------------------------------------------------------------------------
 # TOML loading
 # ---------------------------------------------------------------------------
 
+
 class TestTomlLoading:
     def test_bare_toml_file(self, tmp_path):
-        f = _toml("""
+        f = _toml(
+            """
             log_level = "DEBUG"
             [state]
             backend = "memory"
             [receiver]
             backend = "none"
-        """, tmp_path / "dispatchio.toml")
+        """,
+            tmp_path / "dispatchio.toml",
+        )
         s = load_config(f)
         assert s.log_level == "DEBUG"
         assert s.state.backend == "memory"
@@ -118,7 +129,8 @@ class TestTomlLoading:
 
     def test_dispatchio_section_in_toml(self, tmp_path):
         """[dispatchio] section should be extracted from a larger file."""
-        f = _toml("""
+        f = _toml(
+            """
             [tool.something]
             foo = "bar"
 
@@ -127,15 +139,20 @@ class TestTomlLoading:
 
             [dispatchio.state]
             backend = "memory"
-        """, tmp_path / "pyproject.toml")
+        """,
+            tmp_path / "pyproject.toml",
+        )
         s = load_config(f)
         assert s.log_level == "WARNING"
         assert s.state.backend == "memory"
 
     def test_missing_keys_use_defaults(self, tmp_path):
-        f = _toml("""
+        f = _toml(
+            """
             log_level = "DEBUG"
-        """, tmp_path / "dispatchio.toml")
+        """,
+            tmp_path / "dispatchio.toml",
+        )
         s = load_config(f)
         assert s.state.backend == "filesystem"  # default preserved
 
@@ -147,6 +164,7 @@ class TestTomlLoading:
 # ---------------------------------------------------------------------------
 # Config file resolution
 # ---------------------------------------------------------------------------
+
 
 class TestConfigFileResolution:
     def test_explicit_path_wins(self, tmp_path):
@@ -197,32 +215,37 @@ class TestConfigFileResolution:
 # Priority: env vars override TOML
 # ---------------------------------------------------------------------------
 
+
 class TestPriority:
     def test_env_overrides_toml(self, tmp_path, monkeypatch):
         f = _toml('log_level = "DEBUG"', tmp_path / "dispatchio.toml")
         monkeypatch.setenv("DISPATCHIO_LOG_LEVEL", "ERROR")
         s = load_config(f)
-        assert s.log_level == "ERROR"   # env wins
+        assert s.log_level == "ERROR"  # env wins
 
     def test_env_overrides_nested_toml(self, tmp_path, monkeypatch):
-        f = _toml("""
+        f = _toml(
+            """
             [state]
             backend = "filesystem"
             root    = "/from/toml"
-        """, tmp_path / "dispatchio.toml")
+        """,
+            tmp_path / "dispatchio.toml",
+        )
         monkeypatch.setenv("DISPATCHIO_STATE__ROOT", "/from/env")
         s = load_config(f)
-        assert s.state.root == "/from/env"   # env wins
+        assert s.state.root == "/from/env"  # env wins
 
     def test_toml_overrides_defaults(self, tmp_path):
         f = _toml('log_level = "WARNING"', tmp_path / "dispatchio.toml")
         s = load_config(f)
-        assert s.log_level == "WARNING"     # toml wins over default "INFO"
+        assert s.log_level == "WARNING"  # toml wins over default "INFO"
 
 
 # ---------------------------------------------------------------------------
 # orchestrator_from_config
 # ---------------------------------------------------------------------------
+
 
 class TestOrchestratorFromConfig:
     def test_returns_orchestrator(self, simple_job, tmp_path):
@@ -248,6 +271,7 @@ class TestOrchestratorFromConfig:
         )
         orch = orchestrator_from_config([simple_job], config=settings)
         from dispatchio.state.memory import MemoryStateStore
+
         assert isinstance(orch.state, MemoryStateStore)
 
     def test_filesystem_receiver(self, simple_job, tmp_path):
@@ -270,12 +294,15 @@ class TestOrchestratorFromConfig:
         assert orch.receiver is None
 
     def test_accepts_path_to_toml(self, simple_job, tmp_path):
-        f = _toml("""
+        f = _toml(
+            """
             [state]
             backend = "memory"
             [receiver]
             backend = "none"
-        """, tmp_path / "dispatchio.toml")
+        """,
+            tmp_path / "dispatchio.toml",
+        )
         orch = orchestrator_from_config([simple_job], config=f)
         assert isinstance(orch, Orchestrator)
 
@@ -288,8 +315,17 @@ class TestOrchestratorFromConfig:
         assert len(orch.jobs) == 1
         assert orch.jobs[0].name == "j"
 
+    def test_jobs_default_to_empty_list(self):
+        settings = DispatchioSettings(
+            state=StateSettings(backend="memory"),
+            receiver=ReceiverSettings(backend="none"),
+        )
+        orch = orchestrator_from_config(config=settings)
+        assert len(orch.jobs) == 0
+
     def test_orchestrator_kwargs_forwarded(self, simple_job):
         from dispatchio.alerts.base import LogAlertHandler
+
         handler = LogAlertHandler()
         settings = DispatchioSettings(
             state=StateSettings(backend="memory"),
@@ -303,8 +339,9 @@ class TestOrchestratorFromConfig:
     def test_unknown_state_backend_raises(self, simple_job):
         settings = DispatchioSettings.__new__(DispatchioSettings)
         object.__setattr__(settings, "log_level", "INFO")
-        object.__setattr__(settings, "state",
-                           StateSettings.model_construct(backend="unknown"))  # type: ignore
+        object.__setattr__(
+            settings, "state", StateSettings.model_construct(backend="unknown")
+        )  # type: ignore
         object.__setattr__(settings, "receiver", ReceiverSettings(backend="none"))
         with pytest.raises(ValueError, match="Unknown state backend"):
             orchestrator_from_config([simple_job], config=settings)

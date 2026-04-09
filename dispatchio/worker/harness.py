@@ -38,8 +38,6 @@ import logging
 import os
 import sys
 import threading
-import time
-import traceback
 from collections.abc import Callable
 from typing import Any
 
@@ -53,6 +51,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Heartbeat thread
 # ---------------------------------------------------------------------------
+
 
 class _HeartbeatThread(threading.Thread):
     """
@@ -69,21 +68,21 @@ class _HeartbeatThread(threading.Thread):
     ) -> None:
         super().__init__(daemon=True, name=f"dispatchio-heartbeat-{job_name}")
         self._job_name = job_name
-        self._run_id   = run_id
+        self._run_id = run_id
         self._reporter = reporter
         self._interval = interval
-        self._stop     = threading.Event()
+        self._stop = threading.Event()
 
     def run(self) -> None:
         while not self._stop.wait(timeout=self._interval):
             try:
-                self._reporter.report(
-                    self._job_name, self._run_id, Status.RUNNING
-                )
+                self._reporter.report(self._job_name, self._run_id, Status.RUNNING)
                 logger.debug("Heartbeat sent for %s/%s", self._job_name, self._run_id)
             except Exception:
                 logger.warning(
-                    "Heartbeat failed for %s/%s", self._job_name, self._run_id,
+                    "Heartbeat failed for %s/%s",
+                    self._job_name,
+                    self._run_id,
                     exc_info=True,
                 )
 
@@ -94,6 +93,7 @@ class _HeartbeatThread(threading.Thread):
 # ---------------------------------------------------------------------------
 # Argument parsing helpers
 # ---------------------------------------------------------------------------
+
 
 def _arg_from_argv(flag: str) -> str | None:
     """Extract the value after `flag` in sys.argv, e.g. --run-id 20250115."""
@@ -106,11 +106,7 @@ def _arg_from_argv(flag: str) -> str | None:
 
 
 def _resolve_run_id(run_id: str | None) -> str:
-    value = (
-        run_id
-        or _arg_from_argv("--run-id")
-        or os.environ.get("DISPATCHIO_RUN_ID")
-    )
+    value = run_id or _arg_from_argv("--run-id") or os.environ.get("DISPATCHIO_RUN_ID")
     if not value:
         raise RuntimeError(
             "run_id is required. Pass it explicitly to run_job(), "
@@ -128,10 +124,7 @@ def _resolve_reporter(reporter: Reporter | None) -> Reporter | None:
     if reporter is not None:
         return reporter
 
-    drop_dir = (
-        _arg_from_argv("--drop-dir")
-        or os.environ.get("DISPATCHIO_DROP_DIR")
-    )
+    drop_dir = _arg_from_argv("--drop-dir") or os.environ.get("DISPATCHIO_DROP_DIR")
     if drop_dir:
         return FilesystemReporter(drop_dir)
 
@@ -145,6 +138,7 @@ def _resolve_reporter(reporter: Reporter | None) -> Reporter | None:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def run_job(
     job_name: str,
@@ -197,7 +191,9 @@ def run_job(
         fn(resolved_run_id)
 
         metadata = metadata_fn() if metadata_fn else {}
-        logger.info("Job completed successfully: job=%s run_id=%s", job_name, resolved_run_id)
+        logger.info(
+            "Job completed successfully: job=%s run_id=%s", job_name, resolved_run_id
+        )
 
         if resolved_reporter is not None:
             resolved_reporter.report(
@@ -208,13 +204,17 @@ def run_job(
         error_reason = f"{type(exc).__name__}: {exc}"
         logger.error(
             "Job failed: job=%s run_id=%s error=%s",
-            job_name, resolved_run_id, error_reason,
+            job_name,
+            resolved_run_id,
+            error_reason,
         )
         logger.debug("Traceback:", exc_info=True)
 
         if resolved_reporter is not None:
             resolved_reporter.report(
-                job_name, resolved_run_id, Status.ERROR,
+                job_name,
+                resolved_run_id,
+                Status.ERROR,
                 error_reason=error_reason,
             )
 

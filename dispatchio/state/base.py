@@ -37,7 +37,7 @@ class StateStore(Protocol):
     def list_records(
         self,
         job_name: str | None = None,
-        status:   Status | None = None,
+        status: Status | None = None,
     ) -> list[RunRecord]:
         """
         Return all records, optionally filtered by job_name and/or status.

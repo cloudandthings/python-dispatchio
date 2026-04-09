@@ -19,7 +19,7 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Topic :: Office/Business :: Scheduling",
-    "Topic :: Utilities", 
+    "Topic :: Utilities",
 ]
 dependencies = [
     "pydantic>=2.0",
@@ -53,3 +53,8 @@ packages = ["dispatchio"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

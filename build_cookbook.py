@@ -18,16 +18,16 @@ import argparse
 import tomllib
 from pathlib import Path
 
-ROOT         = Path(__file__).parent.parent
+ROOT = Path(__file__).parent.parent
 EXAMPLES_DIR = ROOT / "examples"
-DEFAULT_OUT  = ROOT / "COOKBOOK.md"
+DEFAULT_OUT = ROOT / "COOKBOOK.md"
 
 _FENCE_LANG = {
-    ".py":   "python",
+    ".py": "python",
     ".toml": "toml",
-    ".sh":   "bash",
+    ".sh": "bash",
     ".yaml": "yaml",
-    ".yml":  "yaml",
+    ".yml": "yaml",
     ".json": "json",
 }
 
@@ -85,7 +85,9 @@ def build(output: Path = DEFAULT_OUT) -> None:
     for toml_path in EXAMPLES_DIR.glob("*/example.toml"):
         with toml_path.open("rb") as fh:
             meta = tomllib.load(fh)
-        entries.append((meta.get("order", 999), toml_path.parent.name, toml_path.parent, meta))
+        entries.append(
+            (meta.get("order", 999), toml_path.parent.name, toml_path.parent, meta)
+        )
 
     entries.sort(key=lambda e: (e[0], e[1]))
 
@@ -98,7 +100,14 @@ def build(output: Path = DEFAULT_OUT) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUT, metavar="PATH",
-                        help=f"destination file (default: {DEFAULT_OUT.name})")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=DEFAULT_OUT,
+        metavar="PATH",
+        help=f"destination file (default: {DEFAULT_OUT.name})",
+    )
     build(parser.parse_args().output)

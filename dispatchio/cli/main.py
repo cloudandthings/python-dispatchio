@@ -24,12 +24,10 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 import importlib.util
 
 import click
-from pydantic import BaseModel
 
 from dispatchio.models import RunRecord, Status, TickResult
 from dispatchio.orchestrator import Orchestrator
@@ -44,6 +42,7 @@ logging.basicConfig(
 # ---------------------------------------------------------------------------
 # Config resolution
 # ---------------------------------------------------------------------------
+
 
 def _resolve_state_dir(state_dir: str | None) -> str | None:
     return state_dir or os.environ.get("DISPATCHIO_STATE_DIR")
@@ -88,9 +87,11 @@ def _load_state(state_dir: str) -> FilesystemStateStore:
 # Shared options
 # ---------------------------------------------------------------------------
 
+
 def _orch_option(f):
     return click.option(
-        "--orchestrator", "-o",
+        "--orchestrator",
+        "-o",
         default=None,
         help="module:attribute path to an Orchestrator, e.g. myproject.jobs:orchestrator",
     )(f)
@@ -98,16 +99,18 @@ def _orch_option(f):
 
 def _state_option(f):
     return click.option(
-        "--state-dir", "-s",
+        "--state-dir",
+        "-s",
         default=None,
         help="Path to state directory (FilesystemStateStore root). "
-             "Env: DISPATCHIO_STATE_DIR",
+        "Env: DISPATCHIO_STATE_DIR",
     )(f)
 
 
 # ---------------------------------------------------------------------------
 # Root group
 # ---------------------------------------------------------------------------
+
 
 @click.group()
 def cli():
@@ -118,13 +121,14 @@ def cli():
 # tick
 # ---------------------------------------------------------------------------
 
+
 @cli.command()
 @_orch_option
 @click.option(
-    "--reference-time", "-t",
+    "--reference-time",
+    "-t",
     default=None,
-    help="ISO-8601 datetime to use as the tick reference time. "
-         "Defaults to now (UTC).",
+    help="ISO-8601 datetime to use as the tick reference time. Defaults to now (UTC).",
 )
 def tick(orchestrator: str | None, reference_time: str | None):
     """Run one orchestrator tick and print results."""
@@ -151,7 +155,9 @@ def tick(orchestrator: str | None, reference_time: str | None):
         for r in result.results:
             marker = _action_icon(r.action.value)
             detail = f"  {r.detail}" if r.detail else ""
-            click.echo(f"  {marker} {r.job_name}[{r.run_id}] → {r.action.value}{detail}")
+            click.echo(
+                f"  {marker} {r.job_name}[{r.run_id}] → {r.action.value}{detail}"
+            )
     click.echo()
 
 
@@ -159,13 +165,19 @@ def tick(orchestrator: str | None, reference_time: str | None):
 # run  (PythonJob entry point)
 # ---------------------------------------------------------------------------
 
+
 @cli.command("run")
 @click.argument("entry_point", required=False, default=None)
-@click.option("--script",   default=None, help="Path to a Python script file.")
-@click.option("--function", "function_name", default=None,
-              help="Function name within the script (required with --script).")
-@click.option("--job-name", default=None,
-              help="Job name override. Defaults to the function name.")
+@click.option("--script", default=None, help="Path to a Python script file.")
+@click.option(
+    "--function",
+    "function_name",
+    default=None,
+    help="Function name within the script (required with --script).",
+)
+@click.option(
+    "--job-name", default=None, help="Job name override. Defaults to the function name."
+)
 def run_command(
     entry_point: str | None,
     script: str | None,
@@ -233,12 +245,14 @@ def run_command(
 # status
 # ---------------------------------------------------------------------------
 
+
 @cli.command()
 @_state_option
 @click.option("--job", "-j", default=None, help="Filter by job name.")
 @click.option("--run-id", "-r", default=None, help="Filter by run_id.")
 @click.option(
-    "--status", "filter_status",
+    "--status",
+    "filter_status",
     default=None,
     type=click.Choice([s.value for s in Status]),
     help="Filter by status.",
@@ -273,6 +287,7 @@ def status(
 # record set  (manual override)
 # ---------------------------------------------------------------------------
 
+
 @cli.group("record")
 def record_group():
     """Manually inspect or override run records."""
@@ -282,8 +297,9 @@ def record_group():
 @_state_option
 @click.argument("job_name")
 @click.argument("run_id")
-@click.argument("new_status", metavar="STATUS",
-                type=click.Choice([s.value for s in Status]))
+@click.argument(
+    "new_status", metavar="STATUS", type=click.Choice([s.value for s in Status])
+)
 @click.option("--reason", default=None, help="Error reason string.")
 def record_set(
     state_dir: str | None,
@@ -317,6 +333,7 @@ def record_set(
 # heartbeat
 # ---------------------------------------------------------------------------
 
+
 @cli.command()
 @_state_option
 @click.argument("job_name")
@@ -336,25 +353,25 @@ def heartbeat(state_dir: str | None, job_name: str, run_id: str):
 # ---------------------------------------------------------------------------
 
 _STATUS_COLOURS = {
-    "done":      ("green",  "DONE     "),
-    "submitted": ("cyan",   "SUBMITTED"),
-    "running":   ("blue",   "RUNNING  "),
-    "error":     ("red",    "ERROR    "),
-    "lost":      ("yellow", "LOST     "),
-    "pending":   ("white",  "PENDING  "),
-    "skipped":   ("white",  "SKIPPED  "),
+    "done": ("green", "DONE     "),
+    "submitted": ("cyan", "SUBMITTED"),
+    "running": ("blue", "RUNNING  "),
+    "error": ("red", "ERROR    "),
+    "lost": ("yellow", "LOST     "),
+    "pending": ("white", "PENDING  "),
+    "skipped": ("white", "SKIPPED  "),
 }
 
 _ACTION_ICONS = {
-    "submitted":              "✓",
-    "retrying":               "↺",
-    "marked_lost":            "✗",
-    "marked_error":           "✗",
-    "submission_failed":      "✗",
-    "skipped_condition":      "·",
-    "skipped_dependencies":   "·",
+    "submitted": "✓",
+    "retrying": "↺",
+    "marked_lost": "✗",
+    "marked_error": "✗",
+    "submission_failed": "✗",
+    "skipped_condition": "·",
+    "skipped_dependencies": "·",
     "skipped_already_active": "·",
-    "skipped_already_done":   "·",
+    "skipped_already_done": "·",
 }
 
 

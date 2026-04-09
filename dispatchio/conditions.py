@@ -40,18 +40,21 @@ class Condition(Protocol):
     The built-in condition types (TimeOfDayCondition, DayOfMonthCondition,
     etc.) satisfy this protocol automatically. Implement it for custom gates.
     """
-    def is_met(self, reference_time: datetime, cadence: "Cadence") -> bool: ...
+
+    def is_met(self, reference_time: datetime, cadence: Cadence) -> bool: ...
 
 
 # ---------------------------------------------------------------------------
 # Concrete condition types
 # ---------------------------------------------------------------------------
 
+
 class TimeOfDayCondition(BaseModel):
     """Gate on wall-clock time. Natural fit for daily / weekly / monthly jobs."""
-    type:   Literal["time_of_day"] = "time_of_day"
-    after:  time | None = None    # ref.time() >= after
-    before: time | None = None    # ref.time() <  before
+
+    type: Literal["time_of_day"] = "time_of_day"
+    after: time | None = None  # ref.time() >= after
+    before: time | None = None  # ref.time() <  before
 
     @model_validator(mode="after")
     def _at_least_one(self) -> TimeOfDayCondition:
@@ -59,8 +62,8 @@ class TimeOfDayCondition(BaseModel):
             raise ValueError("at least one of 'after' or 'before' must be set")
         return self
 
-    def is_met(self, reference_time: datetime, cadence: "Cadence") -> bool:
-        ref_t = reference_time.time()   # tzinfo stripped; always naive
+    def is_met(self, reference_time: datetime, cadence: Cadence) -> bool:
+        ref_t = reference_time.time()  # tzinfo stripped; always naive
         if self.after is not None and ref_t < self.after:
             return False
         if self.before is not None and ref_t >= self.before:
@@ -70,9 +73,10 @@ class TimeOfDayCondition(BaseModel):
 
 class MinuteOfHourCondition(BaseModel):
     """Gate on minute within the current hour. Natural fit for hourly jobs."""
-    type:   Literal["minute_of_hour"] = "minute_of_hour"
-    after:  int | None = None    # ref.minute >= after  (0–59)
-    before: int | None = None    # ref.minute <  before (0–59)
+
+    type: Literal["minute_of_hour"] = "minute_of_hour"
+    after: int | None = None  # ref.minute >= after  (0–59)
+    before: int | None = None  # ref.minute <  before (0–59)
 
     @model_validator(mode="after")
     def _at_least_one(self) -> MinuteOfHourCondition:
@@ -80,7 +84,7 @@ class MinuteOfHourCondition(BaseModel):
             raise ValueError("at least one of 'after' or 'before' must be set")
         return self
 
-    def is_met(self, reference_time: datetime, cadence: "Cadence") -> bool:
+    def is_met(self, reference_time: datetime, cadence: Cadence) -> bool:
         m = reference_time.minute
         if self.after is not None and m < self.after:
             return False
@@ -91,9 +95,10 @@ class MinuteOfHourCondition(BaseModel):
 
 class DayOfMonthCondition(BaseModel):
     """Gate on calendar day within the current month. Natural fit for monthly jobs."""
-    type:   Literal["day_of_month"] = "day_of_month"
-    after:  int | None = None    # ref.day >= after   (1–31)
-    before: int | None = None    # ref.day <  before  (1–31)
+
+    type: Literal["day_of_month"] = "day_of_month"
+    after: int | None = None  # ref.day >= after   (1–31)
+    before: int | None = None  # ref.day <  before  (1–31)
 
     @model_validator(mode="after")
     def _at_least_one(self) -> DayOfMonthCondition:
@@ -101,7 +106,7 @@ class DayOfMonthCondition(BaseModel):
             raise ValueError("at least one of 'after' or 'before' must be set")
         return self
 
-    def is_met(self, reference_time: datetime, cadence: "Cadence") -> bool:
+    def is_met(self, reference_time: datetime, cadence: Cadence) -> bool:
         d = reference_time.day
         if self.after is not None and d < self.after:
             return False
@@ -112,10 +117,11 @@ class DayOfMonthCondition(BaseModel):
 
 class DayOfWeekCondition(BaseModel):
     """Gate on day of week. Applies across any cadence."""
-    type:    Literal["day_of_week"] = "day_of_week"
-    on_days: list[int]              # 0 = Mon … 6 = Sun
 
-    def is_met(self, reference_time: datetime, cadence: "Cadence") -> bool:
+    type: Literal["day_of_week"] = "day_of_week"
+    on_days: list[int]  # 0 = Mon … 6 = Sun
+
+    def is_met(self, reference_time: datetime, cadence: Cadence) -> bool:
         return reference_time.weekday() in self.on_days
 
 
@@ -123,21 +129,24 @@ class DayOfWeekCondition(BaseModel):
 # Composite conditions (defined before AnyCondition, rebuilt after)
 # ---------------------------------------------------------------------------
 
+
 class AllOf(BaseModel):
     """All conditions must be met (logical AND)."""
-    type:       Literal["all_of"] = "all_of"
+
+    type: Literal["all_of"] = "all_of"
     conditions: list[AnyCondition]  # resolved by model_rebuild() below
 
-    def is_met(self, reference_time: datetime, cadence: "Cadence") -> bool:
+    def is_met(self, reference_time: datetime, cadence: Cadence) -> bool:
         return all(c.is_met(reference_time, cadence) for c in self.conditions)
 
 
 class AnyOf(BaseModel):
     """At least one condition must be met (logical OR)."""
-    type:       Literal["any_of"] = "any_of"
+
+    type: Literal["any_of"] = "any_of"
     conditions: list[AnyCondition]  # resolved by model_rebuild() below
 
-    def is_met(self, reference_time: datetime, cadence: "Cadence") -> bool:
+    def is_met(self, reference_time: datetime, cadence: Cadence) -> bool:
         return any(c.is_met(reference_time, cadence) for c in self.conditions)
 
 

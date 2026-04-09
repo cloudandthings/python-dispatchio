@@ -28,7 +28,6 @@ import os
 from pathlib import Path
 
 from dispatchio import (
-    Dependency,
     DependencyMode,
     Job,
     PythonJob,

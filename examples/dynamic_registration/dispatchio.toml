@@ -1,0 +1,14 @@
+log_level = "INFO"
+default_cadence = "daily"
+
+[state]
+backend = "filesystem"
+root = ".dispatchio/state"
+
+[receiver]
+backend = "filesystem"
+drop_dir = ".dispatchio/completions"
+
+[submission]
+concurrency = 4
+max_per_tick = 10

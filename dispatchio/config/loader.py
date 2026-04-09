@@ -13,7 +13,11 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from dispatchio.config.settings import DispatchioSettings, ReceiverSettings, StateSettings
+from dispatchio.config.settings import (
+    DispatchioSettings,
+    ReceiverSettings,
+    StateSettings,
+)
 from dispatchio.config.sources.toml_ import TomlSource
 from dispatchio.executor import SubprocessExecutor, PythonJobExecutor
 from dispatchio.models import Job
@@ -23,13 +27,14 @@ from dispatchio.state import FilesystemStateStore, MemoryStateStore
 
 logger = logging.getLogger(__name__)
 
-_CONFIG_ENV_VAR  = "DISPATCHIO_CONFIG"
-_SEARCH_PATHS    = ["dispatchio.toml", "~/.dispatchio.toml"]
+_CONFIG_ENV_VAR = "DISPATCHIO_CONFIG"
+_SEARCH_PATHS = ["dispatchio.toml", "~/.dispatchio.toml"]
 
 
 # ---------------------------------------------------------------------------
 # Config file resolution
 # ---------------------------------------------------------------------------
+
 
 def _find_config_file(path: str | Path | None) -> Path | None:
     """
@@ -53,9 +58,9 @@ def _find_config_file(path: str | Path | None) -> Path | None:
         if env_val.startswith("ssm://"):
             # SSM paths are handled by dispatchio[aws] — signal to caller
             raise NotImplementedError(
-                f"SSM config sources require dispatchio[aws]. "
-                f"Set DISPATCHIO_CONFIG to a local file path, or install "
-                f"dispatchio[aws] for SSM support."
+                "SSM config sources require dispatchio[aws]. "
+                "Set DISPATCHIO_CONFIG to a local file path, or install "
+                "dispatchio[aws] for SSM support."
             )
         p = Path(env_val).expanduser()
         if not p.exists():
@@ -95,6 +100,7 @@ def _read_toml(path: Path) -> dict[str, Any]:
 def _resolve_relative_paths(data: dict[str, Any], base_dir: Path) -> dict[str, Any]:
     """Resolve relative path strings in config relative to base_dir."""
     import copy
+
     data = copy.deepcopy(data)
     _PATH_FIELDS = {"state": ["root"], "receiver": ["drop_dir"]}
     for section, keys in _PATH_FIELDS.items():
@@ -110,6 +116,7 @@ def _resolve_relative_paths(data: dict[str, Any], base_dir: Path) -> dict[str, A
 # ---------------------------------------------------------------------------
 # Public: load_config
 # ---------------------------------------------------------------------------
+
 
 def load_config(path: str | Path | None = None) -> DispatchioSettings:
     """
@@ -172,8 +179,9 @@ def load_config(path: str | Path | None = None) -> DispatchioSettings:
 # Public: orchestrator_from_config
 # ---------------------------------------------------------------------------
 
+
 def orchestrator_from_config(
-    jobs: list[Job],
+    jobs: list[Job] | None = None,
     config: str | Path | DispatchioSettings | None = None,
     **orchestrator_kwargs,
 ) -> Orchestrator:
@@ -185,7 +193,9 @@ def orchestrator_from_config(
     job definitions stay decoupled from environment-specific values.
 
     Args:
-        jobs:   List of Jobs to evaluate on each tick.
+        jobs:   Optional list of Jobs to evaluate on each tick.
+            If omitted, an empty orchestrator is created and jobs can be
+            added later via Orchestrator.add_job(s).
         config: One of:
                   - None            auto-discover config file (see load_config)
                   - str / Path      explicit path to a TOML config file
@@ -200,6 +210,10 @@ def orchestrator_from_config(
 
         JOBS = [Job(name="etl", executor=SubprocessConfig(...))]
         orchestrator = orchestrator_from_config(JOBS)   # reads dispatchio.toml
+
+        # Orchestrator-first flow (dynamic registration):
+        # orchestrator = orchestrator_from_config()
+        # orchestrator.add_jobs(JOBS)
     """
     if isinstance(config, DispatchioSettings):
         settings = config
@@ -210,11 +224,11 @@ def orchestrator_from_config(
 
     reporter_env = _build_reporter_env(settings.receiver)
     return Orchestrator(
-        jobs=jobs,
+        jobs=jobs or [],
         state=_build_state(settings.state),
         executors={
             "subprocess": SubprocessExecutor(),
-            "python":     PythonJobExecutor(reporter_env=reporter_env),
+            "python": PythonJobExecutor(reporter_env=reporter_env),
         },
         receiver=_build_receiver(settings.receiver),
         submit_concurrency=settings.submission.concurrency,
@@ -228,6 +242,7 @@ def orchestrator_from_config(
 # ---------------------------------------------------------------------------
 # Internal: backend construction
 # ---------------------------------------------------------------------------
+
 
 def _configure_logging(level: str) -> None:
     logging.basicConfig(
@@ -247,6 +262,7 @@ def _build_state(cfg: StateSettings):
     if cfg.backend == "dynamodb":
         try:
             from dispatchio_aws.state.dynamodb import DynamoDBStateStore  # type: ignore[import]
+
             return DynamoDBStateStore(table_name=cfg.table_name, region=cfg.region)
         except ImportError:
             raise ImportError(
@@ -284,6 +300,7 @@ def _build_receiver(cfg: ReceiverSettings):
     if cfg.backend == "sqs":
         try:
             from dispatchio_aws.receiver.sqs import SQSReceiver  # type: ignore[import]
+
             return SQSReceiver(queue_url=cfg.queue_url, region=cfg.region)
         except ImportError:
             raise ImportError(

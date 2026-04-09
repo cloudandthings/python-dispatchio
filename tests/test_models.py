@@ -5,8 +5,6 @@ import pytest
 from dispatchio.cadence import DAILY, MONTHLY
 from dispatchio.conditions import TimeOfDayCondition
 from dispatchio.models import (
-    AlertCondition,
-    AlertOn,
     Dependency,
     HeartbeatPolicy,
     HttpJob,
@@ -14,7 +12,6 @@ from dispatchio.models import (
     Job,
     JobTickResult,
     PythonJob,
-    RetryPolicy,
     RunRecord,
     Status,
     SubprocessJob,

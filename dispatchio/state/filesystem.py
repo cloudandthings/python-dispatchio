@@ -18,7 +18,6 @@ Layout:
 
 from __future__ import annotations
 
-import json
 import os
 import tempfile
 from datetime import datetime, timezone
@@ -28,7 +27,6 @@ from dispatchio.models import RunRecord, Status
 
 
 class FilesystemStateStore:
-
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -87,7 +85,7 @@ class FilesystemStateStore:
     def list_records(
         self,
         job_name: str | None = None,
-        status:   Status | None = None,
+        status: Status | None = None,
     ) -> list[RunRecord]:
         records: list[RunRecord] = []
 

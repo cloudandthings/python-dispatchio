@@ -24,14 +24,19 @@ from dispatchio.conditions import (
 )
 
 # Convenience reference times
-_MON_09_30 = datetime(2025, 1, 13, 9, 30, tzinfo=timezone.utc)   # Monday, day 13, 09:30
-_WED_06_00 = datetime(2025, 1, 15, 6, 0, tzinfo=timezone.utc)    # Wednesday, day 15, 06:00
-_SAT_23_59 = datetime(2025, 1, 18, 23, 59, tzinfo=timezone.utc)  # Saturday, day 18, 23:59
+_MON_09_30 = datetime(2025, 1, 13, 9, 30, tzinfo=timezone.utc)  # Monday, day 13, 09:30
+_WED_06_00 = datetime(
+    2025, 1, 15, 6, 0, tzinfo=timezone.utc
+)  # Wednesday, day 15, 06:00
+_SAT_23_59 = datetime(
+    2025, 1, 18, 23, 59, tzinfo=timezone.utc
+)  # Saturday, day 18, 23:59
 
 
 # ---------------------------------------------------------------------------
 # TimeOfDayCondition
 # ---------------------------------------------------------------------------
+
 
 class TestTimeOfDayCondition:
     def test_after_met_exactly(self):
@@ -71,10 +76,11 @@ class TestTimeOfDayCondition:
 # MinuteOfHourCondition
 # ---------------------------------------------------------------------------
 
+
 class TestMinuteOfHourCondition:
     def test_after_met(self):
         cond = MinuteOfHourCondition(after=30)
-        assert cond.is_met(_MON_09_30, DAILY) is True   # minute=30
+        assert cond.is_met(_MON_09_30, DAILY) is True  # minute=30
 
     def test_after_not_met(self):
         cond = MinuteOfHourCondition(after=31)
@@ -102,10 +108,11 @@ class TestMinuteOfHourCondition:
 # DayOfMonthCondition
 # ---------------------------------------------------------------------------
 
+
 class TestDayOfMonthCondition:
     def test_after_met(self):
         cond = DayOfMonthCondition(after=13)
-        assert cond.is_met(_MON_09_30, DAILY) is True   # day=13
+        assert cond.is_met(_MON_09_30, DAILY) is True  # day=13
 
     def test_after_not_met(self):
         cond = DayOfMonthCondition(after=14)
@@ -121,10 +128,10 @@ class TestDayOfMonthCondition:
 
     def test_window(self):
         cond = DayOfMonthCondition(after=10, before=20)
-        assert cond.is_met(_MON_09_30, DAILY) is True    # day=13
-        assert cond.is_met(_SAT_23_59, DAILY) is True    # day=18
+        assert cond.is_met(_MON_09_30, DAILY) is True  # day=13
+        assert cond.is_met(_SAT_23_59, DAILY) is True  # day=18
         feb_1 = datetime(2025, 2, 1, tzinfo=timezone.utc)
-        assert cond.is_met(feb_1, DAILY) is False         # day=1
+        assert cond.is_met(feb_1, DAILY) is False  # day=1
 
     def test_cadence_agnostic(self):
         # DayOfMonthCondition doesn't use cadence — same result with MONTHLY
@@ -140,15 +147,16 @@ class TestDayOfMonthCondition:
 # DayOfWeekCondition
 # ---------------------------------------------------------------------------
 
+
 class TestDayOfWeekCondition:
     def test_weekday_included(self):
         cond = DayOfWeekCondition(on_days=[0, 1, 2, 3, 4])
-        assert cond.is_met(_MON_09_30, DAILY) is True    # Monday = 0
-        assert cond.is_met(_WED_06_00, DAILY) is True    # Wednesday = 2
+        assert cond.is_met(_MON_09_30, DAILY) is True  # Monday = 0
+        assert cond.is_met(_WED_06_00, DAILY) is True  # Wednesday = 2
 
     def test_weekend_excluded(self):
         cond = DayOfWeekCondition(on_days=[0, 1, 2, 3, 4])
-        assert cond.is_met(_SAT_23_59, DAILY) is False   # Saturday = 5
+        assert cond.is_met(_SAT_23_59, DAILY) is False  # Saturday = 5
 
     def test_specific_days(self):
         mon_wed_fri = DayOfWeekCondition(on_days=[0, 2, 4])
@@ -161,27 +169,34 @@ class TestDayOfWeekCondition:
 # AllOf (AND composite)
 # ---------------------------------------------------------------------------
 
+
 class TestAllOf:
     def test_all_met(self):
-        cond = AllOf(conditions=[
-            TimeOfDayCondition(after=time(9, 0)),
-            DayOfWeekCondition(on_days=[0, 1, 2, 3, 4]),
-        ])
+        cond = AllOf(
+            conditions=[
+                TimeOfDayCondition(after=time(9, 0)),
+                DayOfWeekCondition(on_days=[0, 1, 2, 3, 4]),
+            ]
+        )
         assert cond.is_met(_MON_09_30, DAILY) is True
 
     def test_one_not_met(self):
-        cond = AllOf(conditions=[
-            TimeOfDayCondition(after=time(9, 0)),
-            DayOfWeekCondition(on_days=[0, 1, 2, 3, 4]),
-        ])
-        assert cond.is_met(_SAT_23_59, DAILY) is False   # weekend
+        cond = AllOf(
+            conditions=[
+                TimeOfDayCondition(after=time(9, 0)),
+                DayOfWeekCondition(on_days=[0, 1, 2, 3, 4]),
+            ]
+        )
+        assert cond.is_met(_SAT_23_59, DAILY) is False  # weekend
 
     def test_none_met(self):
-        cond = AllOf(conditions=[
-            TimeOfDayCondition(after=time(10, 0)),
-            DayOfWeekCondition(on_days=[0, 1, 2, 3, 4]),
-        ])
-        assert cond.is_met(_MON_09_30, DAILY) is False   # before 10:00
+        cond = AllOf(
+            conditions=[
+                TimeOfDayCondition(after=time(10, 0)),
+                DayOfWeekCondition(on_days=[0, 1, 2, 3, 4]),
+            ]
+        )
+        assert cond.is_met(_MON_09_30, DAILY) is False  # before 10:00
 
     def test_empty_is_true(self):
         assert AllOf(conditions=[]).is_met(_MON_09_30, DAILY) is True
@@ -191,19 +206,24 @@ class TestAllOf:
 # AnyOf (OR composite)
 # ---------------------------------------------------------------------------
 
+
 class TestAnyOf:
     def test_one_met(self):
-        cond = AnyOf(conditions=[
-            TimeOfDayCondition(after=time(10, 0)),   # not met (09:30)
-            DayOfWeekCondition(on_days=[0, 1, 2, 3, 4]),  # met (Monday)
-        ])
+        cond = AnyOf(
+            conditions=[
+                TimeOfDayCondition(after=time(10, 0)),  # not met (09:30)
+                DayOfWeekCondition(on_days=[0, 1, 2, 3, 4]),  # met (Monday)
+            ]
+        )
         assert cond.is_met(_MON_09_30, DAILY) is True
 
     def test_none_met(self):
-        cond = AnyOf(conditions=[
-            TimeOfDayCondition(after=time(10, 0)),
-            DayOfWeekCondition(on_days=[5, 6]),  # weekend only
-        ])
+        cond = AnyOf(
+            conditions=[
+                TimeOfDayCondition(after=time(10, 0)),
+                DayOfWeekCondition(on_days=[5, 6]),  # weekend only
+            ]
+        )
         assert cond.is_met(_MON_09_30, DAILY) is False  # 09:30, Monday
 
     def test_empty_is_false(self):
@@ -214,12 +234,15 @@ class TestAnyOf:
 # Nested composites
 # ---------------------------------------------------------------------------
 
+
 class TestNested:
     def test_allof_inside_anyof(self):
-        weekday_morning = AllOf(conditions=[
-            TimeOfDayCondition(after=time(6, 0)),
-            DayOfWeekCondition(on_days=[0, 1, 2, 3, 4]),
-        ])
+        weekday_morning = AllOf(
+            conditions=[
+                TimeOfDayCondition(after=time(6, 0)),
+                DayOfWeekCondition(on_days=[0, 1, 2, 3, 4]),
+            ]
+        )
         weekend_any = DayOfWeekCondition(on_days=[5, 6])
         cond = AnyOf(conditions=[weekday_morning, weekend_any])
 

@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 
 
 class FilesystemReporter:
-
     def __init__(self, drop_dir: str | Path) -> None:
         self.drop_dir = Path(drop_dir)
         self.drop_dir.mkdir(parents=True, exist_ok=True)
@@ -53,5 +52,6 @@ class FilesystemReporter:
         except Exception:
             logger.exception(
                 "FilesystemReporter failed to write event for %s/%s",
-                job_name, run_id,
+                job_name,
+                run_id,
             )

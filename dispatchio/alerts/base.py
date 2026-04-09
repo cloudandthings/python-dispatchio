@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -24,13 +24,14 @@ logger = logging.getLogger(__name__)
 
 class AlertEvent(BaseModel):
     """Emitted by the orchestrator when an alert condition is triggered."""
-    alert_on:   AlertOn
-    job_name:   str
-    run_id:     str
-    channels:   list[str]
-    detail:     str | None     = None
+
+    alert_on: AlertOn
+    job_name: str
+    run_id: str
+    channels: list[str]
+    detail: str | None = None
     occurred_at: datetime
-    record:     RunRecord | None = None  # full run record for context
+    record: RunRecord | None = None  # full run record for context
 
 
 @runtime_checkable

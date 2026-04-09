@@ -6,7 +6,6 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-import pytest
 
 from dispatchio.models import RunRecord, Status
 from dispatchio.state.filesystem import FilesystemStateStore
@@ -20,6 +19,7 @@ def _make_record(job_name="job", run_id="20250115", status=Status.DONE, **kw):
 # ---------------------------------------------------------------------------
 # Shared behaviour — run the same tests against both stores
 # ---------------------------------------------------------------------------
+
 
 class SharedStateStoreBehaviour:
     """Mix-in. Subclasses provide self.store."""

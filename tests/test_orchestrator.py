@@ -8,13 +8,11 @@ freezegun is not required — reference_time is always passed explicitly.
 from __future__ import annotations
 
 from datetime import datetime, time, timedelta, timezone
-from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
-from dispatchio.alerts.base import AlertEvent, AlertHandler
-from dispatchio.cadence import DAILY, MONTHLY, WEEKLY, YESTERDAY, DateCadence, Frequency
+from dispatchio.alerts.base import AlertEvent
+from dispatchio.cadence import DAILY, MONTHLY, YESTERDAY, DateCadence, Frequency
 from dispatchio.conditions import DayOfWeekCondition, TimeOfDayCondition
 from dispatchio.models import (
     AlertCondition,
@@ -152,7 +150,7 @@ class TestConditionGate:
     def test_job_runs_after_time(self):
         j = _job("timed", condition=TimeOfDayCondition(after=time(8, 0)))
         orch, store, executor = _make_orch([j])
-        result = orch.tick(REF)  # 09:00 >= 08:00
+        orch.tick(REF)  # 09:00 >= 08:00
         assert len(executor.calls) == 1
 
     def test_day_of_week_condition_blocks_on_wrong_day(self):
@@ -181,7 +179,9 @@ class TestDependencies:
         downstream = _job("down", depends_on=[Dependency(job_name="up", cadence=DAILY)])
         orch, store, executor = _make_orch([upstream, downstream])
         store.put(RunRecord(job_name="up", run_id="20250115", status=Status.SUBMITTED))
-        orch2, store2, executor2 = _make_orch([downstream], store=store)
+        orch2, store2, executor2 = _make_orch(
+            [downstream], store=store, strict_dependencies=False
+        )
         result = orch2.tick(REF)
         assert not any(
             r.job_name == "down" and r.action == JobAction.SUBMITTED
@@ -190,7 +190,7 @@ class TestDependencies:
 
     def test_unblocked_when_dependency_done(self):
         downstream = _job("down", depends_on=[Dependency(job_name="up", cadence=DAILY)])
-        orch, store, executor = _make_orch([downstream])
+        orch, store, executor = _make_orch([downstream], strict_dependencies=False)
         store.put(RunRecord(job_name="up", run_id="20250115", status=Status.DONE))
         result = orch.tick(REF)
         assert any(
@@ -204,7 +204,7 @@ class TestDependencies:
         downstream = _job(
             "down", depends_on=[Dependency(job_name="up", cadence=three_days_ago)]
         )
-        orch, store, executor = _make_orch([downstream])
+        orch, store, executor = _make_orch([downstream], strict_dependencies=False)
         # offset=-3 from Jan 15 = Jan 12
         store.put(RunRecord(job_name="up", run_id="20250112", status=Status.DONE))
         result = orch.tick(REF)
@@ -214,7 +214,7 @@ class TestDependencies:
         downstream = _job(
             "down", depends_on=[Dependency(job_name="up", cadence=YESTERDAY)]
         )
-        orch, store, executor = _make_orch([downstream])
+        orch, store, executor = _make_orch([downstream], strict_dependencies=False)
         store.put(RunRecord(job_name="up", run_id="20250114", status=Status.DONE))
         result = orch.tick(REF)
         assert result.submitted()[0].job_name == "down"
@@ -225,7 +225,7 @@ class TestDependencies:
             cadence=MONTHLY,
             depends_on=[Dependency(job_name="monthly_load", cadence=MONTHLY)],
         )
-        orch, store, executor = _make_orch([downstream])
+        orch, store, executor = _make_orch([downstream], strict_dependencies=False)
         store.put(
             RunRecord(job_name="monthly_load", run_id="202501", status=Status.DONE)
         )
@@ -238,7 +238,7 @@ class TestDependencies:
             cadence=DAILY,
             depends_on=[Dependency(job_name="monthly_report", cadence=MONTHLY)],
         )
-        orch, store, executor = _make_orch([daily])
+        orch, store, executor = _make_orch([daily], strict_dependencies=False)
         store.put(
             RunRecord(job_name="monthly_report", run_id="202501", status=Status.DONE)
         )
@@ -253,7 +253,7 @@ class TestDependencies:
                 Dependency(job_name="b", cadence=DAILY),
             ],
         )
-        orch, store, executor = _make_orch([j])
+        orch, store, executor = _make_orch([j], strict_dependencies=False)
         store.put(RunRecord(job_name="a", run_id="20250115", status=Status.DONE))
         result = orch.tick(REF)
         assert len(result.submitted()) == 0
@@ -670,7 +670,7 @@ class TestUnresolvedDependencyWarning:
             depends_on=[Dependency(job_name="external_job", cadence=DAILY)],
         )
         with caplog.at_level(logging.WARNING, logger="dispatchio.orchestrator"):
-            _make_orch([j])
+            _make_orch([j], strict_dependencies=False)
         assert any("external_job" in msg for msg in caplog.messages)
 
     def test_no_warning_when_dependency_is_known(self, caplog):
@@ -691,6 +691,109 @@ class TestUnresolvedDependencyWarning:
         with caplog.at_level(logging.WARNING, logger="dispatchio.orchestrator"):
             _make_orch([_job("standalone")])
         assert caplog.messages == []
+
+
+# ---------------------------------------------------------------------------
+# Mutable job graph
+# ---------------------------------------------------------------------------
+
+
+class TestMutableJobGraph:
+    def test_duplicate_job_names_raise_in_constructor(self):
+        with pytest.raises(ValueError, match="Duplicate job names"):
+            _make_orch([_job("dup"), _job("dup")])
+
+    def test_add_jobs_rejects_duplicate_name(self):
+        orch, _, _ = _make_orch([_job("a")])
+        with pytest.raises(ValueError, match="Duplicate job names"):
+            orch.add_job(_job("a"))
+
+    def test_add_jobs_applies_on_next_tick(self):
+        orch, store, executor = _make_orch([_job("a")])
+        orch.add_job(_job("b"))
+
+        result = orch.tick(REF)
+        submitted_names = {r.job_name for r in result.submitted()}
+        assert submitted_names == {"a", "b"}
+        assert len(executor.calls) == 2
+        assert store.get("b", "20250115") is not None
+
+    def test_remove_job_stops_future_evaluation(self):
+        orch, _, executor = _make_orch([_job("a"), _job("b")])
+        orch.remove_job("b")
+
+        result = orch.tick(REF)
+        submitted_names = {r.job_name for r in result.submitted()}
+        assert submitted_names == {"a"}
+        assert len(executor.calls) == 1
+
+    def test_remove_unknown_job_raises_key_error(self):
+        orch, _, _ = _make_orch([_job("a")])
+        with pytest.raises(KeyError, match="Unknown job"):
+            orch.remove_job("missing")
+
+    def test_mutation_after_tick_disabled_by_default(self):
+        orch, _, _ = _make_orch([_job("a")])
+        orch.tick(REF)
+        with pytest.raises(RuntimeError, match="allow_runtime_mutation=True"):
+            orch.add_job(_job("b"))
+
+    def test_mutation_after_tick_allowed_when_enabled(self):
+        orch, _, executor = _make_orch(
+            [_job("a")],
+            allow_runtime_mutation=True,
+        )
+        orch.tick(REF)
+        orch.add_job(_job("b"))
+
+        later = REF + timedelta(days=1)
+        result = orch.tick(later)
+        assert any(
+            r.job_name == "b" and r.action == JobAction.SUBMITTED
+            for r in result.results
+        )
+        assert any(call["job"] == "b" for call in executor.calls)
+
+    def test_unresolved_dependency_validation_runs_after_graph_change(self, caplog):
+        import logging
+
+        orch, _, _ = _make_orch(
+            [_job("a")],
+            allow_runtime_mutation=True,
+            strict_dependencies=False,
+        )
+        orch.add_job(
+            _job(
+                "consumer", depends_on=[Dependency(job_name="external", cadence=DAILY)]
+            )
+        )
+
+        with caplog.at_level(logging.WARNING, logger="dispatchio.orchestrator"):
+            orch.tick(REF)
+        assert any("external" in msg for msg in caplog.messages)
+
+    def test_strict_dependencies_raise_in_constructor_by_default(self):
+        with pytest.raises(ValueError, match="Unresolved dependencies"):
+            _make_orch(
+                [
+                    _job(
+                        "consumer",
+                        depends_on=[Dependency(job_name="external", cadence=DAILY)],
+                    )
+                ]
+            )
+
+    def test_strict_dependencies_raise_after_graph_change(self):
+        orch, _, _ = _make_orch(
+            [_job("a")], allow_runtime_mutation=True, strict_dependencies=True
+        )
+        orch.add_job(
+            _job(
+                "consumer", depends_on=[Dependency(job_name="external", cadence=DAILY)]
+            )
+        )
+        with pytest.raises(ValueError, match="Unresolved dependencies"):
+            orch.tick(REF)
 
 
 # ---------------------------------------------------------------------------
@@ -738,7 +841,7 @@ class TestDependencyModes:
             ],
             dependency_mode=DependencyMode.ALL_FINISHED,
         )
-        orch, store, executor = _make_orch([collector])
+        orch, store, executor = _make_orch([collector], strict_dependencies=False)
 
         # one DONE, one ERROR — both finished
         store.put(RunRecord(job_name="entity_a", run_id="20250115", status=Status.DONE))
@@ -763,7 +866,7 @@ class TestDependencyModes:
             ],
             dependency_mode=DependencyMode.ALL_FINISHED,
         )
-        orch, store, executor = _make_orch([collector])
+        orch, store, executor = _make_orch([collector], strict_dependencies=False)
 
         # entity_a done but entity_b still running
         store.put(RunRecord(job_name="entity_a", run_id="20250115", status=Status.DONE))
@@ -791,7 +894,7 @@ class TestDependencyModes:
             dependency_mode=DependencyMode.THRESHOLD,
             dependency_threshold=2,
         )
-        orch, store, executor = _make_orch([collector])
+        orch, store, executor = _make_orch([collector], strict_dependencies=False)
 
         # 2 of 3 done — threshold=2 met
         store.put(RunRecord(job_name="a", run_id="20250115", status=Status.DONE))
@@ -817,7 +920,7 @@ class TestDependencyModes:
             dependency_mode=DependencyMode.THRESHOLD,
             dependency_threshold=2,
         )
-        orch, store, executor = _make_orch([collector])
+        orch, store, executor = _make_orch([collector], strict_dependencies=False)
 
         # 1 done, 1 running (still reachable), 1 not started
         store.put(RunRecord(job_name="a", run_id="20250115", status=Status.DONE))
@@ -844,7 +947,7 @@ class TestDependencyModes:
             dependency_mode=DependencyMode.THRESHOLD,
             dependency_threshold=2,
         )
-        orch, store, executor = _make_orch([collector])
+        orch, store, executor = _make_orch([collector], strict_dependencies=False)
 
         # 1 done, 2 error — met=1, not_yet_finished=0 → 1+0 < 2, unreachable
         store.put(RunRecord(job_name="a", run_id="20250115", status=Status.DONE))

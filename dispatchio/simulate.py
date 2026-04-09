@@ -29,11 +29,11 @@ log = logging.getLogger(__name__)
 
 
 def simulate(
-    orchestrator: "Orchestrator",
+    orchestrator: Orchestrator,
     *,
     tick_interval: float = 2.0,
     max_ticks: int = 20,
-    stop_when: "Callable[[StateStore, list[Job], str], bool] | None" = None,
+    stop_when: Callable[[StateStore, list[Job], str], bool] | None = None,
     reference_time: datetime | None = None,
 ) -> None:
     """
@@ -93,6 +93,6 @@ def simulate(
     log.warning("Reached max_ticks=%d without the stop condition being met.", max_ticks)
 
 
-def _all_finished(store: "StateStore", jobs: "list[Job]", run_id: str) -> bool:
+def _all_finished(store: StateStore, jobs: list[Job], run_id: str) -> bool:
     """Default stop condition: every job has a finished record for run_id."""
     return all((rec := store.get(j.name, run_id)) and rec.is_finished() for j in jobs)

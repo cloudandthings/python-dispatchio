@@ -44,7 +44,7 @@ class MemoryStateStore:
     def list_records(
         self,
         job_name: str | None = None,
-        status:   Status | None = None,
+        status: Status | None = None,
     ) -> list[RunRecord]:
         records = self._records.values()
         if job_name is not None:

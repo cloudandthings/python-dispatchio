@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from datetime import datetime, time
 from enum import Enum
-from typing import TYPE_CHECKING, Annotated, Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from dispatchio.cadence import Cadence, DateCadence, Frequency
+from dispatchio.cadence import Cadence
 from dispatchio.conditions import AnyCondition
 
 
@@ -113,9 +113,7 @@ class Dependency(BaseModel):
     required_status: Status = Status.DONE
 
     @classmethod
-    def from_job(
-        cls, job: "Job", required_status: Status = Status.DONE
-    ) -> "Dependency":
+    def from_job(cls, job: Job, required_status: Status = Status.DONE) -> Dependency:
         """
         Create a Dependency from a Job, inheriting its cadence.
 
@@ -233,7 +231,7 @@ class PythonJob(BaseModel):
     pythonpath: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _check_entry(self) -> "PythonJob":
+    def _check_entry(self) -> PythonJob:
         has_entry = self.entry_point is not None
         has_script = self.script is not None and self.function is not None
         if not has_entry and not has_script:
@@ -257,7 +255,7 @@ ExecutorConfig = Annotated[
 # ---------------------------------------------------------------------------
 
 
-def _normalise_dep(item: "Job | Dependency") -> Dependency:
+def _normalise_dep(item: Job | Dependency) -> Dependency:
     """Convert anything dep-like to a Dependency."""
     if isinstance(item, Dependency):
         return item
@@ -287,7 +285,7 @@ class Job(BaseModel):
     alerts: list[AlertCondition] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _check_dependency_threshold(self) -> "Job":
+    def _check_dependency_threshold(self) -> Job:
         if self.dependency_mode == DependencyMode.THRESHOLD:
             if self.dependency_threshold is None or self.dependency_threshold <= 0:
                 raise ValueError(
@@ -320,9 +318,9 @@ class Job(BaseModel):
         cls,
         name: str,
         executor: ExecutorConfig,
-        depends_on: "list[Job | Dependency] | Dependency | Job | None" = None,
+        depends_on: list[Job | Dependency] | Dependency | Job | None = None,
         **kwargs,
-    ) -> "Job":
+    ) -> Job:
         """
         Alternate constructor to allow positional name or executor.
 

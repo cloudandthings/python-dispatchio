@@ -3,13 +3,22 @@
 from datetime import datetime, timezone
 import pytest
 from dispatchio.cadence import (
-    DAILY, HOURLY, MONTHLY, WEEKLY, YESTERDAY, LAST_MONTH, LAST_WEEK,
-    DateCadence, FixedCadence, Frequency, IncrementalCadence,
+    DAILY,
+    HOURLY,
+    MONTHLY,
+    WEEKLY,
+    YESTERDAY,
+    LAST_MONTH,
+    LAST_WEEK,
+    DateCadence,
+    FixedCadence,
+    Frequency,
+    IncrementalCadence,
 )
 from dispatchio.run_id import describe_cadence, resolve_run_id
 
 
-REF = datetime(2025, 1, 15, 9, 30, tzinfo=timezone.utc)   # Wednesday
+REF = datetime(2025, 1, 15, 9, 30, tzinfo=timezone.utc)  # Wednesday
 
 
 class TestDailyResolution:

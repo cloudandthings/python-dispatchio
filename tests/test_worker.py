@@ -7,7 +7,6 @@ logic with explicit run_id and a spy reporter, keeping tests fast and clean.
 
 from __future__ import annotations
 
-import threading
 import time
 from typing import Any
 
@@ -15,25 +14,27 @@ import pytest
 
 from dispatchio.models import Status
 from dispatchio.worker.harness import run_job, _HeartbeatThread
-from dispatchio.worker.reporter.base import Reporter
 
 
 # ---------------------------------------------------------------------------
 # Spy reporter
 # ---------------------------------------------------------------------------
 
+
 class SpyReporter:
     def __init__(self):
         self.calls: list[dict[str, Any]] = []
 
     def report(self, job_name, run_id, status, *, error_reason=None, metadata=None):
-        self.calls.append({
-            "job_name":     job_name,
-            "run_id":       run_id,
-            "status":       status,
-            "error_reason": error_reason,
-            "metadata":     metadata or {},
-        })
+        self.calls.append(
+            {
+                "job_name": job_name,
+                "run_id": run_id,
+                "status": status,
+                "error_reason": error_reason,
+                "metadata": metadata or {},
+            }
+        )
 
     def statuses(self) -> list[Status]:
         return [c["status"] for c in self.calls]
@@ -42,6 +43,7 @@ class SpyReporter:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _noop(run_id: str) -> None:
     pass
@@ -63,6 +65,7 @@ def _run(fn, reporter=None, run_id="20250115", **kwargs):
 # Success path
 # ---------------------------------------------------------------------------
 
+
 class TestSuccessPath:
     def test_posts_done_on_success(self):
         spy = SpyReporter()
@@ -74,8 +77,8 @@ class TestSuccessPath:
         _run(_noop, reporter=spy, run_id="20250115")
         call = spy.calls[0]
         assert call["job_name"] == "test_job"
-        assert call["run_id"]   == "20250115"
-        assert call["status"]   == Status.DONE
+        assert call["run_id"] == "20250115"
+        assert call["status"] == Status.DONE
         assert call["error_reason"] is None
 
     def test_metadata_fn_attached_to_done_event(self):
@@ -85,6 +88,7 @@ class TestSuccessPath:
 
     def test_fn_receives_run_id(self):
         received = []
+
         def capture(run_id):
             received.append(run_id)
 
@@ -96,6 +100,7 @@ class TestSuccessPath:
 # ---------------------------------------------------------------------------
 # Failure path
 # ---------------------------------------------------------------------------
+
 
 class TestFailurePath:
     def test_posts_error_on_exception(self):
@@ -129,15 +134,18 @@ class TestFailurePath:
 # No reporter
 # ---------------------------------------------------------------------------
 
+
 class TestNoReporter:
     def test_runs_successfully_without_reporter(self):
         """Job should run even if no reporter is configured."""
         called = []
+
         def fn(run_id):
             called.append(run_id)
 
         # No reporter, no argv flags — should just run and log a warning
         import sys
+
         orig_argv = sys.argv
         sys.argv = ["test"]  # ensure no --drop-dir
         try:
@@ -149,6 +157,7 @@ class TestNoReporter:
 
     def test_failure_still_exits_without_reporter(self):
         import sys
+
         orig_argv = sys.argv
         sys.argv = ["test"]
         try:
@@ -161,6 +170,7 @@ class TestNoReporter:
 # ---------------------------------------------------------------------------
 # Heartbeat thread
 # ---------------------------------------------------------------------------
+
 
 class TestHeartbeatThread:
     def test_posts_running_events_at_interval(self):
@@ -215,9 +225,11 @@ class TestHeartbeatThread:
 # FilesystemReporter
 # ---------------------------------------------------------------------------
 
+
 class TestFilesystemReporter:
     def test_writes_json_file_on_done(self, tmp_path):
         from dispatchio.worker.reporter.filesystem import FilesystemReporter
+
         reporter = FilesystemReporter(tmp_path)
         reporter.report("myjob", "20250115", Status.DONE)
         files = list(tmp_path.glob("*.json"))
@@ -227,20 +239,28 @@ class TestFilesystemReporter:
     def test_written_file_is_valid_completion_event(self, tmp_path):
         from dispatchio.worker.reporter.filesystem import FilesystemReporter
         from dispatchio.receiver.base import CompletionEvent
+
         reporter = FilesystemReporter(tmp_path)
         reporter.report("myjob", "20250115", Status.ERROR, error_reason="oops")
         path = list(tmp_path.glob("*.json"))[0]
         event = CompletionEvent.model_validate_json(path.read_text())
         assert event.job_name == "myjob"
-        assert event.run_id   == "20250115"
-        assert event.status   == Status.ERROR
+        assert event.run_id == "20250115"
+        assert event.status == Status.ERROR
         assert event.error_reason == "oops"
 
     def test_does_not_raise_on_bad_path(self):
         """Reporter must never raise — it logs and swallows errors."""
         from dispatchio.worker.reporter.filesystem import FilesystemReporter
+
         reporter = FilesystemReporter.__new__(FilesystemReporter)
-        reporter.drop_dir = type("P", (), {"mkdir": lambda *a, **kw: None,
-                                            "__truediv__": lambda s, o: reporter.drop_dir})()
+        reporter.drop_dir = type(
+            "P",
+            (),
+            {
+                "mkdir": lambda *a, **kw: None,
+                "__truediv__": lambda s, o: reporter.drop_dir,
+            },
+        )()
         # Just verify the protocol: report() must not propagate exceptions
         # (this is hard to force without monkeypatching; the above tests cover the happy path)

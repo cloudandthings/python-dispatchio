@@ -101,7 +101,9 @@ def local_orchestrator(
         state=FilesystemStateStore(base / "state"),
         executors={
             "subprocess": SubprocessExecutor(),
-            "python":     PythonJobExecutor(reporter_env={"DISPATCHIO_DROP_DIR": str(completions)}),
+            "python": PythonJobExecutor(
+                reporter_env={"DISPATCHIO_DROP_DIR": str(completions)}
+            ),
         },
         receiver=FilesystemReceiver(completions),
         **orchestrator_kwargs,
