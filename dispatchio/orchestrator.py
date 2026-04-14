@@ -25,6 +25,7 @@ a local cron job, or a simple while loop).
 from __future__ import annotations
 
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -48,6 +49,7 @@ from dispatchio.models import (
 from dispatchio.receiver.base import CompletionEvent, CompletionReceiver
 from dispatchio.run_id import resolve_run_id
 from dispatchio.state.base import StateStore
+from dispatchio.tick_log import TickLogRecord, TickLogStore
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +99,11 @@ class Orchestrator:
         default_cadence: Cadence = DAILY,
         strict_dependencies: bool = True,
         allow_runtime_mutation: bool = False,
+        name: str = "default",
+        tick_log: TickLogStore | None = None,
     ) -> None:
+        self.name = name
+        self.tick_log = tick_log
         self.jobs = jobs
         self.state = state
         self.executors = executors
@@ -221,6 +227,7 @@ class Orchestrator:
 
         self._refresh_job_graph_if_dirty()
 
+        tick_start = time.monotonic()
         result = TickResult(reference_time=reference_time)
 
         # Phase 1 — apply inbound completion events
@@ -260,6 +267,28 @@ class Orchestrator:
             # _PendingSubmission still in outcomes → was beyond the cap; deferred
 
         self._has_ticked = True
+
+        if self.tick_log is not None:
+            try:
+                self.tick_log.append(
+                    TickLogRecord(
+                        ticked_at=datetime.now(tz=timezone.utc).isoformat(),
+                        reference_time=reference_time.isoformat(),
+                        duration_seconds=round(time.monotonic() - tick_start, 3),
+                        actions=[
+                            {
+                                "job_name": r.job_name,
+                                "run_id": r.run_id,
+                                "action": r.action.value,
+                                "detail": r.detail,
+                            }
+                            for r in result.results
+                        ],
+                    )
+                )
+            except Exception as exc:
+                logger.warning("Failed to write tick log entry: %s", exc)
+
         return result
 
     # ------------------------------------------------------------------

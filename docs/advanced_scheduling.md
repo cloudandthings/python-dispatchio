@@ -35,7 +35,8 @@ This has been implemented.
 
 ### Problem
 
-Dispatchio's job list was previously fixed at `Orchestrator` construction time. We have recently added some related behaviour which allows jobs to be added to an orchestrator, although it is not clear if this is done "per tick".
+Dispatchio's job list was previously fixed at `Orchestrator` construction time. 
+We have recently added some related behaviour which allows jobs to be added to an orchestrator, although it is not clear if this is done "per tick".
 
 Generating jobs dynamically from metadata (e.g. "process all changed
 entities for today") could require a way to re-derive the job list on each tick. Unless there is another pattern / approach that should be used that perhaps works within the existing related behaviour.

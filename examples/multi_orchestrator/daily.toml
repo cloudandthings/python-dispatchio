@@ -1,0 +1,17 @@
+# Dispatchio configuration — daily-etl orchestrator
+#
+# Each orchestrator has a unique name. This name appears in tick log entries
+# and is used to identify the orchestrator in the context registry.
+
+[dispatchio]
+name = "daily-etl"
+log_level = "INFO"
+default_cadence = "daily"
+
+[dispatchio.state]
+backend = "filesystem"
+root    = ".dispatchio/daily-etl/state"
+
+[dispatchio.receiver]
+backend  = "filesystem"
+drop_dir = ".dispatchio/daily-etl/completions"
