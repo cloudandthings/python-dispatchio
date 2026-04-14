@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python examples/multi_orchestrator/run.py)",
+      "Bash(python -m dispatchio ticks)",
+      "Bash(python -m dispatchio ticks --context weekly-reports --detail)",
+      "Bash(python -m dispatchio status)",
+      "Bash(python -m dispatchio context remove daily-etl)",
+      "Bash(python -m dispatchio context remove weekly-reports)",
+      "Bash(python -m dispatchio context list)"
+    ]
+  }
+}

@@ -13,4 +13,5 @@ __all__ = [
     "SubmissionSettings",
     "load_config",
     "orchestrator_from_config",
+    # name field is on DispatchioSettings — no separate export needed
 ]

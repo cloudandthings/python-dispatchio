@@ -131,6 +131,7 @@ class DispatchioSettings(BaseSettings):
         extra="ignore",
     )
 
+    name: str = "default"
     log_level: str = "INFO"
     state: StateSettings = Field(default_factory=StateSettings)
     receiver: ReceiverSettings = Field(default_factory=ReceiverSettings)

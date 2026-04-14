@@ -1,0 +1,17 @@
+# Dispatchio configuration — weekly-reports orchestrator
+#
+# This is a separate orchestrator from daily-etl. It has its own state
+# directory, its own tick log, and its own context entry.
+
+[dispatchio]
+name = "weekly-reports"
+log_level = "INFO"
+default_cadence = "weekly"
+
+[dispatchio.state]
+backend = "filesystem"
+root    = ".dispatchio/weekly-reports/state"
+
+[dispatchio.receiver]
+backend  = "filesystem"
+drop_dir = ".dispatchio/weekly-reports/completions"

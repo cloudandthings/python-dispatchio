@@ -24,6 +24,7 @@ from dispatchio.models import Job
 from dispatchio.orchestrator import Orchestrator
 from dispatchio.receiver import FilesystemReceiver
 from dispatchio.state import FilesystemStateStore, MemoryStateStore
+from dispatchio.tick_log import FilesystemTickLogStore
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +236,8 @@ def orchestrator_from_config(
         max_submissions_per_tick=settings.submission.max_per_tick,
         submit_timeout=settings.submission.timeout,
         default_cadence=settings.default_cadence,
+        name=settings.name,
+        tick_log=_build_tick_log(settings.state),
         **orchestrator_kwargs,
     )
 
@@ -250,6 +253,13 @@ def _configure_logging(level: str) -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         force=False,  # don't override if caller already configured logging
     )
+
+
+def _build_tick_log(cfg: StateSettings) -> FilesystemTickLogStore | None:
+    """Derive tick log path from state root. None for non-filesystem backends."""
+    if cfg.backend != "filesystem":
+        return None
+    return FilesystemTickLogStore(Path(cfg.root).parent / "tick_log.jsonl")
 
 
 def _build_state(cfg: StateSettings):

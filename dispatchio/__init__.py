@@ -72,11 +72,14 @@ from dispatchio.executor import SubprocessExecutor, PythonJobExecutor
 from dispatchio.receiver import FilesystemReceiver
 from dispatchio.config import DispatchioSettings, load_config, orchestrator_from_config
 from dispatchio.simulate import simulate
+from dispatchio.tick_log import FilesystemTickLogStore, TickLogRecord, TickLogStore
+from dispatchio.contexts import ContextEntry, ContextStore
 
 
 def local_orchestrator(
     jobs: list[Job],
     base_dir: str | Path = Path(".dispatchio"),
+    name: str = "default",
     **orchestrator_kwargs,
 ) -> Orchestrator:
     """
@@ -86,18 +89,23 @@ def local_orchestrator(
     Directory layout under base_dir:
         state/          RunRecord JSON files
         completions/    Completion event drop directory
+        tick_log.jsonl  Append-only tick audit log
 
     Args:
         jobs:               List of Jobs to evaluate each tick.
         base_dir:           Root directory for state and completions.
                             Created if it doesn't exist. Defaults to .dispatchio/
+        name:               Orchestrator name, used in tick log and context registry.
         **orchestrator_kwargs:
                             Forwarded to Orchestrator (e.g. alert_handler=...).
     """
+    from dispatchio.tick_log import FilesystemTickLogStore
+
     base = Path(base_dir)
     completions = base / "completions"
     return Orchestrator(
         jobs=jobs,
+        name=name,
         state=FilesystemStateStore(base / "state"),
         executors={
             "subprocess": SubprocessExecutor(),
@@ -106,6 +114,7 @@ def local_orchestrator(
             ),
         },
         receiver=FilesystemReceiver(completions),
+        tick_log=FilesystemTickLogStore(base / "tick_log.jsonl"),
         **orchestrator_kwargs,
     )
 
@@ -164,4 +173,11 @@ __all__ = [
     "resolve_run_id",
     # Development / demos
     "simulate",
+    # Tick log
+    "FilesystemTickLogStore",
+    "TickLogRecord",
+    "TickLogStore",
+    # Contexts
+    "ContextEntry",
+    "ContextStore",
 ]

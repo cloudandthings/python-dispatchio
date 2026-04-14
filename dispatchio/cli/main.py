@@ -5,15 +5,20 @@ Connects to a remote (or local) Dispatchio instance by importing the
 orchestrator from a user-specified Python module path.
 
 Configuration (in priority order):
-  1. CLI flags  --orchestrator / --state-dir
+  1. CLI flags  --orchestrator / --state-dir / --context
   2. Environment variables  DISPATCHIO_ORCHESTRATOR  DISPATCHIO_STATE_DIR
   3. dispatchio.toml  [dispatchio] orchestrator = "mymodule:orchestrator"
 
 Usage:
   dispatchio tick [--reference-time "2025-01-15T02:00"]
   dispatchio status [--job JOB] [--run-id RUN_ID] [--status STATUS]
+  dispatchio ticks [--limit N] [--since ISO] [--until ISO] [--detail]
   dispatchio record set JOB RUN_ID STATUS [--reason TEXT]
   dispatchio heartbeat JOB RUN_ID
+  dispatchio context add NAME CONFIG_PATH [--description TEXT]
+  dispatchio context list
+  dispatchio context use NAME
+  dispatchio context remove NAME
 """
 
 from __future__ import annotations
@@ -83,6 +88,59 @@ def _load_state(state_dir: str) -> FilesystemStateStore:
     return FilesystemStateStore(state_dir)
 
 
+def _resolve_state_from_context(context_name: str | None) -> str | None:
+    """Resolve state dir from a named (or current) context."""
+    from dispatchio.contexts import ContextStore
+    from dispatchio.config.loader import load_config
+
+    entry = ContextStore().resolve(context_name)
+    if entry is None:
+        return None
+    try:
+        settings = load_config(entry.config_path)
+        if settings.state.backend == "filesystem":
+            return settings.state.root
+    except Exception:
+        pass
+    return None
+
+
+def _resolve_tick_log_store(
+    state_dir: str | None, context_name: str | None
+):
+    """
+    Resolve the tick log store from (in priority order):
+      1. An explicit state dir (derives path as <state_dir>/../tick_log.jsonl)
+      2. A named context (loads its config to find state root)
+      3. Auto-discovery via local dispatchio.toml
+    Returns None if no tick log can be located.
+    """
+    from dispatchio.tick_log import FilesystemTickLogStore
+
+    if state_dir:
+        path = Path(state_dir).parent / "tick_log.jsonl"
+        return FilesystemTickLogStore(path)
+
+    # Try named context; ContextStore.resolve() falls back to the active context
+    # when context_name is None, so this also handles the no-flag case.
+    sd = _resolve_state_from_context(context_name)
+    if sd:
+        path = Path(sd).parent / "tick_log.jsonl"
+        return FilesystemTickLogStore(path)
+
+    # Last resort: auto-discover via local dispatchio.toml
+    try:
+        from dispatchio.config.loader import load_config
+        settings = load_config()
+        if settings and settings.state.backend == "filesystem":
+            path = Path(settings.state.root).parent / "tick_log.jsonl"
+            return FilesystemTickLogStore(path)
+    except Exception:
+        pass
+
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Shared options
 # ---------------------------------------------------------------------------
@@ -104,6 +162,17 @@ def _state_option(f):
         default=None,
         help="Path to state directory (FilesystemStateStore root). "
         "Env: DISPATCHIO_STATE_DIR",
+    )(f)
+
+
+def _context_option(f):
+    return click.option(
+        "--context",
+        "-c",
+        "context_name",
+        default=None,
+        help="Named context from ~/.dispatchio/contexts.json. "
+        "Run 'dispatchio context list' to see available contexts.",
     )(f)
 
 
@@ -248,6 +317,7 @@ def run_command(
 
 @cli.command()
 @_state_option
+@_context_option
 @click.option("--job", "-j", default=None, help="Filter by job name.")
 @click.option("--run-id", "-r", default=None, help="Filter by run_id.")
 @click.option(
@@ -259,15 +329,16 @@ def run_command(
 )
 def status(
     state_dir: str | None,
+    context_name: str | None,
     job: str | None,
     run_id: str | None,
     filter_status: str | None,
 ):
     """Show the status of job runs."""
-    sd = _resolve_state_dir(state_dir)
+    sd = _resolve_state_dir(state_dir) or _resolve_state_from_context(context_name)
     if not sd:
         raise click.ClickException(
-            "Specify a state directory with --state-dir or DISPATCHIO_STATE_DIR"
+            "Specify a state directory with --state-dir, --context, or DISPATCHIO_STATE_DIR"
         )
     store = _load_state(sd)
     status_filter = Status(filter_status) if filter_status else None
@@ -284,6 +355,73 @@ def status(
 
 
 # ---------------------------------------------------------------------------
+# ticks
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@_state_option
+@_context_option
+@click.option("--limit", "-n", default=20, show_default=True, help="Max ticks to show.")
+@click.option("--since", default=None, help="Show ticks at or after this ISO timestamp.")
+@click.option("--until", default=None, help="Show ticks at or before this ISO timestamp.")
+@click.option("--detail", is_flag=True, default=False, help="Show individual job actions.")
+def ticks(
+    state_dir: str | None,
+    context_name: str | None,
+    limit: int,
+    since: str | None,
+    until: str | None,
+    detail: bool,
+):
+    """Show tick history for this orchestrator.
+
+    By default reads the tick log from the local dispatchio.toml.
+    Use --context to inspect a different orchestrator.
+
+    \b
+    Examples:
+      dispatchio ticks
+      dispatchio ticks --detail
+      dispatchio ticks --context weekly-reports --limit 5
+      dispatchio ticks --since 2026-04-14T00:00:00
+    """
+    store = _resolve_tick_log_store(state_dir, context_name)
+    if store is None:
+        raise click.ClickException(
+            "Cannot locate tick log. Specify --state-dir, --context, "
+            "or run from a directory with dispatchio.toml."
+        )
+
+    records = store.list(limit=limit, since=since, until=until)
+
+    if not records:
+        click.echo("No tick records found.")
+        return
+
+    for rec in records:
+        submitted = sum(1 for a in rec.actions if a["action"] == "submitted")
+        total = len(rec.actions)
+        summary = f"{total} action(s)"
+        if submitted:
+            summary += f"  ({submitted} submitted)"
+
+        click.echo(
+            f"  {rec.ticked_at}  ref={rec.reference_time[:10]}  "
+            f"{rec.duration_seconds:.2f}s  {summary}"
+        )
+
+        if detail:
+            for action in rec.actions:
+                marker = _action_icon(action["action"])
+                d = f"  {action['detail']}" if action.get("detail") else ""
+                click.echo(
+                    f"    {marker} {action['job_name']}[{action['run_id']}]"
+                    f" → {action['action']}{d}"
+                )
+
+
+# ---------------------------------------------------------------------------
 # record set  (manual override)
 # ---------------------------------------------------------------------------
 
@@ -295,6 +433,7 @@ def record_group():
 
 @record_group.command("set")
 @_state_option
+@_context_option
 @click.argument("job_name")
 @click.argument("run_id")
 @click.argument(
@@ -303,15 +442,18 @@ def record_group():
 @click.option("--reason", default=None, help="Error reason string.")
 def record_set(
     state_dir: str | None,
+    context_name: str | None,
     job_name: str,
     run_id: str,
     new_status: str,
     reason: str | None,
 ):
     """Manually set the status of a run record."""
-    sd = _resolve_state_dir(state_dir)
+    sd = _resolve_state_dir(state_dir) or _resolve_state_from_context(context_name)
     if not sd:
-        raise click.ClickException("Specify --state-dir or DISPATCHIO_STATE_DIR")
+        raise click.ClickException(
+            "Specify --state-dir, --context, or DISPATCHIO_STATE_DIR"
+        )
     store = _load_state(sd)
     existing = store.get(job_name, run_id)
     if existing is None:
@@ -336,16 +478,102 @@ def record_set(
 
 @cli.command()
 @_state_option
+@_context_option
 @click.argument("job_name")
 @click.argument("run_id")
-def heartbeat(state_dir: str | None, job_name: str, run_id: str):
+def heartbeat(state_dir: str | None, context_name: str | None, job_name: str, run_id: str):
     """Send a manual heartbeat for a running job."""
-    sd = _resolve_state_dir(state_dir)
+    sd = _resolve_state_dir(state_dir) or _resolve_state_from_context(context_name)
     if not sd:
-        raise click.ClickException("Specify --state-dir or DISPATCHIO_STATE_DIR")
+        raise click.ClickException(
+            "Specify --state-dir, --context, or DISPATCHIO_STATE_DIR"
+        )
     store = _load_state(sd)
     store.heartbeat(job_name, run_id)
     click.echo(f"Heartbeat recorded for {job_name}[{run_id}]")
+
+
+# ---------------------------------------------------------------------------
+# context
+# ---------------------------------------------------------------------------
+
+
+@cli.group("context")
+def context_group():
+    """Manage named orchestrator contexts (config file pointers).
+
+    Contexts let you switch between multiple orchestrators without retyping
+    config paths. They are stored at ~/.dispatchio/contexts.json.
+
+    \b
+    Quick start:
+      dispatchio context add daily-etl /srv/pipelines/daily/dispatchio.toml
+      dispatchio context add weekly-reports /srv/pipelines/weekly/dispatchio.toml
+      dispatchio context use daily-etl
+      dispatchio ticks            # inspects daily-etl
+      dispatchio ticks --context weekly-reports
+    """
+
+
+@context_group.command("add")
+@click.argument("name")
+@click.argument("config_path")
+@click.option("--description", "-d", default="", help="Optional description.")
+def context_add(name: str, config_path: str, description: str):
+    """Register a named context pointing to CONFIG_PATH."""
+    from dispatchio.contexts import ContextEntry, ContextStore
+
+    abs_path = str(Path(config_path).expanduser().resolve())
+    if not Path(abs_path).exists():
+        raise click.ClickException(f"Config file not found: {abs_path}")
+
+    ContextStore().add(ContextEntry(name=name, config_path=abs_path, description=description))
+    click.echo(f"Added context {name!r} → {abs_path}")
+
+
+@context_group.command("list")
+def context_list():
+    """List all registered contexts."""
+    from dispatchio.contexts import ContextStore
+
+    store = ContextStore()
+    entries = store.list()
+    current = store.current_name()
+
+    if not entries:
+        click.echo("No contexts registered. Use 'dispatchio context add' to register one.")
+        return
+
+    header = f"{'':2} {'NAME':<24} {'CONFIG PATH'}"
+    click.echo(header)
+    click.echo("─" * 70)
+    for e in entries:
+        marker = "* " if e.name == current else "  "
+        desc = f"  ({e.description})" if e.description else ""
+        click.echo(f"{marker}{e.name:<24} {e.config_path}{desc}")
+
+
+@context_group.command("use")
+@click.argument("name")
+def context_use(name: str):
+    """Set NAME as the active context for subsequent commands."""
+    from dispatchio.contexts import ContextStore
+
+    try:
+        ContextStore().use(name)
+    except KeyError as e:
+        raise click.ClickException(str(e))
+    click.echo(f"Switched to context {name!r}.")
+
+
+@context_group.command("remove")
+@click.argument("name")
+def context_remove(name: str):
+    """Remove a registered context (does not delete any files)."""
+    from dispatchio.contexts import ContextStore
+
+    ContextStore().remove(name)
+    click.echo(f"Removed context {name!r}.")
 
 
 # ---------------------------------------------------------------------------
