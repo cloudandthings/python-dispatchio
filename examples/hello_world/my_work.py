@@ -4,8 +4,8 @@ Hello World worker functions.
 Pure Python callables — no Dispatchio imports needed.
 `dispatchio run` handles the job lifecycle (run_id resolution, completion events).
 
-In a real project each job would typically live in its own module or be part
-of an installed package. Here both functions share one file for simplicity.
+Each function receives only what its signature declares. Declare `run_id` to
+receive the run ID, `job_name` to receive the job name, both, or neither.
 """
 
 import time

@@ -12,13 +12,26 @@ the Dispatchio-specific concerns so job code stays pure business logic:
   - Optionally runs a background heartbeat thread that posts RUNNING
     events at a fixed interval, enabling LOST detection.
 
-Usage (typical job script):
+The job function receives only what its signature declares — nothing is
+injected unless the function asks for it by name. Available context keys:
 
-    from dispatchio.worker import run_job
+    run_id    — the run ID string for this execution  (e.g. "20260414")
+    job_name  — the registered job name               (e.g. "ingest")
 
+Usage examples:
+
+    # Pass nothing — function does not need orchestrator context
+    def main() -> None:
+        ...
+
+    # Pass run_id only
     def main(run_id: str) -> None:
-        # pure business logic — no Dispatchio imports needed here
         print(f"Processing {run_id}")
+        ...
+
+    # Pass everything via **kwargs
+    def main(**ctx) -> None:
+        print(ctx["run_id"], ctx["job_name"])
         ...
 
     if __name__ == "__main__":
@@ -34,6 +47,7 @@ Environment variables (all optional):
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 import sys
@@ -136,13 +150,62 @@ def _resolve_reporter(reporter: Reporter | None) -> Reporter | None:
 
 
 # ---------------------------------------------------------------------------
+# Context injection
+# ---------------------------------------------------------------------------
+
+
+def _call_fn(fn: Callable[..., None], context: dict[str, Any]) -> None:
+    """
+    Call fn, injecting from context only what its signature declares.
+
+    - No parameters        → fn()
+    - Named parameters     → matched by name from context; unknown required
+                             parameters raise TypeError with a clear message
+    - **kwargs parameter   → fn(**context) — receives everything
+    """
+    try:
+        sig = inspect.signature(fn)
+    except (ValueError, TypeError):
+        fn()
+        return
+
+    params = sig.parameters
+
+    if not params:
+        fn()
+        return
+
+    for p in params.values():
+        if p.kind == inspect.Parameter.VAR_KEYWORD:
+            fn(**context)
+            return
+
+    injected: dict[str, Any] = {}
+    for name, param in params.items():
+        if param.kind not in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        ):
+            continue
+        if name in context:
+            injected[name] = context[name]
+        elif param.default is inspect.Parameter.empty:
+            raise TypeError(
+                f"Job function requires parameter {name!r} which is not available "
+                f"in the execution context. Available keys: {sorted(context)}"
+            )
+
+    fn(**injected)
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 
 def run_job(
     job_name: str,
-    fn: Callable[[str], None],
+    fn: Callable[..., None],
     *,
     run_id: str | None = None,
     reporter: Reporter | None = None,
@@ -150,12 +213,16 @@ def run_job(
     metadata_fn: Callable[[], dict[str, Any]] | None = None,
 ) -> None:
     """
-    Execute `fn(run_id)` with full Dispatchio lifecycle management.
+    Execute fn with full Dispatchio lifecycle management.
+
+    fn receives only what its signature declares — see module docstring for
+    the available context keys and usage examples.
 
     Args:
         job_name:           Must match the Job name exactly.
-        fn:                 The job function. Receives run_id as its only
-                            argument. Raise any exception to signal failure.
+        fn:                 The job function. Declare parameters by name to
+                            receive context values (run_id, job_name). Raise
+                            any exception to signal failure.
         run_id:             The run_id for this execution. If None, resolved
                             from --run-id argv or DISPATCHIO_RUN_ID env var.
         reporter:           How to send completion events back to Dispatchio.
@@ -187,8 +254,10 @@ def run_job(
         heartbeat.start()
         logger.debug("Heartbeat thread started (interval=%ds)", heartbeat_interval)
 
+    context: dict[str, Any] = {"run_id": resolved_run_id, "job_name": job_name}
+
     try:
-        fn(resolved_run_id)
+        _call_fn(fn, context)
 
         metadata = metadata_fn() if metadata_fn else {}
         logger.info(
