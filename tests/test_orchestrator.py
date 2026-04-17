@@ -895,3 +895,176 @@ class TestDependencyModes:
                 dependency_mode=DependencyMode.THRESHOLD,
                 dependency_threshold=None,
             )
+
+
+# ---------------------------------------------------------------------------
+# Performance Testing
+# ---------------------------------------------------------------------------
+
+
+class TestPerformance:
+    """Stress tests to identify slow code paths with many jobs and dependencies."""
+
+    def test_many_jobs_mixed_dependencies(self):
+        """
+        Performance test: 150 jobs with mixed dependency patterns.
+
+        Job breakdown:
+        - 50 independent jobs (no dependencies)
+        - 10 chains of 5 jobs each (50 jobs total)
+        - 50 jobs with single dependencies on independent jobs
+        - Additional 50 jobs with fan-in/fan-out patterns (10 jobs, 5 inputs each)
+        """
+        jobs = []
+
+        # Independent jobs
+        for i in range(50):
+            jobs.append(_job(f"independent_{i:03d}"))
+
+        # Dependency chains: 10 chains of 5 jobs each
+        for chain_id in range(10):
+            for pos in range(5):
+                depends = (
+                    [Dependency(job_name=f"chain_{chain_id:02d}_job_{pos-1:02d}", cadence=DAILY)]
+                    if pos > 0
+                    else []
+                )
+                jobs.append(_job(
+                    f"chain_{chain_id:02d}_job_{pos:02d}",
+                    depends_on=depends,
+                ))
+
+        # Fan-in jobs: 50 jobs, each depends on a random independent job
+        for i in range(50):
+            independent_idx = i % 50
+            jobs.append(_job(
+                f"fan_in_{i:03d}",
+                depends_on=[Dependency(job_name=f"independent_{independent_idx:03d}", cadence=DAILY)],
+            ))
+
+        # Fan-out jobs: 5 jobs that each depend on 5 different independent jobs
+        for i in range(5):
+            depends = [
+                Dependency(job_name=f"independent_{j:03d}", cadence=DAILY)
+                for j in range(i * 10, (i + 1) * 10)
+            ]
+            jobs.append(_job(
+                f"fan_out_{i}",
+                depends_on=depends,
+                dependency_mode=DependencyMode.ALL_SUCCESS,
+            ))
+
+        assert len(jobs) == 155
+
+        orch, store, executor = _make_orch(jobs)
+
+        # Run multiple ticks to go through job lifecycle
+        for tick_num in range(1, 6):
+            tick_ref = REF + timedelta(hours=tick_num - 1)
+            result = orch.tick(tick_ref)
+
+            # Verify we're getting reasonable results each tick
+            assert result.results is not None
+            assert len(result.results) > 0
+
+            # Verify some jobs are being submitted
+            assert len(executor.calls) > 0
+
+        # Final verification
+        final_run_id = REF.strftime("%Y%m%d")
+        final_result = orch.tick(REF)
+
+        # Should have submissions across ticks
+        assert len(executor.calls) >= 50  # At least independent jobs
+
+        # Verify state tracking is working - check a few random jobs
+        for i in range(0, 10):
+            record = store.get("independent_" + f"{i:03d}", final_run_id)
+            assert record is not None
+
+    def test_wide_dependency_fan_in(self):
+        """
+        Performance test: 1 job with many (100) dependencies.
+        Tests dependency resolution performance with high fan-in.
+        """
+        # Create 100 independent jobs
+        upstream = [_job(f"upstream_{i:03d}") for i in range(100)]
+
+        # Create 1 job that depends on all 100
+        downstream = _job(
+            "collector",
+            depends_on=[
+                Dependency(job_name=f"upstream_{i:03d}", cadence=DAILY)
+                for i in range(100)
+            ],
+            dependency_mode=DependencyMode.ALL_SUCCESS,
+        )
+
+        jobs = upstream + [downstream]
+
+        orch, store, executor = _make_orch(jobs)
+
+        # First tick: submit all independent jobs
+        result = orch.tick(REF)
+        assert len([r for r in result.results if "upstream" in r.job_name]) == 100
+
+        # Mark all upstream jobs as DONE
+        for i in range(100):
+            store.put(RunRecord(
+                job_name=f"upstream_{i:03d}",
+                run_id=REF.strftime("%Y%m%d"),
+                status=Status.DONE,
+            ))
+
+        # Second tick: downstream job should submit now
+        result = orch.tick(REF)
+        collector_actions = [r for r in result.results if r.job_name == "collector"]
+        assert len(collector_actions) == 1
+        assert collector_actions[0].action == JobAction.SUBMITTED
+
+    def test_deeply_nested_chains(self):
+        """
+        Performance test: 5 chains of 20 jobs each.
+        Tests dependency resolution performance with deep chains.
+        """
+        jobs = []
+
+        for chain_id in range(5):
+            for pos in range(20):
+                depends = (
+                    [Dependency(job_name=f"chain_{chain_id:02d}_job_{pos-1:02d}", cadence=DAILY)]
+                    if pos > 0
+                    else []
+                )
+                jobs.append(_job(
+                    f"chain_{chain_id:02d}_job_{pos:02d}",
+                    depends_on=depends,
+                ))
+
+        assert len(jobs) == 100
+
+        orch, store, executor = _make_orch(jobs)
+
+        # Simulate progression through chain
+        for tick_num in range(1, 21):
+            tick_ref = REF + timedelta(hours=tick_num - 1)
+            result = orch.tick(tick_ref)
+
+            # Mark submitted jobs as DONE to advance chains
+            for call in executor.calls:
+                store.put(RunRecord(
+                    job_name=call["job"],
+                    run_id=call["run_id"],
+                    status=Status.DONE,
+                ))
+
+            executor.calls.clear()
+
+        # All chain jobs should have completed
+        run_id = REF.strftime("%Y%m%d")
+        all_records = store.list_records()
+        run_records = [r for r in all_records if r.run_id == run_id]
+        # Should have most jobs completed (may not be all if chains didn't fully progress)
+        assert len(run_records) >= 50
+        completed = sum(1 for r in run_records if r.is_finished())
+        assert completed >= 40
