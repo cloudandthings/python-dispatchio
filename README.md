@@ -45,8 +45,7 @@ Requires Python 3.11+.
 
 ```python
 # jobs.py
-from pathlib import Path
-from dispatchio import Job, SubprocessJob, Dependency, TimeCondition, local_orchestrator
+from dispatchio import Job, SubprocessJob, Dependency, TimeCondition, orchestrator_from_config
 
 JOBS = [
     # Run a data ingest script every day after 1am
@@ -64,13 +63,28 @@ JOBS = [
     ),
 ]
 
-orchestrator = local_orchestrator(JOBS, base_dir=Path("/var/dispatchio"))
+# Auto-discovers dispatchio.toml in current directory; env vars override config file
+orchestrator = orchestrator_from_config(JOBS)
 ```
 
-`local_orchestrator` wires up filesystem-backed state, a subprocess executor, and a
-file-drop completion receiver under `base_dir/state/` and `base_dir/completions/`.
-For custom backends (DynamoDB, SQS, ECS) use `Orchestrator(...)` directly — see
-[Extending Dispatchio](#extending-dispatchio).
+### 1a. Create a config file
+
+Create `dispatchio.toml` in your project directory:
+
+```toml
+[dispatchio]
+log_level = "INFO"
+
+[dispatchio.state]
+backend = "sqlalchemy"
+connection_string = "sqlite:///dispatchio.db"
+
+[dispatchio.receiver]
+backend = "filesystem"
+drop_dir = ".dispatchio/completions"
+```
+
+For more backends (DynamoDB, SQS, etc.) see [Configuration](#configuration).
 
 ### 2. Tick on a schedule
 
@@ -89,15 +103,66 @@ DISPATCHIO_ORCHESTRATOR=jobs:orchestrator dispatchio tick
 
 ### 3. Signal completion from your job
 
-Jobs must post a completion event when they finish. The simplest way is to
-write a JSON file to the completions directory:
+**Best practice: use the completion reporter abstraction** (works with any backend):
 
 ```python
-# At the end of ingest.py
-import json, pathlib, sys
+# ingest.py
+from dispatchio.worker.harness import run_job
+from dispatchio.completion import get_reporter
 
-run_id  = sys.argv[sys.argv.index("--date") + 1]
-drop    = pathlib.Path("/var/dispatchio/completions")
+def main(run_id: str) -> None:
+    """Main job logic — exit or raise exception to signal status."""
+    print(f"Ingesting data for {run_id}")
+    reporter = get_reporter("ingest")
+    
+    try:
+        # do work...
+        rows = load_data()
+        reporter.report_success(run_id, metadata={"rows": rows})
+    except Exception as exc:
+        reporter.report_error(run_id, str(exc))
+        raise
+
+if __name__ == "__main__":
+    run_job(job_name="ingest", fn=main)
+```
+
+Then submit it as a `PythonJob`:
+```python
+Job(
+    name="ingest",
+    executor=PythonJob(script="ingest.py", function="main"),
+)
+```
+
+The orchestrator **automatically injects the correct backend configuration** — your job code doesn't change whether you're running locally (filesystem) or on AWS (SQS).
+
+**For subprocess jobs**, you can also use `get_reporter()`:
+
+```python
+# ingest.sh (or Python subprocess)
+from dispatchio.completion import get_reporter
+
+run_id = sys.argv[1]
+reporter = get_reporter("ingest")
+
+try:
+    # do work...
+    reporter.report_success(run_id, metadata={"status": "ok"})
+except Exception as exc:
+    reporter.report_error(run_id, str(exc))
+```
+
+---
+
+**Manual completion events** (if you need custom control):
+
+```python
+# At the end of your job script
+import json, pathlib, sys, os
+
+run_id  = sys.argv[1]
+drop    = pathlib.Path(os.getenv("DISPATCHIO_RECEIVER__DROP_DIR", ".dispatchio/completions"))
 drop.mkdir(exist_ok=True)
 
 (drop / f"ingest__{run_id}__done.json").write_text(json.dumps({
@@ -107,15 +172,60 @@ drop.mkdir(exist_ok=True)
 }))
 ```
 
-Or signal an error:
+See [Completion Reporting](docs/completion_reporting.md) for detailed patterns and configuration.
+
+### 3a. Local testing with `simulate()`
+
+For local development, use `simulate()` to run multiple ticks without setting up a scheduler:
+
 ```python
-(drop / f"ingest__{run_id}__error.json").write_text(json.dumps({
-    "job_name":     "ingest",
-    "run_id":       run_id,
-    "status":       "error",
-    "error_reason": "database connection failed",
-}))
+from dispatchio import simulate
+from jobs import orchestrator
+
+# Run ticks every 0.5 seconds until all jobs are done
+simulate(orchestrator, tick_interval=0.5)
 ```
+
+`simulate()` advances time by one day per tick (configurable), submits jobs, drains completion
+events, and exits when all jobs reach a terminal state. Perfect for testing and demos.
+
+---
+
+## Executor types
+
+Dispatchio supports different ways to run your job logic:
+
+### `SubprocessJob` — run shell commands
+
+Best for: shell scripts, existing CLI tools, language-agnostic workloads.
+
+```python
+Job(
+    name="etl",
+    executor=SubprocessJob(command=["python", "etl.py", "--date", "{run_id}"]),
+)
+```
+
+### `PythonJob` — run Python functions in subprocesses
+
+Best for: Python-only workloads, reusing library code, cleaner than subprocess.
+
+```python
+# my_work.py
+def ingest(run_id: str) -> None:
+    print(f"Ingesting {run_id}")
+    # ...
+
+# jobs.py
+from dispatchio import PythonJob, Job
+
+Job(
+    name="ingest",
+    executor=PythonJob(script="my_work.py", function="ingest"),
+)
+```
+
+Use `PythonJob` with the `run_job()` harness (see [Signal completion](#3-signal-completion-from-your-job)).
 
 ---
 
@@ -421,6 +531,40 @@ export DISPATCHIO_CONFIG=ssm:///myapp/dispatchio/config
 The SSM source is fetched once at startup. Individual fields can still be
 overridden via environment variables after the SSM config is loaded.
 
+### Completion Event Abstraction
+
+The `orchestrator_from_config()` function automatically configures job completion
+reporting based on the receiver backend in your config file. Jobs use the
+`get_reporter()` function to report their completion — the job code remains
+**backend-agnostic**.
+
+**Example: swap backends without changing job code**
+
+Local development (filesystem):
+```toml
+[dispatchio.receiver]
+backend = "filesystem"
+drop_dir = ".dispatchio/completions"
+```
+
+AWS deployment (SQS) — same code works!
+```toml
+[dispatchio.receiver]
+backend = "sqs"
+queue_url = "https://sqs.us-east-1.amazonaws.com/..."
+region = "us-east-1"
+```
+
+Your job code:
+```python
+from dispatchio.completion import get_reporter
+
+reporter = get_reporter("my_job")
+reporter.report_success(run_id, metadata={"rows": 1000})
+```
+
+No changes needed. See [Completion Reporting](docs/completion_reporting.md) for full details.
+
 ---
 
 ## CLI reference
@@ -498,17 +642,75 @@ the shared store.
 
 ---
 
-## Hello-world example
+## Examples
 
-A working two-job example is in [examples/hello_world/](examples/hello_world/).
+Several working examples are in [examples/](examples/):
+
+- [hello_world](examples/hello_world/) — minimal two-job example
+- [cadence](examples/cadence/) — cross-cadence dependencies (daily → monthly)
+- [conditions](examples/conditions/) — time conditions and schedule gates
+- [dependency_modes](examples/dependency_modes/) — dependency strategies (threshold, best-effort)
+- [dynamic_registration](examples/dynamic_registration/) — register jobs at runtime
+- [subprocess_example](examples/subprocess_example/) — subprocess jobs with retries
+- [multi_orchestrator](examples/multi_orchestrator/) — multiple independent orchestrators sharing state
+
+Run any example:
 
 ```bash
 pip install -e ".[dev]"
 python examples/hello_world/run.py
 ```
 
-This runs a local tick loop, submitting `hello_world` then `goodbye_world` once
-the first is done, using filesystem state and file-drop completion events.
+Each example uses `simulate()` for local testing and includes a `dispatchio.toml` config file.
+
+---
+
+## Testing
+
+### Unit test your job logic
+
+Job functions (for `PythonJob`) are regular Python functions — test them directly:
+
+```python
+# my_work.py
+def ingest(run_id: str) -> None:
+    # your logic here
+    ...
+
+# test_my_work.py
+from my_work import ingest
+
+def test_ingest():
+    ingest("20250115")  # call it like any function
+    # assert expected results
+```
+
+### Test orchestrator logic
+
+For testing job dependencies, conditions, and retry logic, use an in-memory state store:
+
+```python
+from dispatchio import Orchestrator, RunRecord, Status
+from dispatchio.state.sqlalchemy_ import SQLAlchemyStateStore
+
+def test_dependencies():
+    # In-memory SQLite for testing
+    state = SQLAlchemyStateStore("sqlite:///:memory:")
+    
+    orchestrator = Orchestrator(
+        jobs=JOBS,
+        state=state,
+        receiver=None,  # no receiver needed for testing
+        executors={...},
+    )
+    
+    # Seed state with preconditions
+    state.put(RunRecord(job_name="upstream", run_id="20250115", status=Status.DONE))
+    
+    # Tick and verify downstream is submitted
+    result = orchestrator.tick()
+    assert any(e.job_name == "downstream" for e in result.results)
+```
 
 ---
 

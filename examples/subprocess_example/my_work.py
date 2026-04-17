@@ -4,8 +4,17 @@ Worker functions for the SubprocessJob example.
 Unlike PythonJob, SubprocessJob does NOT get the dispatchio harness
 automatically — the worker script must call run_job() itself.
 
-The executor injects DISPATCHIO_RUN_ID and DISPATCHIO_DROP_DIR as env vars
-(see jobs.py); run_job() picks them up and handles DONE/ERROR reporting.
+The orchestrator injects receiver configuration as env vars:
+  - DISPATCHIO_RECEIVER__BACKEND
+  - DISPATCHIO_RECEIVER__DROP_DIR (for filesystem)
+  - etc.
+
+run_job() uses these to auto-configure the reporter. You can also manually
+use get_reporter() for explicit control:
+
+    from dispatchio.completion import get_reporter
+    reporter = get_reporter("my_job")
+    reporter.report_success(run_id, metadata={"items": 100})
 
 Usage (dispatched by SubprocessJob in jobs.py):
     python my_work.py generate
@@ -21,12 +30,14 @@ def generate(run_id: str) -> None:
     """Simulate generating data — always succeeds."""
     items = list(range(10))
     print(f"Generated {len(items)} items for run_id={run_id}")
+    # run_job() automatically reports success with metadata
 
 
 def summarize(run_id: str) -> None:
     """Deliberately fail to demonstrate error handling and retries."""
     print(f"Attempting to summarize {run_id}...")
     raise RuntimeError("Data source unavailable — demonstrating error handling")
+    # run_job() automatically reports error and raises SystemExit(1)
 
 
 _DISPATCH = {"generate": generate, "summarize": summarize}
