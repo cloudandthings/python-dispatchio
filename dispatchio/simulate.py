@@ -15,6 +15,7 @@ to watch a full run play out without wiring up a real scheduler.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -45,7 +46,8 @@ def simulate(
 
     Args:
         orchestrator:   The Orchestrator to drive.
-        tick_interval:  Seconds to sleep between ticks.
+        tick_interval:  Seconds to sleep between ticks. Can be overridden by the
+                        DISPATCHIO_TICK_INTERVAL environment variable.
         max_ticks:      Hard upper bound on the number of ticks.
         stop_when:      Callable(store, jobs, run_id) -> bool. Called after
                         each tick; the loop exits when it returns True.
@@ -58,6 +60,11 @@ def simulate(
         reference_time = datetime.now(tz=timezone.utc)
     if stop_when is None:
         stop_when = _all_finished
+
+    # Allow environment variable to override tick_interval (for fast test runs)
+    env_interval = os.environ.get("DISPATCHIO_TICK_INTERVAL")
+    if env_interval is not None:
+        tick_interval = float(env_interval)
 
     run_id = reference_time.strftime("%Y%m%d")
 
