@@ -47,15 +47,26 @@ class StateSettings(BaseModel):
     """
     State store backend configuration.
 
-    backend="filesystem"  — local JSON files, good for dev and single-host setups.
-    backend="memory"      — in-process only, lost on restart; useful for tests.
+    backend="sqlalchemy"  — any SQLAlchemy-compatible DB (default: SQLite).
+                           connection_string defaults to "sqlite:///dispatchio.db".
     backend="dynamodb"    — AWS DynamoDB; requires dispatchio[aws].
+
+    Environment variable reference:
+      DISPATCHIO_STATE__BACKEND=sqlalchemy
+      DISPATCHIO_STATE__CONNECTION_STRING=postgresql+psycopg://user:pass@host/db
+      DISPATCHIO_STATE__DB_ECHO=false
+      DISPATCHIO_STATE__DB_POOL_SIZE=5
     """
 
-    backend: Literal["filesystem", "memory", "dynamodb"] = "filesystem"
+    backend: Literal["sqlalchemy", "dynamodb"] = "sqlalchemy"
 
-    # filesystem
-    root: str = ".dispatchio/state"
+    # sqlalchemy
+    connection_string: str = "sqlite:///dispatchio.db"
+    db_echo: bool = False
+    db_pool_size: int = 5
+
+    # tick log (path to the JSONL tick history file)
+    tick_log_path: str = ".dispatchio/tick_log.jsonl"
 
     # dynamodb (dispatchio[aws])
     table_name: str = "dispatchio-state"
@@ -118,7 +129,7 @@ class DispatchioSettings(BaseSettings):
 
         settings = DispatchioSettings(
             log_level="DEBUG",
-            state=StateSettings(backend="memory"),
+            state=StateSettings(backend="sqlalchemy", connection_string="sqlite:///:memory:"),
         )
 
     See module docstring for the full env var reference.

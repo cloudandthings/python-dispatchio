@@ -36,7 +36,7 @@ import click
 
 from dispatchio.models import RunRecord, Status, TickResult
 from dispatchio.orchestrator import Orchestrator
-from dispatchio.state.filesystem import FilesystemStateStore
+from dispatchio.state import SQLAlchemyStateStore
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,10 +47,6 @@ logging.basicConfig(
 # ---------------------------------------------------------------------------
 # Config resolution
 # ---------------------------------------------------------------------------
-
-
-def _resolve_state_dir(state_dir: str | None) -> str | None:
-    return state_dir or os.environ.get("DISPATCHIO_STATE_DIR")
 
 
 def _resolve_orchestrator_path(orch_path: str | None) -> str | None:
@@ -84,57 +80,53 @@ def _load_orchestrator(path: str) -> Orchestrator:
     return obj
 
 
-def _load_state(state_dir: str) -> FilesystemStateStore:
-    return FilesystemStateStore(state_dir)
+def _load_store_from_context(context_name: str | None) -> SQLAlchemyStateStore | None:
+    """
+    Load a StateStore from a named (or active) context, or auto-discovered config.
+    Returns None if no configuration can be located.
+    """
+    from dispatchio.contexts import ContextStore
+    from dispatchio.config.loader import load_config, _build_state
+
+    entry = ContextStore().resolve(context_name)
+    if entry is not None:
+        try:
+            settings = load_config(entry.config_path)
+            return _build_state(settings.state)  # type: ignore[return-value]
+        except Exception:
+            pass
+
+    try:
+        settings = load_config()
+        if settings is not None:
+            return _build_state(settings.state)  # type: ignore[return-value]
+    except Exception:
+        pass
+
+    return None
 
 
-def _resolve_state_from_context(context_name: str | None) -> str | None:
-    """Resolve state dir from a named (or current) context."""
+def _resolve_tick_log_store(context_name: str | None):
+    """
+    Resolve the tick log store from a named (or active) context,
+    or auto-discovered config. Returns None if no config can be located.
+    """
+    from dispatchio.tick_log import FilesystemTickLogStore
     from dispatchio.contexts import ContextStore
     from dispatchio.config.loader import load_config
 
     entry = ContextStore().resolve(context_name)
-    if entry is None:
-        return None
+    if entry is not None:
+        try:
+            settings = load_config(entry.config_path)
+            return FilesystemTickLogStore(Path(settings.state.tick_log_path))
+        except Exception:
+            pass
+
     try:
-        settings = load_config(entry.config_path)
-        if settings.state.backend == "filesystem":
-            return settings.state.root
-    except Exception:
-        pass
-    return None
-
-
-def _resolve_tick_log_store(
-    state_dir: str | None, context_name: str | None
-):
-    """
-    Resolve the tick log store from (in priority order):
-      1. An explicit state dir (derives path as <state_dir>/../tick_log.jsonl)
-      2. A named context (loads its config to find state root)
-      3. Auto-discovery via local dispatchio.toml
-    Returns None if no tick log can be located.
-    """
-    from dispatchio.tick_log import FilesystemTickLogStore
-
-    if state_dir:
-        path = Path(state_dir).parent / "tick_log.jsonl"
-        return FilesystemTickLogStore(path)
-
-    # Try named context; ContextStore.resolve() falls back to the active context
-    # when context_name is None, so this also handles the no-flag case.
-    sd = _resolve_state_from_context(context_name)
-    if sd:
-        path = Path(sd).parent / "tick_log.jsonl"
-        return FilesystemTickLogStore(path)
-
-    # Last resort: auto-discover via local dispatchio.toml
-    try:
-        from dispatchio.config.loader import load_config
         settings = load_config()
-        if settings and settings.state.backend == "filesystem":
-            path = Path(settings.state.root).parent / "tick_log.jsonl"
-            return FilesystemTickLogStore(path)
+        if settings is not None:
+            return FilesystemTickLogStore(Path(settings.state.tick_log_path))
     except Exception:
         pass
 
@@ -152,16 +144,6 @@ def _orch_option(f):
         "-o",
         default=None,
         help="module:attribute path to an Orchestrator, e.g. myproject.jobs:orchestrator",
-    )(f)
-
-
-def _state_option(f):
-    return click.option(
-        "--state-dir",
-        "-s",
-        default=None,
-        help="Path to state directory (FilesystemStateStore root). "
-        "Env: DISPATCHIO_STATE_DIR",
     )(f)
 
 
@@ -316,7 +298,6 @@ def run_command(
 
 
 @cli.command()
-@_state_option
 @_context_option
 @click.option("--job", "-j", default=None, help="Filter by job name.")
 @click.option("--run-id", "-r", default=None, help="Filter by run_id.")
@@ -328,19 +309,18 @@ def run_command(
     help="Filter by status.",
 )
 def status(
-    state_dir: str | None,
     context_name: str | None,
     job: str | None,
     run_id: str | None,
     filter_status: str | None,
 ):
     """Show the status of job runs."""
-    sd = _resolve_state_dir(state_dir) or _resolve_state_from_context(context_name)
-    if not sd:
+    store = _load_store_from_context(context_name)
+    if store is None:
         raise click.ClickException(
-            "Specify a state directory with --state-dir, --context, or DISPATCHIO_STATE_DIR"
+            "Cannot locate state store. Use --context or run from a directory "
+            "with dispatchio.toml."
         )
-    store = _load_state(sd)
     status_filter = Status(filter_status) if filter_status else None
     records = store.list_records(job_name=job, status=status_filter)
 
@@ -360,14 +340,12 @@ def status(
 
 
 @cli.command()
-@_state_option
 @_context_option
 @click.option("--limit", "-n", default=20, show_default=True, help="Max ticks to show.")
 @click.option("--since", default=None, help="Show ticks at or after this ISO timestamp.")
 @click.option("--until", default=None, help="Show ticks at or before this ISO timestamp.")
 @click.option("--detail", is_flag=True, default=False, help="Show individual job actions.")
 def ticks(
-    state_dir: str | None,
     context_name: str | None,
     limit: int,
     since: str | None,
@@ -386,7 +364,7 @@ def ticks(
       dispatchio ticks --context weekly-reports --limit 5
       dispatchio ticks --since 2026-04-14T00:00:00
     """
-    store = _resolve_tick_log_store(state_dir, context_name)
+    store = _resolve_tick_log_store(context_name)
     if store is None:
         raise click.ClickException(
             "Cannot locate tick log. Specify --state-dir, --context, "
@@ -432,7 +410,6 @@ def record_group():
 
 
 @record_group.command("set")
-@_state_option
 @_context_option
 @click.argument("job_name")
 @click.argument("run_id")
@@ -441,7 +418,6 @@ def record_group():
 )
 @click.option("--reason", default=None, help="Error reason string.")
 def record_set(
-    state_dir: str | None,
     context_name: str | None,
     job_name: str,
     run_id: str,
@@ -449,12 +425,12 @@ def record_set(
     reason: str | None,
 ):
     """Manually set the status of a run record."""
-    sd = _resolve_state_dir(state_dir) or _resolve_state_from_context(context_name)
-    if not sd:
+    store = _load_store_from_context(context_name)
+    if store is None:
         raise click.ClickException(
-            "Specify --state-dir, --context, or DISPATCHIO_STATE_DIR"
+            "Cannot locate state store. Use --context or run from a directory "
+            "with dispatchio.toml."
         )
-    store = _load_state(sd)
     existing = store.get(job_name, run_id)
     if existing is None:
         record = RunRecord(
@@ -477,18 +453,17 @@ def record_set(
 
 
 @cli.command()
-@_state_option
 @_context_option
 @click.argument("job_name")
 @click.argument("run_id")
-def heartbeat(state_dir: str | None, context_name: str | None, job_name: str, run_id: str):
+def heartbeat(context_name: str | None, job_name: str, run_id: str):
     """Send a manual heartbeat for a running job."""
-    sd = _resolve_state_dir(state_dir) or _resolve_state_from_context(context_name)
-    if not sd:
+    store = _load_store_from_context(context_name)
+    if store is None:
         raise click.ClickException(
-            "Specify --state-dir, --context, or DISPATCHIO_STATE_DIR"
+            "Cannot locate state store. Use --context or run from a directory "
+            "with dispatchio.toml."
         )
-    store = _load_state(sd)
     store.heartbeat(job_name, run_id)
     click.echo(f"Heartbeat recorded for {job_name}[{run_id}]")
 

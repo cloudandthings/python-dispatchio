@@ -2,8 +2,8 @@ log_level = "INFO"
 default_cadence = "daily"
 
 [state]
-backend = "filesystem"
-root = ".dispatchio/state"
+backend = "sqlalchemy"
+connection_string = "sqlite:///dispatchio.db"
 
 [receiver]
 backend = "filesystem"

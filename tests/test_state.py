@@ -1,15 +1,12 @@
-"""Tests for state store implementations (memory and filesystem)."""
+"""Tests for the SQLAlchemy state store implementation."""
 
 from __future__ import annotations
 
-import tempfile
 from datetime import datetime, timezone
-from pathlib import Path
 
 
 from dispatchio.models import RunRecord, Status
-from dispatchio.state.filesystem import FilesystemStateStore
-from dispatchio.state.memory import MemoryStateStore
+from dispatchio.state.sqlalchemy_ import SQLAlchemyStateStore
 
 
 def _make_record(job_name="job", run_id="20250115", status=Status.DONE, **kw):
@@ -91,35 +88,14 @@ class SharedStateStoreBehaviour:
         assert got.metadata["rows"] == 1000
 
 
-class TestMemoryStateStore(SharedStateStoreBehaviour):
+class TestSQLAlchemyStateStore(SharedStateStoreBehaviour):
     def setup_method(self):
-        self.store = MemoryStateStore()
+        self.store = SQLAlchemyStateStore("sqlite:///:memory:")
 
-
-class TestFilesystemStateStore(SharedStateStoreBehaviour):
-    def setup_method(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.store = FilesystemStateStore(self._tmpdir.name)
-
-    def teardown_method(self):
-        self._tmpdir.cleanup()
-
-    def test_records_persist_across_instances(self):
-        """A new store instance pointing at the same directory should see the data."""
-        self.store.put(_make_record())
-        store2 = FilesystemStateStore(self._tmpdir.name)
+    def test_records_persist_across_instances_on_disk(self, tmp_path):
+        """A new store instance pointing at the same file DB should see the data."""
+        db_path = tmp_path / "test.db"
+        store1 = SQLAlchemyStateStore(f"sqlite:///{db_path}")
+        store1.put(_make_record())
+        store2 = SQLAlchemyStateStore(f"sqlite:///{db_path}")
         assert store2.get("job", "20250115") is not None
-
-    def test_atomic_write_file_exists(self):
-        self.store.put(_make_record())
-        path = Path(self._tmpdir.name) / "job" / "20250115.json"
-        assert path.exists()
-
-    def test_skips_corrupt_files(self):
-        """Corrupt JSON files should be silently skipped during list."""
-        job_dir = Path(self._tmpdir.name) / "job"
-        job_dir.mkdir()
-        (job_dir / "bad.json").write_text("not json at all {{{")
-        # Should not raise
-        records = self.store.list_records()
-        assert records == []

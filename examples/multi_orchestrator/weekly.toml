@@ -9,8 +9,8 @@ log_level = "INFO"
 default_cadence = "weekly"
 
 [dispatchio.state]
-backend = "filesystem"
-root    = ".dispatchio/weekly-reports/state"
+backend = "sqlalchemy"
+connection_string = "sqlite:///weekly-reports.db"
 
 [dispatchio.receiver]
 backend  = "filesystem"

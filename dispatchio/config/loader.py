@@ -23,7 +23,7 @@ from dispatchio.executor import SubprocessExecutor, PythonJobExecutor
 from dispatchio.models import Job
 from dispatchio.orchestrator import Orchestrator
 from dispatchio.receiver import FilesystemReceiver
-from dispatchio.state import FilesystemStateStore, MemoryStateStore
+from dispatchio.state import SQLAlchemyStateStore
 from dispatchio.tick_log import FilesystemTickLogStore
 
 logger = logging.getLogger(__name__)
@@ -255,19 +255,18 @@ def _configure_logging(level: str) -> None:
     )
 
 
-def _build_tick_log(cfg: StateSettings) -> FilesystemTickLogStore | None:
-    """Derive tick log path from state root. None for non-filesystem backends."""
-    if cfg.backend != "filesystem":
-        return None
-    return FilesystemTickLogStore(Path(cfg.root).parent / "tick_log.jsonl")
+def _build_tick_log(cfg: StateSettings) -> FilesystemTickLogStore:
+    """Build a FilesystemTickLogStore from the configured tick_log_path."""
+    return FilesystemTickLogStore(Path(cfg.tick_log_path))
 
 
 def _build_state(cfg: StateSettings):
-    if cfg.backend == "filesystem":
-        return FilesystemStateStore(cfg.root)
-
-    if cfg.backend == "memory":
-        return MemoryStateStore()
+    if cfg.backend == "sqlalchemy":
+        return SQLAlchemyStateStore(
+            connection_string=cfg.connection_string,
+            echo=cfg.db_echo,
+            pool_size=cfg.db_pool_size,
+        )
 
     if cfg.backend == "dynamodb":
         try:

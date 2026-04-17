@@ -67,7 +67,7 @@ from dispatchio.models import (
 )
 from dispatchio.orchestrator import Orchestrator
 from dispatchio.run_id import resolve_run_id
-from dispatchio.state import FilesystemStateStore, MemoryStateStore
+from dispatchio.state import SQLAlchemyStateStore
 from dispatchio.executor import SubprocessExecutor, PythonJobExecutor
 from dispatchio.receiver import FilesystemReceiver
 from dispatchio.config import DispatchioSettings, load_config, orchestrator_from_config
@@ -103,10 +103,11 @@ def local_orchestrator(
 
     base = Path(base_dir)
     completions = base / "completions"
+    db_path = base / "dispatchio.db"
     return Orchestrator(
         jobs=jobs,
         name=name,
-        state=FilesystemStateStore(base / "state"),
+        state=SQLAlchemyStateStore(f"sqlite:///{db_path}"),
         executors={
             "subprocess": SubprocessExecutor(),
             "python": PythonJobExecutor(
@@ -160,8 +161,7 @@ __all__ = [
     "Orchestrator",
     "local_orchestrator",
     # Common concrete classes (no submodule import needed for basic use)
-    "FilesystemStateStore",
-    "MemoryStateStore",
+    "SQLAlchemyStateStore",
     "SubprocessExecutor",
     "PythonJobExecutor",
     "FilesystemReceiver",

@@ -22,7 +22,7 @@ from dispatchio.config.loader import (
 )
 from dispatchio.models import Job, SubprocessJob
 from dispatchio.orchestrator import Orchestrator
-from dispatchio.state import FilesystemStateStore
+from dispatchio.state import SQLAlchemyStateStore
 from dispatchio.receiver import FilesystemReceiver
 
 
@@ -57,8 +57,8 @@ class TestDefaultSettings:
 
     def test_state_backend_default(self):
         s = DispatchioSettings()
-        assert s.state.backend == "filesystem"
-        assert s.state.root == ".dispatchio/state"
+        assert s.state.backend == "sqlalchemy"
+        assert s.state.connection_string == "sqlite:///dispatchio.db"
 
     def test_receiver_backend_default(self):
         s = DispatchioSettings()
@@ -78,14 +78,14 @@ class TestEnvVarOverrides:
         assert s.log_level == "DEBUG"
 
     def test_nested_state_backend(self, monkeypatch):
-        monkeypatch.setenv("DISPATCHIO_STATE__BACKEND", "memory")
+        monkeypatch.setenv("DISPATCHIO_STATE__BACKEND", "sqlalchemy")
         s = DispatchioSettings()
-        assert s.state.backend == "memory"
+        assert s.state.backend == "sqlalchemy"
 
     def test_nested_state_root(self, monkeypatch):
-        monkeypatch.setenv("DISPATCHIO_STATE__ROOT", "/custom/state")
+        monkeypatch.setenv("DISPATCHIO_STATE__CONNECTION_STRING", "sqlite:///custom.db")
         s = DispatchioSettings()
-        assert s.state.root == "/custom/state"
+        assert s.state.connection_string == "sqlite:///custom.db"
 
     def test_nested_receiver_backend(self, monkeypatch):
         monkeypatch.setenv("DISPATCHIO_RECEIVER__BACKEND", "none")
@@ -116,7 +116,8 @@ class TestTomlLoading:
             """
             log_level = "DEBUG"
             [state]
-            backend = "memory"
+            backend = "sqlalchemy"
+            connection_string = "sqlite:///:memory:"
             [receiver]
             backend = "none"
         """,
@@ -124,7 +125,7 @@ class TestTomlLoading:
         )
         s = load_config(f)
         assert s.log_level == "DEBUG"
-        assert s.state.backend == "memory"
+        assert s.state.backend == "sqlalchemy"
         assert s.receiver.backend == "none"
 
     def test_dispatchio_section_in_toml(self, tmp_path):
@@ -138,13 +139,13 @@ class TestTomlLoading:
             log_level = "WARNING"
 
             [dispatchio.state]
-            backend = "memory"
+            backend = "sqlalchemy"
         """,
             tmp_path / "pyproject.toml",
         )
         s = load_config(f)
         assert s.log_level == "WARNING"
-        assert s.state.backend == "memory"
+        assert s.state.backend == "sqlalchemy"
 
     def test_missing_keys_use_defaults(self, tmp_path):
         f = _toml(
@@ -154,7 +155,7 @@ class TestTomlLoading:
             tmp_path / "dispatchio.toml",
         )
         s = load_config(f)
-        assert s.state.backend == "filesystem"  # default preserved
+        assert s.state.backend == "sqlalchemy"  # default preserved
 
     def test_file_not_found_raises(self):
         with pytest.raises(FileNotFoundError):
@@ -227,14 +228,14 @@ class TestPriority:
         f = _toml(
             """
             [state]
-            backend = "filesystem"
-            root    = "/from/toml"
+            backend = "sqlalchemy"
+            connection_string = "sqlite:///from_toml.db"
         """,
             tmp_path / "dispatchio.toml",
         )
-        monkeypatch.setenv("DISPATCHIO_STATE__ROOT", "/from/env")
+        monkeypatch.setenv("DISPATCHIO_STATE__CONNECTION_STRING", "sqlite:///from_env.db")
         s = load_config(f)
-        assert s.state.root == "/from/env"  # env wins
+        assert s.state.connection_string == "sqlite:///from_env.db"  # env wins
 
     def test_toml_overrides_defaults(self, tmp_path):
         f = _toml('log_level = "WARNING"', tmp_path / "dispatchio.toml")
@@ -250,33 +251,23 @@ class TestPriority:
 class TestOrchestratorFromConfig:
     def test_returns_orchestrator(self, simple_job, tmp_path):
         settings = DispatchioSettings(
-            state=StateSettings(backend="memory"),
+            state=StateSettings(backend="sqlalchemy", connection_string="sqlite:///:memory:"),
             receiver=ReceiverSettings(backend="none"),
         )
         orch = orchestrator_from_config([simple_job], config=settings)
         assert isinstance(orch, Orchestrator)
 
-    def test_filesystem_state_backend(self, simple_job, tmp_path):
+    def test_sqlalchemy_state_backend(self, simple_job, tmp_path):
         settings = DispatchioSettings(
-            state=StateSettings(backend="filesystem", root=str(tmp_path / "state")),
+            state=StateSettings(backend="sqlalchemy", connection_string="sqlite:///:memory:"),
             receiver=ReceiverSettings(backend="none"),
         )
         orch = orchestrator_from_config([simple_job], config=settings)
-        assert isinstance(orch.state, FilesystemStateStore)
-
-    def test_memory_state_backend(self, simple_job):
-        settings = DispatchioSettings(
-            state=StateSettings(backend="memory"),
-            receiver=ReceiverSettings(backend="none"),
-        )
-        orch = orchestrator_from_config([simple_job], config=settings)
-        from dispatchio.state.memory import MemoryStateStore
-
-        assert isinstance(orch.state, MemoryStateStore)
+        assert isinstance(orch.state, SQLAlchemyStateStore)
 
     def test_filesystem_receiver(self, simple_job, tmp_path):
         settings = DispatchioSettings(
-            state=StateSettings(backend="memory"),
+            state=StateSettings(backend="sqlalchemy", connection_string="sqlite:///:memory:"),
             receiver=ReceiverSettings(
                 backend="filesystem",
                 drop_dir=str(tmp_path / "completions"),
@@ -287,7 +278,7 @@ class TestOrchestratorFromConfig:
 
     def test_no_receiver_when_none(self, simple_job):
         settings = DispatchioSettings(
-            state=StateSettings(backend="memory"),
+            state=StateSettings(backend="sqlalchemy", connection_string="sqlite:///:memory:"),
             receiver=ReceiverSettings(backend="none"),
         )
         orch = orchestrator_from_config([simple_job], config=settings)
@@ -297,7 +288,8 @@ class TestOrchestratorFromConfig:
         f = _toml(
             """
             [state]
-            backend = "memory"
+            backend = "sqlalchemy"
+            connection_string = "sqlite:///:memory:"
             [receiver]
             backend = "none"
         """,
@@ -308,7 +300,7 @@ class TestOrchestratorFromConfig:
 
     def test_jobs_are_passed_through(self, simple_job):
         settings = DispatchioSettings(
-            state=StateSettings(backend="memory"),
+            state=StateSettings(backend="sqlalchemy", connection_string="sqlite:///:memory:"),
             receiver=ReceiverSettings(backend="none"),
         )
         orch = orchestrator_from_config([simple_job], config=settings)
@@ -317,7 +309,7 @@ class TestOrchestratorFromConfig:
 
     def test_jobs_default_to_empty_list(self):
         settings = DispatchioSettings(
-            state=StateSettings(backend="memory"),
+            state=StateSettings(backend="sqlalchemy", connection_string="sqlite:///:memory:"),
             receiver=ReceiverSettings(backend="none"),
         )
         orch = orchestrator_from_config(config=settings)
@@ -328,7 +320,7 @@ class TestOrchestratorFromConfig:
 
         handler = LogAlertHandler()
         settings = DispatchioSettings(
-            state=StateSettings(backend="memory"),
+            state=StateSettings(backend="sqlalchemy", connection_string="sqlite:///:memory:"),
             receiver=ReceiverSettings(backend="none"),
         )
         orch = orchestrator_from_config(
@@ -356,7 +348,7 @@ class TestOrchestratorFromConfig:
 
     def test_sqs_backend_without_aws_raises(self, simple_job):
         settings = DispatchioSettings(
-            state=StateSettings(backend="memory"),
+            state=StateSettings(backend="sqlalchemy", connection_string="sqlite:///:memory:"),
             receiver=ReceiverSettings(backend="sqs"),
         )
         with pytest.raises(ImportError, match="dispatchio\\[aws\\]"):

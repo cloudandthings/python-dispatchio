@@ -4,8 +4,8 @@
 log_level = "INFO"
 
 [dispatchio.state]
-backend = "filesystem"
-root    = ".dispatchio/state"
+backend = "sqlalchemy"
+connection_string = "sqlite:///dispatchio.db"
 
 [dispatchio.receiver]
 backend  = "filesystem"

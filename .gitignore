@@ -188,6 +188,12 @@ cython_debug/
 #  you could uncomment the following to ignore the entire vscode folder
 .vscode/
 
+# Dispatchio
+dispatchio.db
+dispatchio.db-shm
+dispatchio.db-wal
+.dispatchio/
+
 # Ruff stuff:
 .ruff_cache/
 
