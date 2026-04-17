@@ -20,10 +20,23 @@ import os
 import subprocess
 from datetime import datetime
 
-from dispatchio.models import Job, SubprocessJob
+from dispatchio.models import Job, RunRecord, Status, SubprocessJob
 
 
 class SubprocessExecutor:
+    """
+    Executor for SubprocessJob configs.
+
+    Launches the job as a detached child process. The process is responsible
+    for posting its own completion event (e.g. by calling run_job()).
+
+    Implements Pokeable: poke() checks subprocess liveness via poll() so the
+    orchestrator can detect crashed jobs even without a heartbeat policy.
+    """
+
+    def __init__(self) -> None:
+        self._processes: dict[tuple[str, str], subprocess.Popen] = {}
+
     def submit(
         self,
         job: Job,
@@ -51,10 +64,29 @@ class SubprocessExecutor:
 
         # Detach: we do not wait for completion.
         # The child process is responsible for posting a completion event.
-        subprocess.Popen(
+        proc = subprocess.Popen(
             command,
             env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             close_fds=True,
         )
+        self._processes[(job.name, run_id)] = proc
+
+    def poke(self, record: RunRecord) -> Status | None:
+        """
+        Check whether the spawned subprocess is still alive.
+
+        Returns Status.RUNNING if the process is alive, Status.DONE if it
+        exited cleanly (exit code 0), Status.ERROR if it exited with a
+        non-zero code, or None if the process is not tracked (e.g. the
+        orchestrator was restarted since submission).
+        """
+        proc = self._processes.get((record.job_name, record.run_id))
+        if proc is None:
+            return None
+        returncode = proc.poll()
+        if returncode is None:
+            return Status.RUNNING
+        del self._processes[(record.job_name, record.run_id)]
+        return Status.DONE if returncode == 0 else Status.ERROR

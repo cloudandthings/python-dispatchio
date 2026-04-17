@@ -34,7 +34,7 @@ from collections.abc import Iterable
 from dispatchio.alerts.base import AlertEvent, AlertHandler, LogAlertHandler
 from dispatchio.cadence import DAILY, Cadence
 from dispatchio.conditions import TimeOfDayCondition
-from dispatchio.executor.base import Executor
+from dispatchio.executor.base import Executor, Pokeable
 from dispatchio.models import (
     AlertOn,
     Dependency,
@@ -370,12 +370,49 @@ class Orchestrator:
     def _check_lost_jobs(self, reference_time: datetime) -> list[JobTickResult]:
         results = []
         for job in self.jobs:
-            if job.heartbeat is None:
-                continue
             effective_cadence = job.cadence or self.default_cadence
             run_id = resolve_run_id(effective_cadence, reference_time)
             record = self.state.get(job.name, run_id)
-            if record is None or record.status != Status.RUNNING:
+            if record is None or not record.is_active():
+                continue
+
+            executor = self.executors.get(job.executor.type)
+
+            # Poke-based liveness check — preferred over heartbeat for local executors.
+            # Executors opt in by implementing the Pokeable protocol.
+            if executor is not None and isinstance(executor, Pokeable):
+                poke_status = executor.poke(record)
+                if poke_status is not None and poke_status != Status.RUNNING:
+                    detail = f"poke: process exited with status={poke_status.value}"
+                    update: dict = {"status": poke_status, "completed_at": reference_time}
+                    if poke_status == Status.ERROR:
+                        update["error_reason"] = (
+                            "process exited without posting a completion event"
+                        )
+                    updated = record.model_copy(update=update)
+                    self.state.put(updated)
+                    logger.warning(
+                        "Job %s/%s %s via poke.",
+                        job.name,
+                        run_id,
+                        poke_status.value,
+                    )
+                    if poke_status == Status.ERROR:
+                        self._emit_alert(AlertOn.ERROR, job, run_id, detail, updated)
+                        results.append(
+                            JobTickResult(
+                                job_name=job.name,
+                                run_id=run_id,
+                                action=JobAction.MARKED_ERROR,
+                                detail=detail,
+                            )
+                        )
+                    # DONE via poke is a success — no result entry needed
+                    continue
+                # poke returned RUNNING or None — fall through to heartbeat check
+
+            # Heartbeat-based LOST detection
+            if job.heartbeat is None or record.status != Status.RUNNING:
                 continue
             if record.last_heartbeat_at is None:
                 continue
