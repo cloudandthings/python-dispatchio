@@ -64,23 +64,6 @@ class SharedStateStoreBehaviour:
         assert records[0].job_name == "a"
         assert records[1].job_name == "z"
 
-    def test_heartbeat_creates_running_record(self):
-        now = datetime(2025, 1, 15, 3, 0, tzinfo=timezone.utc)
-        self.store.heartbeat("job", "20250115", at=now)
-        record = self.store.get("job", "20250115")
-        assert record is not None
-        assert record.status == Status.RUNNING
-        assert record.last_heartbeat_at == now
-
-    def test_heartbeat_updates_existing_record(self):
-        self.store.put(_make_record(status=Status.RUNNING))
-        t1 = datetime(2025, 1, 15, 3, 0, tzinfo=timezone.utc)
-        t2 = datetime(2025, 1, 15, 3, 5, tzinfo=timezone.utc)
-        self.store.heartbeat("job", "20250115", at=t1)
-        self.store.heartbeat("job", "20250115", at=t2)
-        record = self.store.get("job", "20250115")
-        assert record.last_heartbeat_at == t2
-
     def test_metadata_preserved(self):
         record = _make_record(metadata={"rows": 1000})
         self.store.put(record)

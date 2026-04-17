@@ -19,7 +19,6 @@ from dispatchio.models import (
     AlertOn,
     Dependency,
     DependencyMode,
-    HeartbeatPolicy,
     JobAction,
     Job,
     RetryPolicy,
@@ -407,70 +406,6 @@ class TestRetryLogic:
         assert not any(r.action == JobAction.RETRYING for r in result.results)
 
 
-# ---------------------------------------------------------------------------
-# Heartbeat / LOST detection
-# ---------------------------------------------------------------------------
-
-
-class TestHeartbeat:
-    def test_job_not_marked_lost_within_timeout(self):
-        j = _job("hb_job", heartbeat=HeartbeatPolicy(timeout_seconds=600))
-        orch, store, executor = _make_orch([j])
-        five_min_ago = REF - timedelta(seconds=300)
-        store.put(
-            RunRecord(
-                job_name="hb_job",
-                run_id="20250115",
-                status=Status.RUNNING,
-                last_heartbeat_at=five_min_ago,
-            )
-        )
-        result = orch.tick(REF)
-        assert not any(r.action == JobAction.MARKED_LOST for r in result.results)
-        assert store.get("hb_job", "20250115").status == Status.RUNNING
-
-    def test_job_marked_lost_after_timeout(self):
-        j = _job("hb_job", heartbeat=HeartbeatPolicy(timeout_seconds=300))
-        orch, store, executor = _make_orch([j])
-        ten_min_ago = REF - timedelta(seconds=600)
-        store.put(
-            RunRecord(
-                job_name="hb_job",
-                run_id="20250115",
-                status=Status.RUNNING,
-                last_heartbeat_at=ten_min_ago,
-            )
-        )
-        result = orch.tick(REF)
-        assert any(r.action == JobAction.MARKED_LOST for r in result.results)
-        assert store.get("hb_job", "20250115").status == Status.LOST
-
-    def test_lost_job_retried_if_policy_allows(self):
-        """
-        LOST detection (step 2) and retry evaluation (step 3) happen in the same
-        tick — LOST job with retries available transitions directly to SUBMITTED.
-        """
-        j = _job(
-            "hb_job",
-            heartbeat=HeartbeatPolicy(timeout_seconds=300),
-            retry_policy=RetryPolicy(max_attempts=3),
-        )
-        orch, store, executor = _make_orch([j])
-        ten_min_ago = REF - timedelta(seconds=600)
-        store.put(
-            RunRecord(
-                job_name="hb_job",
-                run_id="20250115",
-                status=Status.RUNNING,
-                last_heartbeat_at=ten_min_ago,
-                attempt=0,
-            )
-        )
-        result = orch.tick(REF)
-        assert any(r.action == JobAction.MARKED_LOST for r in result.results)
-        assert any(r.action == JobAction.RETRYING for r in result.results)
-        assert store.get("hb_job", "20250115").status == Status.SUBMITTED
-        assert len(executor.calls) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -496,22 +431,6 @@ class TestCompletionReceiver:
         store.put(RunRecord(job_name="j", run_id="20250115", status=Status.RUNNING))
         orch.tick(REF)
         assert store.get("j", "20250115").status == Status.DONE
-
-    def test_heartbeat_event_updates_heartbeat_timestamp(self):
-        j = _job("j", heartbeat=HeartbeatPolicy(timeout_seconds=600))
-        events = [
-            CompletionEvent(
-                job_name="j",
-                run_id="20250115",
-                status=Status.RUNNING,
-                occurred_at=REF,
-            )
-        ]
-        receiver = self.CapturingReceiver(events)
-        orch, store, executor = _make_orch([j], receiver=receiver)
-        store.put(RunRecord(job_name="j", run_id="20250115", status=Status.RUNNING))
-        orch.tick(REF)
-        assert store.get("j", "20250115").last_heartbeat_at == REF
 
     def test_error_event_sets_error_reason(self):
         j = _job("j")

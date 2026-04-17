@@ -14,7 +14,6 @@ Usage:
   dispatchio status [--job JOB] [--run-id RUN_ID] [--status STATUS]
   dispatchio ticks [--limit N] [--since ISO] [--until ISO] [--detail]
   dispatchio record set JOB RUN_ID STATUS [--reason TEXT]
-  dispatchio heartbeat JOB RUN_ID
   dispatchio context add NAME CONFIG_PATH [--description TEXT]
   dispatchio context list
   dispatchio context use NAME
@@ -445,27 +444,6 @@ def record_set(
         )
     store.put(record)
     click.echo(f"Set {job_name}[{run_id}] → {new_status}")
-
-
-# ---------------------------------------------------------------------------
-# heartbeat
-# ---------------------------------------------------------------------------
-
-
-@cli.command()
-@_context_option
-@click.argument("job_name")
-@click.argument("run_id")
-def heartbeat(context_name: str | None, job_name: str, run_id: str):
-    """Send a manual heartbeat for a running job."""
-    store = _load_store_from_context(context_name)
-    if store is None:
-        raise click.ClickException(
-            "Cannot locate state store. Use --context or run from a directory "
-            "with dispatchio.toml."
-        )
-    store.heartbeat(job_name, run_id)
-    click.echo(f"Heartbeat recorded for {job_name}[{run_id}]")
 
 
 # ---------------------------------------------------------------------------

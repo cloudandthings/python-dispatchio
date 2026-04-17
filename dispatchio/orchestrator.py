@@ -4,7 +4,7 @@ Orchestrator — the tick engine.
 The Orchestrator is stateless between runs. Each tick() call has five phases:
 
   1. Drain completion events from the receiver and update state.
-  2. Detect lost jobs (heartbeat timeout exceeded) and mark them LOST.
+  2. Detect lost jobs (via poke or timeout) and mark them LOST.
   3. Evaluate every Job — pure planning, no side effects:
        a. Skip if already active (SUBMITTED/RUNNING) or finished (DONE/ERROR/LOST/SKIPPED).
        b. Skip if time condition is not met.
@@ -315,8 +315,7 @@ class Orchestrator:
         existing = self.state.get(event.job_name, event.run_id)
 
         if event.status == Status.RUNNING:
-            # Heartbeat
-            self.state.heartbeat(event.job_name, event.run_id, at=now)
+            # Ignore RUNNING events (no longer used for liveness detection)
             return
 
         if existing is None:
@@ -409,41 +408,7 @@ class Orchestrator:
                         )
                     # DONE via poke is a success — no result entry needed
                     continue
-                # poke returned RUNNING or None — fall through to heartbeat check
-
-            # Heartbeat-based LOST detection
-            if job.heartbeat is None or record.status != Status.RUNNING:
-                continue
-            if record.last_heartbeat_at is None:
-                continue
-
-            last_hb = record.last_heartbeat_at
-            ref = reference_time
-            if last_hb.tzinfo is None:
-                last_hb = last_hb.replace(tzinfo=timezone.utc)
-            if ref.tzinfo is None:
-                ref = ref.replace(tzinfo=timezone.utc)
-
-            elapsed = (ref - last_hb).total_seconds()
-            if elapsed > job.heartbeat.timeout_seconds:
-                detail = (
-                    f"No heartbeat for {elapsed:.0f}s "
-                    f"(timeout={job.heartbeat.timeout_seconds}s)"
-                )
-                lost_record = record.model_copy(update={"status": Status.LOST})
-                self.state.put(lost_record)
-                logger.warning("Job %s/%s marked LOST. %s", job.name, run_id, detail)
-
-                self._emit_alert(AlertOn.LOST, job, run_id, detail, lost_record)
-
-                results.append(
-                    JobTickResult(
-                        job_name=job.name,
-                        run_id=run_id,
-                        action=JobAction.MARKED_LOST,
-                        detail=detail,
-                    )
-                )
+                # poke returned RUNNING or None — executor cannot determine status
         return results
 
     # ------------------------------------------------------------------
@@ -650,6 +615,14 @@ class Orchestrator:
 
         try:
             executor.submit(job, run_id, reference_time, timeout=self.submit_timeout)
+
+            # Optionally retrieve executor reference if executor implements it
+            if hasattr(executor, "get_executor_reference"):
+                ref = executor.get_executor_reference(job.name, run_id)
+                if ref is not None:
+                    record = record.model_copy(update={"executor_reference": ref})
+                    self.state.put(record)
+
             logger.info("Submitted %s/%s (attempt %d)", job.name, run_id, attempt)
             action = JobAction.RETRYING if attempt > 0 else JobAction.SUBMITTED
             return JobTickResult(

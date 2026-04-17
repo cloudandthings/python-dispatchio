@@ -110,7 +110,7 @@ class TestGetReporter:
         assert "Database connection failed" in content
 
     def test_report_running_writes_running_event(self, tmp_path: Path):
-        """Adapter should write RUNNING (heartbeat) event."""
+        """Adapter should write RUNNING event."""
         fs_reporter = FilesystemReporter(tmp_path)
         reporter = _CompletionReporterAdapter("my_job", fs_reporter)
 

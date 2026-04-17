@@ -9,8 +9,6 @@ the Dispatchio-specific concerns so job code stays pure business logic:
   - Runs the job function inside a try/except.
   - Always posts a completion event (DONE or ERROR) — even if the job
     raises an unexpected exception.
-  - Optionally runs a background heartbeat thread that posts RUNNING
-    events at a fixed interval, enabling LOST detection.
 
 The job function receives only what its signature declares — nothing is
 injected unless the function asks for it by name. Available context keys:
@@ -51,7 +49,6 @@ import inspect
 import logging
 import os
 import sys
-import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -60,48 +57,6 @@ from dispatchio.worker.reporter.base import Reporter
 from dispatchio.worker.reporter.filesystem import FilesystemReporter
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Heartbeat thread
-# ---------------------------------------------------------------------------
-
-
-class _HeartbeatThread(threading.Thread):
-    """
-    Posts a RUNNING event every `interval` seconds until stopped.
-    Runs as a daemon so it never prevents process exit.
-    """
-
-    def __init__(
-        self,
-        job_name: str,
-        run_id: str,
-        reporter: Reporter,
-        interval: int,
-    ) -> None:
-        super().__init__(daemon=True, name=f"dispatchio-heartbeat-{job_name}")
-        self._job_name = job_name
-        self._run_id = run_id
-        self._reporter = reporter
-        self._interval = interval
-        self._stop = threading.Event()
-
-    def run(self) -> None:
-        while not self._stop.wait(timeout=self._interval):
-            try:
-                self._reporter.report(self._job_name, self._run_id, Status.RUNNING)
-                logger.debug("Heartbeat sent for %s/%s", self._job_name, self._run_id)
-            except Exception:
-                logger.warning(
-                    "Heartbeat failed for %s/%s",
-                    self._job_name,
-                    self._run_id,
-                    exc_info=True,
-                )
-
-    def stop(self) -> None:
-        self._stop.set()
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +164,6 @@ def run_job(
     *,
     run_id: str | None = None,
     reporter: Reporter | None = None,
-    heartbeat_interval: int | None = None,
     metadata_fn: Callable[[], dict[str, Any]] | None = None,
 ) -> None:
     """
@@ -229,9 +183,6 @@ def run_job(
                             Defaults to FilesystemReporter if --drop-dir or
                             DISPATCHIO_DROP_DIR is set, otherwise a warning is
                             logged and no event is sent.
-        heartbeat_interval: If set, post a RUNNING event every N seconds in
-                            the background. Match this to HeartbeatPolicy on
-                            the Job.
         metadata_fn:        Optional callable returning a dict of metadata to
                             attach to the DONE event. Called after fn() returns
                             successfully.
@@ -244,15 +195,6 @@ def run_job(
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
     logger.info("Starting job=%s run_id=%s", job_name, resolved_run_id)
-
-    # Start heartbeat thread if requested
-    heartbeat: _HeartbeatThread | None = None
-    if heartbeat_interval is not None and resolved_reporter is not None:
-        heartbeat = _HeartbeatThread(
-            job_name, resolved_run_id, resolved_reporter, heartbeat_interval
-        )
-        heartbeat.start()
-        logger.debug("Heartbeat thread started (interval=%ds)", heartbeat_interval)
 
     context: dict[str, Any] = {"run_id": resolved_run_id, "job_name": job_name}
 
@@ -288,7 +230,3 @@ def run_job(
             )
 
         sys.exit(1)
-
-    finally:
-        if heartbeat is not None:
-            heartbeat.stop()

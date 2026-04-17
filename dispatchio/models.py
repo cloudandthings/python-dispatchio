@@ -2,7 +2,7 @@
 Core Pydantic models for Dispatchio.
 
 All domain concepts live here: job definitions, run records, dependencies,
-retry policies, heartbeat policies, and executor configs.
+retry policies, and executor configs.
 """
 
 from __future__ import annotations
@@ -27,10 +27,10 @@ class Status(str, Enum):
 
     PENDING = "pending"  # known to scheduler, not yet submitted
     SUBMITTED = "submitted"  # handed off to executor, awaiting start confirmation
-    RUNNING = "running"  # executor confirmed start (or heartbeat received)
+    RUNNING = "running"  # executor confirmed start or job posted RUNNING status
     DONE = "done"  # completed successfully
     ERROR = "error"  # failed; error_reason populated
-    LOST = "lost"  # heartbeat timeout — assumed dead
+    LOST = "lost"  # detected lost (e.g. via poke or timeout) — retry policy applied
     SKIPPED = "skipped"  # explicitly skipped (e.g. upstream permanently failed)
 
     # Convenience groupings (not stored as status values)
@@ -76,9 +76,9 @@ class RunRecord(BaseModel):
     submitted_at: datetime | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
-    last_heartbeat_at: datetime | None = None
     error_reason: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    executor_reference: dict[str, Any] | None = None
 
     def is_finished(self) -> bool:
         return self.status in Status.finished()
@@ -147,26 +147,9 @@ class RetryPolicy(BaseModel):
     # populated = only retry when error_reason contains one of these strings
 
 
-# ---------------------------------------------------------------------------
-# Heartbeat policy
-# ---------------------------------------------------------------------------
-
-
-class HeartbeatPolicy(BaseModel):
-    """
-    When set on a job, the orchestrator watches for heartbeat signals.
-    If the job is RUNNING and no heartbeat arrives within `timeout_seconds`,
-    it is marked LOST and the retry policy is applied.
-
-    Jobs send heartbeats by posting a completion event with status="running".
-    """
-
-    timeout_seconds: int = 3600  # mark LOST after this much silence
-    # interval_seconds is informational — used in docs/alerts, not enforced
-    interval_seconds: int = 300  # how often the job SHOULD heartbeat
-
 
 # ---------------------------------------------------------------------------
+
 # Alert conditions
 # ---------------------------------------------------------------------------
 
@@ -281,7 +264,6 @@ class Job(BaseModel):
     dependency_mode: DependencyMode = DependencyMode.ALL_SUCCESS
     dependency_threshold: int | None = None
     retry_policy: RetryPolicy = Field(default_factory=RetryPolicy)
-    heartbeat: HeartbeatPolicy | None = None
     alerts: list[AlertCondition] = Field(default_factory=list)
 
     @model_validator(mode="after")
