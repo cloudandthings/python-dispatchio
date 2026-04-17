@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from datetime import datetime, timezone
 
-from dispatchio.state.memory import MemoryStateStore
+from dispatchio.state.sqlalchemy_ import SQLAlchemyStateStore
 from dispatchio.models import Job, SubprocessJob
 
 
@@ -19,7 +19,7 @@ def ref_time():
 
 @pytest.fixture
 def mem_store():
-    return MemoryStateStore()
+    return SQLAlchemyStateStore("sqlite:///:memory:")
 
 
 @pytest.fixture

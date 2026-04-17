@@ -29,7 +29,7 @@ from dispatchio.models import (
 )
 from dispatchio.orchestrator import Orchestrator
 from dispatchio.receiver.base import CompletionEvent
-from dispatchio.state.memory import MemoryStateStore
+from dispatchio.state.sqlalchemy_ import SQLAlchemyStateStore
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +76,7 @@ class SpyAlertHandler:
 def _make_orch(
     jobs, store=None, executor=None, receiver=None, alert_handler=None, **kwargs
 ):
-    store = store or MemoryStateStore()
+    store = store or SQLAlchemyStateStore("sqlite:///:memory:")
     executor = executor or SpyExecutor()
     return (
         Orchestrator(
@@ -585,7 +585,7 @@ class TestAlerts:
 class TestSubmissionLimit:
     def test_limits_submissions_per_tick(self):
         jobs = [_job(f"j{i}") for i in range(5)]
-        store = MemoryStateStore()
+        store = SQLAlchemyStateStore("sqlite:///:memory:")
         executor = SpyExecutor()
         orch = Orchestrator(
             jobs=jobs,
@@ -599,7 +599,7 @@ class TestSubmissionLimit:
 
     def test_deferred_jobs_submitted_on_subsequent_ticks(self):
         jobs = [_job(f"j{i}") for i in range(3)]
-        store = MemoryStateStore()
+        store = SQLAlchemyStateStore("sqlite:///:memory:")
         executor = SpyExecutor()
         orch = Orchestrator(
             jobs=jobs,
