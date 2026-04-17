@@ -101,8 +101,8 @@ There are two completion paths, both converging on the same SQS queue:
 
 - **Primary (push):** the job or thin Lambda posts to SQS immediately on completion.
 - **Fallback (poke):** the orchestrator actively checks RUNNING jobs each tick via
-  the relevant service API. Handles dropped SQS messages and long-running jobs
-  without requiring worker-side heartbeats.
+  the relevant service API. Handles dropped SQS messages and detects crashes
+  without requiring completion events.
 
 ---
 
@@ -133,9 +133,9 @@ CREATE TABLE IF NOT EXISTS run_records (
     submitted_at    TEXT,
     started_at      TEXT,
     completed_at    TEXT,
-    last_heartbeat_at TEXT,
     error_reason    TEXT,
     metadata        TEXT,   -- JSON blob
+    executor_reference TEXT,  -- JSON blob for executor liveness tracking
     PRIMARY KEY (job_name, run_id)
 );
 ```
@@ -155,7 +155,7 @@ class S3SQLiteStateStore:
         # close connection, upload to S3
         ...
 
-    # implements StateStore protocol: get, put, list_records, heartbeat
+    # implements StateStore protocol: get, put, list_records
 ```
 
 The orchestrator factory would wrap the store in a context manager around the tick:
@@ -381,8 +381,8 @@ def poke(self, record: RunRecord) -> Status | None:
 
 The orchestrator checks for `Pokeable` executors during Phase 2 (detect lost jobs)
 and calls `poke()` for any RUNNING record. If the service confirms the job is done,
-the state is updated directly without waiting for SQS. This replaces heartbeat-based
-LOST detection for cloud-managed jobs — the service itself is the source of truth.
+the state is updated directly without waiting for SQS. This enables direct liveness
+checks for cloud-managed jobs — the service itself is the source of truth.
 
 ---
 
@@ -481,7 +481,7 @@ This may have been done already.
 
 1. **`Pokeable` protocol in core** — optional method on executors; orchestrator calls it during Phase 2 (lost detection) for RUNNING jobs
 2. **`PythonJobExecutor.poke()`** — check whether the spawned subprocess PID is still alive
-3. **`SubprocessExecutor.poke()`** — same; both replace heartbeat-based LOST detection for local jobs
+3. **`SubprocessExecutor.poke()`** — same; both enable active liveness checks for local jobs
 
 ### Phase 4 — Step Functions + thin completion Lambda
 

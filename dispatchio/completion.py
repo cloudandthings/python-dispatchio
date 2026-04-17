@@ -45,7 +45,7 @@ class CompletionReporter(Protocol):
         ...
 
     def report_running(self, run_id: str) -> None:
-        """Send heartbeat (status=running)."""
+        """Report job is still running (posts RUNNING status)."""
         ...
 
 
@@ -72,7 +72,7 @@ class _CompletionReporterAdapter:
 
     def report_running(self, run_id: str) -> None:
         if self.reporter is None:
-            logger.warning("No reporter configured; heartbeat NOT sent")
+            logger.warning("No reporter configured; RUNNING status NOT sent")
             return
         self.reporter.report(self.job_name, run_id, Status.RUNNING)
 

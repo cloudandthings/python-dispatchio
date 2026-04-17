@@ -139,7 +139,7 @@ class CompletionReporter(Protocol):
         ...
 
     def report_running(self, run_id: str) -> None:
-        """Send heartbeat (for long-running jobs)."""
+        """Report that job is still running (posts RUNNING status)."""
         ...
 ```
 

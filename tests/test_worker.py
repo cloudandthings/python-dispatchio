@@ -7,13 +7,12 @@ logic with explicit run_id and a spy reporter, keeping tests fast and clean.
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
 import pytest
 
 from dispatchio.models import Status
-from dispatchio.worker.harness import run_job, _HeartbeatThread
+from dispatchio.worker.harness import run_job
 
 
 # ---------------------------------------------------------------------------
@@ -167,58 +166,6 @@ class TestNoReporter:
             sys.argv = orig_argv
 
 
-# ---------------------------------------------------------------------------
-# Heartbeat thread
-# ---------------------------------------------------------------------------
-
-
-class TestHeartbeatThread:
-    def test_posts_running_events_at_interval(self):
-        spy = SpyReporter()
-        thread = _HeartbeatThread("j", "20250115", spy, interval=1)
-        thread.start()
-        time.sleep(2.5)
-        thread.stop()
-        thread.join(timeout=2)
-
-        running_events = [c for c in spy.calls if c["status"] == Status.RUNNING]
-        # Should have fired at ~1s and ~2s
-        assert len(running_events) >= 2
-
-    def test_stops_cleanly(self):
-        spy = SpyReporter()
-        thread = _HeartbeatThread("j", "20250115", spy, interval=10)
-        thread.start()
-        thread.stop()
-        thread.join(timeout=2)
-        assert not thread.is_alive()
-
-    def test_heartbeat_runs_during_job(self):
-        """run_job with heartbeat_interval posts RUNNING then DONE."""
-        spy = SpyReporter()
-
-        def slow_job(run_id):
-            time.sleep(1.2)
-
-        _run(slow_job, reporter=spy, heartbeat_interval=1)
-
-        statuses = spy.statuses()
-        assert Status.RUNNING in statuses
-        assert statuses[-1] == Status.DONE
-
-    def test_heartbeat_runs_during_failed_job(self):
-        """Even a failing job with heartbeats ends with ERROR, not RUNNING."""
-        spy = SpyReporter()
-
-        def slow_fail(run_id):
-            time.sleep(1.2)
-            raise RuntimeError("late failure")
-
-        _run(slow_fail, reporter=spy, heartbeat_interval=1)
-
-        statuses = spy.statuses()
-        assert Status.RUNNING in statuses
-        assert statuses[-1] == Status.ERROR
 
 
 # ---------------------------------------------------------------------------

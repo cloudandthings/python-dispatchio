@@ -6,7 +6,6 @@ from dispatchio.cadence import DAILY, MONTHLY
 from dispatchio.conditions import TimeOfDayCondition
 from dispatchio.models import (
     Dependency,
-    HeartbeatPolicy,
     HttpJob,
     JobAction,
     Job,
@@ -122,7 +121,6 @@ class TestJob:
         )
         assert j.cadence is None  # inherits orchestrator default
         assert j.depends_on == []
-        assert j.heartbeat is None
         assert j.condition is None
 
     def test_dependency_list(self):
@@ -207,14 +205,6 @@ class TestJob:
     def test_retry_policy_default_no_retries(self):
         j = Job(name="j", executor=SubprocessJob(command=["x"]))
         assert j.retry_policy.max_attempts == 1
-
-    def test_heartbeat_policy(self):
-        j = Job(
-            name="j",
-            executor=SubprocessJob(command=["x"]),
-            heartbeat=HeartbeatPolicy(timeout_seconds=600),
-        )
-        assert j.heartbeat.timeout_seconds == 600
 
 
 class TestTickResult:

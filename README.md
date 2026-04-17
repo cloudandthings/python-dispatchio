@@ -20,7 +20,7 @@ downstream jobs.
 cron (every 5 min)
     └─► Orchestrator.tick()
             ├─ drain completion events from queue/filesystem
-            ├─ detect lost jobs (heartbeat timeout)
+            ├─ detect lost jobs (via poke or timeout)
             └─ for each job:
                   ├─ skip if already active or done
                   ├─ check time condition  (after="01:00")
@@ -267,7 +267,7 @@ Dependency(job_name="daily_load", run_id_expr="mon0")
 PENDING → SUBMITTED → RUNNING → DONE
                     ↘          ↘
                      ERROR       (retry → SUBMITTED)
-                     LOST        (heartbeat timeout → retry or alert)
+                     LOST        (poke detection → retry or alert)
                      SKIPPED
 ```
 
@@ -311,39 +311,6 @@ RetryPolicy(max_attempts=3, retry_on=["timeout", "503"])  # only retry on matchi
 `retry_on` matches substrings of the `error_reason` field in the completion event.
 If `retry_on` is empty, any error triggers a retry (up to `max_attempts`).
 
-### Heartbeating
-
-For long-running jobs, enable heartbeat monitoring so Dispatchio can detect a job
-that started but died silently:
-
-```python
-from dispatchio import HeartbeatPolicy
-
-Job(
-    name="long_etl",
-    heartbeat=HeartbeatPolicy(
-        timeout_seconds=1800,    # mark LOST if no heartbeat for 30 min
-        interval_seconds=300,    # job should heartbeat every 5 min
-    ),
-    retry_policy=RetryPolicy(max_attempts=3),
-    ...
-)
-```
-
-From the job, send a heartbeat by posting a `status=running` event:
-
-```python
-# periodic heartbeat from within your job
-(drop / f"long_etl__{run_id}__running.json").write_text(json.dumps({
-    "job_name": "long_etl",
-    "run_id":   run_id,
-    "status":   "running",
-}))
-```
-
-If no heartbeat arrives within `timeout_seconds`, the job is marked `LOST` and
-the retry policy is applied (same as for `ERROR`).
-
 ### Alerts
 
 ```python
@@ -362,7 +329,7 @@ Job(
 
 Alert conditions:
 - `ERROR` — fired when retries are exhausted
-- `LOST` — fired when a job exceeds its heartbeat timeout
+- `LOST` — fired when a job is detected as lost (via poke or timeout)
 - `NOT_STARTED_BY` — fired when the job hasn't been submitted by a given time
 - `SUCCESS` — fired when the job completes successfully
 
@@ -608,14 +575,6 @@ dispatchio record set ingest 20250115 done
 dispatchio record set ingest 20250115 error --reason "manual reset"
 ```
 
-### `dispatchio heartbeat`
-
-Send a manual heartbeat for a running job.
-
-```bash
-dispatchio heartbeat long_etl 20250115
-```
-
 ---
 
 ## Multi-master setup
@@ -742,11 +701,10 @@ from dispatchio.models import RunRecord, Status
 class MyStateStore:
     def get(self, job_name: str, run_id: str) -> RunRecord | None: ...
     def put(self, record: RunRecord) -> None: ...
-    def heartbeat(self, job_name: str, run_id: str, at=None) -> None: ...
     def list_records(self, job_name=None, status=None) -> list[RunRecord]: ...
 ```
 
-Any object implementing these four methods works — no base class required.
+Any object implementing these three methods works — no base class required.
 
 ### Custom completion receiver
 

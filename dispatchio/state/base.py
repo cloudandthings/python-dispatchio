@@ -26,14 +26,6 @@ class StateStore(Protocol):
         """Upsert a RunRecord. Overwrites any existing record for the same key."""
         ...
 
-    def heartbeat(self, job_name: str, run_id: str, at: datetime | None = None) -> None:
-        """
-        Update last_heartbeat_at for a RUNNING job.
-        Creates a RUNNING record if none exists (first heartbeat = implicit start).
-        `at` defaults to datetime.utcnow() if not provided.
-        """
-        ...
-
     def list_records(
         self,
         job_name: str | None = None,

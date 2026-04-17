@@ -45,8 +45,8 @@ class Pokeable(Protocol):
     """
     Optional protocol for executors that can actively check job liveness.
 
-    Implement this alongside Executor to enable poke-based liveness checks
-    as an alternative or complement to heartbeat-based LOST detection.
+    Implement this alongside Executor to enable active liveness checks
+    as an alternative or complement to process polling mechanisms.
     The orchestrator calls poke() during Phase 2 for every active job whose
     executor implements this protocol.
 
@@ -56,7 +56,8 @@ class Pokeable(Protocol):
                          a completion event; the orchestrator marks the job DONE
         Status.ERROR   — process died unexpectedly; orchestrator marks ERROR
         None           — liveness cannot be determined (e.g. job not tracked
-                         by this executor instance); fall back to heartbeat logic
+                         by this executor instance); orchestrator falls back to
+                         other liveness mechanisms
     """
 
     def poke(self, record: RunRecord) -> Status | None:

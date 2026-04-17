@@ -84,14 +84,14 @@ class _RunRecordRow(_Base):
     completed_at: Mapped[datetime | None] = mapped_column(
         _UTCDateTime, nullable=True, index=True
     )
-    last_heartbeat_at: Mapped[datetime | None] = mapped_column(
-        _UTCDateTime, nullable=True
-    )
     error_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Column name is "metadata" in DB; attribute is metadata_ to avoid shadowing
     # SQLAlchemy's own metadata descriptor on mapped classes.
     metadata_: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSON, nullable=False, default=dict
+    )
+    executor_reference: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True
     )
 
     __table_args__ = (UniqueConstraint("job_name", "run_id", name="uq_job_run"),)
@@ -111,9 +111,9 @@ def _row_to_record(row: _RunRecordRow) -> RunRecord:
         submitted_at=row.submitted_at,
         started_at=row.started_at,
         completed_at=row.completed_at,
-        last_heartbeat_at=row.last_heartbeat_at,
         error_reason=row.error_reason,
         metadata=row.metadata_ or {},
+        executor_reference=row.executor_reference,
     )
 
 
@@ -126,9 +126,9 @@ def _apply_record_to_row(record: RunRecord, row: _RunRecordRow) -> None:
     row.submitted_at = record.submitted_at
     row.started_at = record.started_at
     row.completed_at = record.completed_at
-    row.last_heartbeat_at = record.last_heartbeat_at
     row.error_reason = record.error_reason
     row.metadata_ = record.metadata
+    row.executor_reference = record.executor_reference
 
 
 # ---------------------------------------------------------------------------
@@ -199,33 +199,6 @@ class SQLAlchemyStateStore:
                 session.add(row)
             else:
                 _apply_record_to_row(record, existing)
-            session.commit()
-
-    def heartbeat(
-        self, job_name: str, run_id: str, at: datetime | None = None
-    ) -> None:
-        now = at or datetime.now(tz=timezone.utc)
-        with Session(self._engine) as session:
-            existing = session.scalar(
-                select(_RunRecordRow).where(
-                    _RunRecordRow.job_name == job_name,
-                    _RunRecordRow.run_id == run_id,
-                )
-            )
-            if existing is None:
-                row = _RunRecordRow(
-                    job_name=job_name,
-                    run_id=run_id,
-                    status=Status.RUNNING.value,
-                    attempt=0,
-                    started_at=now,
-                    last_heartbeat_at=now,
-                    metadata_={},
-                )
-                session.add(row)
-            else:
-                existing.last_heartbeat_at = now
-                existing.status = Status.RUNNING.value
             session.commit()
 
     def list_records(
