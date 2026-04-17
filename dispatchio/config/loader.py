@@ -285,18 +285,39 @@ def _build_state(cfg: StateSettings):
 def _build_reporter_env(cfg: ReceiverSettings) -> dict[str, str]:
     """
     Build the env vars that PythonJobExecutor injects into spawned subprocesses
-    so the run_job() harness can auto-configure the correct reporter.
+    so jobs can auto-configure the correct reporter.
+
+    Environment variables follow DISPATCHIO_RECEIVER__* convention:
+      - DISPATCHIO_RECEIVER__BACKEND: receiver backend type
+      - DISPATCHIO_RECEIVER__DROP_DIR: for filesystem backend
+      - DISPATCHIO_RECEIVER__QUEUE_URL: for SQS backend
+      - DISPATCHIO_RECEIVER__REGION: for SQS backend
+
+    Also emits legacy DISPATCHIO_DROP_DIR for backward compatibility.
     """
+    env: dict[str, str] = {}
+
+    # Emit backend type
+    env["DISPATCHIO_RECEIVER__BACKEND"] = cfg.backend
+
     if cfg.backend == "filesystem":
-        return {"DISPATCHIO_DROP_DIR": str(cfg.drop_dir)}
-    if cfg.backend == "sqs":
-        env: dict[str, str] = {}
+        drop_dir = str(cfg.drop_dir)
+        env["DISPATCHIO_RECEIVER__DROP_DIR"] = drop_dir
+        # Backward compatibility
+        env["DISPATCHIO_DROP_DIR"] = drop_dir
+
+    elif cfg.backend == "sqs":
+        if cfg.queue_url:
+            env["DISPATCHIO_RECEIVER__QUEUE_URL"] = cfg.queue_url
+        if cfg.region:
+            env["DISPATCHIO_RECEIVER__REGION"] = cfg.region
+        # Backward compatibility
         if cfg.queue_url:
             env["DISPATCHIO_SQS_QUEUE_URL"] = cfg.queue_url
         if cfg.region:
             env["DISPATCHIO_SQS_REGION"] = cfg.region
-        return env
-    return {}
+
+    return env
 
 
 def _build_receiver(cfg: ReceiverSettings):

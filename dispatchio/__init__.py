@@ -71,6 +71,7 @@ from dispatchio.state import SQLAlchemyStateStore
 from dispatchio.executor import SubprocessExecutor, PythonJobExecutor
 from dispatchio.receiver import FilesystemReceiver
 from dispatchio.config import DispatchioSettings, load_config, orchestrator_from_config
+from dispatchio.completion import CompletionReporter, get_reporter, build_reporter
 from dispatchio.simulate import simulate
 from dispatchio.tick_log import FilesystemTickLogStore, TickLogRecord, TickLogStore
 from dispatchio.contexts import ContextEntry, ContextStore
@@ -169,6 +170,10 @@ __all__ = [
     "DispatchioSettings",
     "load_config",
     "orchestrator_from_config",
+    # Completion reporters
+    "CompletionReporter",
+    "get_reporter",
+    "build_reporter",
     # Utilities
     "resolve_run_id",
     # Development / demos
