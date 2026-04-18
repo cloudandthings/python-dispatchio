@@ -25,6 +25,10 @@ EXAMPLES: tuple[ExampleCase, ...] = (
     ExampleCase("cadence", REPO_ROOT / "examples" / "cadence" / "run.py"),
     ExampleCase("conditions", REPO_ROOT / "examples" / "conditions" / "run.py"),
     ExampleCase(
+        "event_dependencies",
+        REPO_ROOT / "examples" / "event_dependencies" / "run.py",
+    ),
+    ExampleCase(
         "dependency_modes",
         REPO_ROOT / "examples" / "dependency_modes" / "run.py",
     ),

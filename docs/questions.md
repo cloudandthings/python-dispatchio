@@ -1,12 +1,3 @@
-# event-driven updates
-
-eg:
-
-trigger event 1 -> job1
-job1 completed -> job2
-
-Seemingly this just need an interface for event dependencies.
-
 # Reruns
 
 Attempts

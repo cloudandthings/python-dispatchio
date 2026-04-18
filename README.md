@@ -565,6 +565,9 @@ reporter.report_success(run_id, metadata={"rows": 1000})
 
 No changes needed. See [Completion Reporting](docs/completion_reporting.md) for full details.
 
+For event-driven pipelines, see [Event Dependencies](docs/external_events.md)
+for single-event and two-event fan-in patterns using the existing receiver queue.
+
 ---
 
 ## CLI reference

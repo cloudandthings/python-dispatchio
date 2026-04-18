@@ -110,7 +110,7 @@ def build_reporter(
 
     if receiver_settings.backend == "sqs":
         try:
-            from dispatchio_aws.worker.reporter.sqs import SQSReporter  # type: ignore[import]
+            from dispatchio_aws.reporter.sqs import SQSReporter  # type: ignore[import]
 
             return SQSReporter(
                 queue_url=receiver_settings.queue_url,
@@ -123,6 +123,95 @@ def build_reporter(
             )
 
     raise ValueError(f"Unknown receiver backend: {receiver_settings.backend!r}")
+
+
+def _reporter_from_env() -> Reporter | None:
+    """Create a Reporter using DISPATCHIO_RECEIVER__* environment variables."""
+    backend = os.environ.get("DISPATCHIO_RECEIVER__BACKEND", "filesystem").lower()
+
+    if backend == "none":
+        return None
+
+    if backend == "filesystem":
+        drop_dir = os.environ.get(
+            "DISPATCHIO_RECEIVER__DROP_DIR", ".dispatchio/completions"
+        )
+        settings = ReceiverSettings(backend="filesystem", drop_dir=drop_dir)
+        return build_reporter(settings)
+
+    if backend == "sqs":
+        queue_url = os.environ.get("DISPATCHIO_RECEIVER__QUEUE_URL")
+        region = os.environ.get("DISPATCHIO_RECEIVER__REGION")
+        if not queue_url:
+            raise ValueError("SQS backend requires DISPATCHIO_RECEIVER__QUEUE_URL")
+        settings = ReceiverSettings(
+            backend="sqs",
+            queue_url=queue_url,
+            region=region,
+        )
+        return build_reporter(settings)
+
+    raise ValueError(f"Unknown DISPATCHIO_RECEIVER__BACKEND: {backend!r}")
+
+
+def report_external_event(
+    event_name: str,
+    run_id: str,
+    *,
+    status: Status = Status.DONE,
+    error_reason: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    receiver_settings: ReceiverSettings | None = None,
+) -> bool:
+    """
+    Publish an external dependency event through the configured receiver backend.
+
+    Args:
+        event_name: External dependency key, typically prefixed with "external.".
+        run_id: Run identifier used by downstream dependency checks.
+        status: Status to report (defaults to DONE).
+        error_reason: Optional error message for ERROR events.
+        metadata: Optional event metadata.
+        receiver_settings: Optional explicit receiver settings. If omitted,
+            DISPATCHIO_RECEIVER__* environment variables are used.
+
+    Returns:
+        True if an event was published, False when backend is "none".
+    """
+    reporter = (
+        build_reporter(receiver_settings)
+        if receiver_settings is not None
+        else _reporter_from_env()
+    )
+    if reporter is None:
+        logger.warning("No reporter configured; external event NOT sent")
+        return False
+
+    reporter.report(
+        event_name,
+        run_id,
+        status,
+        error_reason=error_reason,
+        metadata=metadata,
+    )
+    return True
+
+
+def report_external_done(
+    event_name: str,
+    run_id: str,
+    *,
+    metadata: dict[str, Any] | None = None,
+    receiver_settings: ReceiverSettings | None = None,
+) -> bool:
+    """Convenience helper to publish a DONE event for an external dependency."""
+    return report_external_event(
+        event_name,
+        run_id,
+        status=Status.DONE,
+        metadata=metadata,
+        receiver_settings=receiver_settings,
+    )
 
 
 def get_reporter(job_name: str) -> CompletionReporter:
@@ -153,35 +242,4 @@ def get_reporter(job_name: str) -> CompletionReporter:
             except Exception as exc:
                 reporter.report_error(run_id, str(exc))
     """
-    backend = os.environ.get("DISPATCHIO_RECEIVER__BACKEND", "filesystem").lower()
-
-    if backend == "none":
-        return _CompletionReporterAdapter(job_name, None)
-
-    if backend == "filesystem":
-        drop_dir = os.environ.get(
-            "DISPATCHIO_RECEIVER__DROP_DIR", ".dispatchio/completions"
-        )
-        from dispatchio.worker.reporter.filesystem import FilesystemReporter
-
-        reporter = FilesystemReporter(drop_dir)
-        return _CompletionReporterAdapter(job_name, reporter)
-
-    if backend == "sqs":
-        try:
-            from dispatchio_aws.worker.reporter.sqs import SQSReporter  # type: ignore[import]
-
-            queue_url = os.environ.get("DISPATCHIO_RECEIVER__QUEUE_URL")
-            region = os.environ.get("DISPATCHIO_RECEIVER__REGION")
-            if not queue_url:
-                raise ValueError("SQS backend requires DISPATCHIO_RECEIVER__QUEUE_URL")
-
-            reporter = SQSReporter(queue_url=queue_url, region=region)
-            return _CompletionReporterAdapter(job_name, reporter)
-        except ImportError:
-            raise ImportError(
-                "SQS receiver backend requires dispatchio[aws]. "
-                "Install with: pip install dispatchio[aws]"
-            )
-
-    raise ValueError(f"Unknown DISPATCHIO_RECEIVER__BACKEND: {backend!r}")
+    return _CompletionReporterAdapter(job_name, _reporter_from_env())
