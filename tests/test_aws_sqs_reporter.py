@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 import boto3
 from moto import mock_aws
 
@@ -14,8 +16,17 @@ def test_report_posts_event_to_sqs() -> None:
     sqs = boto3.client("sqs", region_name="eu-west-1")
     queue_url = sqs.create_queue(QueueName="dispatchio-completions")["QueueUrl"]
 
+    attempt_id = uuid4()
     reporter = SQSReporter(queue_url=queue_url, region="eu-west-1")
-    reporter.report("ingest", "20260414", Status.DONE, metadata={"rows": 42})
+    reporter.report(
+        "ingest",
+        "20260414",
+        Status.DONE,
+        metadata={"rows": 42},
+        logical_run_id="20260414",
+        attempt=0,
+        dispatchio_attempt_id=attempt_id,
+    )
 
     receiver = SQSReceiver(queue_url=queue_url, region="eu-west-1")
     events = receiver.drain()
@@ -25,6 +36,8 @@ def test_report_posts_event_to_sqs() -> None:
     assert events[0].run_id == "20260414"
     assert events[0].status == Status.DONE
     assert events[0].metadata["rows"] == 42
+    assert events[0].attempt == 0
+    assert events[0].dispatchio_attempt_id == attempt_id
 
 
 @mock_aws

@@ -24,10 +24,11 @@ import subprocess
 import sys
 import time
 from datetime import datetime
+from uuid import UUID
 
 import psutil
 
-from dispatchio.models import Job, PythonJob, RunRecord, Status
+from dispatchio.models import AttemptRecord, Job, PythonJob, Status
 
 logger = logging.getLogger(__name__)
 
@@ -52,13 +53,15 @@ class PythonJobExecutor:
 
     def __init__(self, reporter_env: dict[str, str] | None = None) -> None:
         self._reporter_env: dict[str, str] = reporter_env or {}
-        self._processes: dict[tuple[str, str], subprocess.Popen] = {}
-        self._references: dict[tuple[str, str], dict] = {}
+        self._processes: dict[
+            str, subprocess.Popen
+        ] = {}  # keyed by str(dispatchio_attempt_id)
+        self._references: dict[str, dict] = {}  # keyed by str(dispatchio_attempt_id)
 
     def submit(
         self,
         job: Job,
-        run_id: str,
+        attempt: AttemptRecord,
         reference_time: datetime,
         timeout: float | None = None,
     ) -> None:
@@ -82,7 +85,13 @@ class PythonJobExecutor:
                 cfg.function,
             ]
 
-        env = {**os.environ, **self._reporter_env, "DISPATCHIO_RUN_ID": run_id}
+        env = {
+            **os.environ,
+            **self._reporter_env,
+            "DISPATCHIO_RUN_ID": attempt.logical_run_id,
+            "DISPATCHIO_ATTEMPT": str(attempt.attempt),
+            "DISPATCHIO_ATTEMPT_ID": str(attempt.dispatchio_attempt_id),
+        }
 
         if cfg.pythonpath:
             extra = os.pathsep.join(str(p) for p in cfg.pythonpath)
@@ -96,13 +105,14 @@ class PythonJobExecutor:
             stderr=subprocess.DEVNULL,
             close_fds=True,
         )
-        self._processes[(job.name, run_id)] = proc
-        self._references[(job.name, run_id)] = {
+        attempt_id_str = str(attempt.dispatchio_attempt_id)
+        self._processes[attempt_id_str] = proc
+        self._references[attempt_id_str] = {
             "pid": proc.pid,
             "start_time": time.time(),
         }
 
-    def poke(self, record: RunRecord) -> Status | None:
+    def poke(self, record: AttemptRecord) -> Status | None:
         """
         Check whether the spawned subprocess is still alive.
 
@@ -111,24 +121,26 @@ class PythonJobExecutor:
         non-zero code, or None if the process cannot be determined.
 
         First checks in-memory process table (hot path). If not found and
-        executor_reference is available (survived orchestrator restart),
+        trace.executor is available (survived orchestrator restart),
         looks up the process by PID.
         """
+        attempt_id_str = str(record.dispatchio_attempt_id)
         # Hot path: check in-memory process table
-        proc = self._processes.get((record.job_name, record.run_id))
+        proc = self._processes.get(attempt_id_str)
         if proc is not None:
             returncode = proc.poll()
             if returncode is None:
                 return Status.RUNNING
-            del self._processes[(record.job_name, record.run_id)]
+            del self._processes[attempt_id_str]
             return Status.DONE if returncode == 0 else Status.ERROR
 
-        # Cold path: lookup by PID from executor_reference (after restart)
-        if not record.executor_reference:
+        # Cold path: lookup by PID from trace.executor (after restart)
+        executor_trace = record.trace.get("executor", {})
+        if not executor_trace:
             return None
 
-        pid = record.executor_reference.get("pid")
-        start_time = record.executor_reference.get("start_time")
+        pid = executor_trace.get("pid")
+        start_time = executor_trace.get("start_time")
 
         if pid is None:
             return None
@@ -142,10 +154,11 @@ class PythonJobExecutor:
                 # Allow 1 second tolerance for floating point precision
                 if abs(proc_start - start_time) > 1.0:
                     logger.warning(
-                        "PID %d reused or stale for %s/%s (start time mismatch)",
+                        "PID %d reused or stale for %s/%s/%d (start time mismatch)",
                         pid,
                         record.job_name,
-                        record.run_id,
+                        record.logical_run_id,
+                        record.attempt,
                     )
                     return Status.ERROR
 
@@ -158,10 +171,10 @@ class PythonJobExecutor:
             # Process doesn't exist or can't be accessed — it's dead
             return Status.ERROR
 
-    def get_executor_reference(self, job_name: str, run_id: str) -> dict | None:
+    def get_executor_reference(self, dispatchio_attempt_id: UUID) -> dict | None:
         """
-        Retrieve the executor reference for a given job/run_id.
-        Used by orchestrator to populate RunRecord.executor_reference.
+        Retrieve the executor reference for an attempt UUID.
+        Used by orchestrator to populate AttemptRecord.trace.executor.
         Returns {"pid": ..., "start_time": ...} or None if not tracked.
         """
-        return self._references.get((job_name, run_id))
+        return self._references.get(str(dispatchio_attempt_id))

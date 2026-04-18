@@ -28,12 +28,13 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 import importlib.util
 
 import click
 
-from dispatchio.models import RunRecord, Status, TickResult
+from dispatchio.models import AttemptRecord, Status, TickResult
 from dispatchio.orchestrator import Orchestrator
 from dispatchio.state import SQLAlchemyStateStore
 
@@ -321,10 +322,10 @@ def status(
             "with dispatchio.toml."
         )
     status_filter = Status(filter_status) if filter_status else None
-    records = store.list_records(job_name=job, status=status_filter)
+    records = store.list_attempts(job_name=job, status=status_filter)
 
     if run_id:
-        records = [r for r in records if r.run_id == run_id]
+        records = [r for r in records if r.logical_run_id == run_id]
 
     if not records:
         click.echo("No records found.")
@@ -436,20 +437,276 @@ def record_set(
             "Cannot locate state store. Use --context or run from a directory "
             "with dispatchio.toml."
         )
-    existing = store.get(job_name, run_id)
+    existing = store.get_latest_attempt(job_name, run_id)
     if existing is None:
-        record = RunRecord(
+        record = AttemptRecord(
             job_name=job_name,
-            run_id=run_id,
+            logical_run_id=run_id,
+            attempt=0,
+            dispatchio_attempt_id=uuid4(),
             status=Status(new_status),
-            error_reason=reason,
+            reason=reason,
         )
+        store.append_attempt(record)
     else:
         record = existing.model_copy(
-            update={"status": Status(new_status), "error_reason": reason}
+            update={"status": Status(new_status), "reason": reason}
         )
-    store.put(record)
+        store.update_attempt(record)
     click.echo(f"Set {job_name}[{run_id}] → {new_status}")
+
+
+# ---------------------------------------------------------------------------
+# retry
+# ---------------------------------------------------------------------------
+
+
+@cli.group("retry")
+def retry_group():
+    """Create and list manual retry requests."""
+
+
+@retry_group.command("create")
+@_orch_option
+@_context_option
+@click.option("--run-id", "-r", required=True, help="Logical run ID to retry.")
+@click.option(
+    "--jobs",
+    "-j",
+    multiple=True,
+    help="Jobs to retry. If omitted, retries all failed jobs for the run.",
+)
+@click.option("--reason", default=None, help="Reason for this retry.")
+@click.option(
+    "--operator",
+    default="cli",
+    show_default=True,
+    help="Name/ID of the operator requesting the retry.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Print selected jobs and assigned attempt numbers without writing state.",
+)
+def retry_create(
+    orchestrator: str | None,
+    context_name: str | None,
+    run_id: str,
+    jobs: tuple[str, ...],
+    reason: str | None,
+    operator: str,
+    dry_run: bool,
+):
+    """Create a manual retry for one or more jobs.
+
+    \b
+    Examples:
+      dispatchio retry create --run-id 20260418
+      dispatchio retry create --run-id 20260418 --jobs load_sales --jobs enrich
+      dispatchio retry create --run-id 20260418 --reason "upstream data corrected"
+      dispatchio retry create --run-id 20260418 --dry-run
+    """
+    orch_path = _resolve_orchestrator_path(orchestrator)
+    if not orch_path:
+        raise click.ClickException(
+            "Specify an orchestrator with --orchestrator or DISPATCHIO_ORCHESTRATOR"
+        )
+    orch = _load_orchestrator(orch_path)
+
+    # Resolve target jobs: explicit list or all terminal-failed for this run
+    if jobs:
+        target_jobs = list(jobs)
+    else:
+        all_attempts = orch.state.list_attempts(logical_run_id=run_id)
+        latest_by_job: dict[str, AttemptRecord] = {}
+        for rec in all_attempts:
+            if (
+                rec.job_name not in latest_by_job
+                or rec.attempt > latest_by_job[rec.job_name].attempt
+            ):
+                latest_by_job[rec.job_name] = rec
+        target_jobs = [
+            name
+            for name, rec in latest_by_job.items()
+            if rec.status in (Status.ERROR, Status.LOST)
+        ]
+
+    if not target_jobs:
+        click.echo("No failed jobs found for this run.")
+        return
+
+    if dry_run:
+        click.echo(f"[dry-run] Would retry {len(target_jobs)} job(s) for run {run_id}:")
+        for job_name in sorted(target_jobs):
+            latest = orch.state.get_latest_attempt(job_name, run_id)
+            next_attempt = (latest.attempt + 1) if latest else 0
+            click.echo(f"  {job_name}  attempt={next_attempt}")
+        return
+
+    click.echo(f"Retrying {len(target_jobs)} job(s) for run {run_id}:")
+    for job_name in sorted(target_jobs):
+        try:
+            new_rec = orch.manual_retry(
+                job_name, run_id, operator_name=operator, operator_reason=reason or ""
+            )
+            click.echo(
+                click.style(f"  ↺ {job_name}  attempt={new_rec.attempt}", fg="cyan")
+            )
+        except ValueError as e:
+            click.echo(click.style(f"  ✗ {job_name}  {e}", fg="red"))
+
+
+@retry_group.command("list")
+@_context_option
+@click.option("--run-id", "-r", default=None, help="Filter by logical run ID.")
+@click.option("--job", "-j", default=None, help="Filter by job name.")
+@click.option(
+    "--attempt", "-a", default=None, type=int, help="Filter by attempt number."
+)
+@click.option(
+    "--filter",
+    "view",
+    default="attempts",
+    type=click.Choice(["attempts", "requests"]),
+    show_default=True,
+    help="'attempts' shows execution history; 'requests' shows manual retry audit log.",
+)
+@click.option("--limit", "-n", default=50, show_default=True, help="Max rows to show.")
+def retry_list(
+    context_name: str | None,
+    run_id: str | None,
+    job: str | None,
+    attempt: int | None,
+    view: str,
+    limit: int,
+):
+    """List attempt history or manual retry requests.
+
+    \b
+    Examples:
+      dispatchio retry list
+      dispatchio retry list --run-id 20260418
+      dispatchio retry list --filter requests
+    """
+    store = _load_store_from_context(context_name)
+    if store is None:
+        raise click.ClickException(
+            "Cannot locate state store. Use --context or run from a directory "
+            "with dispatchio.toml."
+        )
+
+    if view == "requests":
+        requests = store.list_retry_requests(logical_run_id=run_id)
+        if job:
+            requests = [r for r in requests if job in r.selected_jobs]
+        requests = requests[:limit]
+        if not requests:
+            click.echo("No retry requests found.")
+            return
+        header = f"{'REQUESTED_AT':<27} {'BY':<16} {'RUN_ID':<14} {'JOBS'}"
+        click.echo(header)
+        click.echo("─" * len(header))
+        for r in requests:
+            jobs_str = ", ".join(r.selected_jobs)
+            click.echo(
+                f"  {r.requested_at.isoformat():<25} {r.requested_by:<16} "
+                f"{r.logical_run_id:<14} {jobs_str}"
+            )
+    else:
+        records = store.list_attempts(
+            job_name=job,
+            logical_run_id=run_id,
+            attempt=attempt,
+        )
+        records = records[:limit]
+        if not records:
+            click.echo("No attempts found.")
+            return
+        _print_records(records)
+
+
+# ---------------------------------------------------------------------------
+# cancel
+# ---------------------------------------------------------------------------
+
+
+@cli.command("cancel")
+@_context_option
+@click.option("--run-id", "-r", required=True, help="Logical run ID.")
+@click.option("--job", "-j", required=True, help="Job name.")
+@click.option(
+    "--attempt",
+    "-a",
+    default=None,
+    type=int,
+    help="Attempt number. Defaults to latest active attempt.",
+)
+@click.option("--reason", default=None, help="Reason for cancellation.")
+@click.option(
+    "--operator",
+    default="cli",
+    show_default=True,
+    help="Name/ID of the operator requesting cancellation.",
+)
+def cancel(
+    context_name: str | None,
+    run_id: str,
+    job: str,
+    attempt: int | None,
+    reason: str | None,
+    operator: str,
+):
+    """Cancel an active attempt.
+
+    \b
+    Examples:
+      dispatchio cancel --run-id 20260418 --job load_sales
+      dispatchio cancel --run-id 20260418 --job load_sales --attempt 1 --reason "hung"
+    """
+    store = _load_store_from_context(context_name)
+    if store is None:
+        raise click.ClickException(
+            "Cannot locate state store. Use --context or run from a directory "
+            "with dispatchio.toml."
+        )
+
+    if attempt is not None:
+        candidates = store.list_attempts(
+            job_name=job, logical_run_id=run_id, attempt=attempt
+        )
+        rec = candidates[0] if candidates else None
+    else:
+        rec = store.get_latest_attempt(job, run_id)
+        if rec is not None and rec.is_finished():
+            raise click.ClickException(
+                f"{job}[{run_id}] latest attempt {rec.attempt} is already {rec.status.value} (terminal). "
+                "Specify --attempt to cancel a specific attempt."
+            )
+
+    if rec is None:
+        raise click.ClickException(f"No attempt found for {job}[{run_id}].")
+
+    if rec.is_finished():
+        raise click.ClickException(
+            f"{job}[{run_id}] attempt {rec.attempt} is already {rec.status.value} (terminal)."
+        )
+
+    cancelled = rec.model_copy(
+        update={
+            "status": Status.CANCELLED,
+            "completed_at": datetime.now(tz=timezone.utc),
+            "reason": reason,
+            "operator_name": operator,
+        }
+    )
+    store.update_attempt(cancelled)
+    click.echo(
+        click.style(
+            f"Cancelled {job}[{run_id}] attempt {rec.attempt}.",
+            fg="yellow",
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -570,12 +827,12 @@ def _action_icon(action: str) -> str:
     return _ACTION_ICONS.get(action, "?")
 
 
-def _print_records(records: list[RunRecord]) -> None:
+def _print_records(records: list[AttemptRecord]) -> None:
     header = f"{'JOB':<30} {'RUN_ID':<14} {'STATUS':<10} {'ATTEMPT':<8} {'COMPLETED'}"
     click.echo(header)
     click.echo("─" * len(header))
     for r in records:
         colour, label = _STATUS_COLOURS.get(r.status.value, ("white", r.status.value))
         completed = r.completed_at.isoformat() if r.completed_at else "—"
-        line = f"{r.job_name:<30} {r.run_id:<14} {label:<10} {r.attempt:<8} {completed}"
+        line = f"{r.job_name:<30} {r.logical_run_id:<14} {label:<10} {r.attempt:<8} {completed}"
         click.echo(click.style(line, fg=colour))

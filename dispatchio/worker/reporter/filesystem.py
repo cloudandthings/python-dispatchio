@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from dispatchio.models import Status
 from dispatchio.receiver.base import CompletionEvent
@@ -36,6 +37,9 @@ class FilesystemReporter:
         *,
         error_reason: str | None = None,
         metadata: dict[str, Any] | None = None,
+        logical_run_id: str | None = None,
+        attempt: int | None = None,
+        dispatchio_attempt_id: UUID | None = None,
     ) -> None:
         try:
             event = CompletionEvent(
@@ -44,6 +48,9 @@ class FilesystemReporter:
                 status=status,
                 error_reason=error_reason,
                 metadata=metadata or {},
+                logical_run_id=logical_run_id or run_id,
+                attempt=attempt,
+                dispatchio_attempt_id=dispatchio_attempt_id,
             )
             filename = f"{job_name}__{run_id}__{status.value}.json"
             path = self.drop_dir / filename

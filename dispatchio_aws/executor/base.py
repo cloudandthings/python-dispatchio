@@ -2,13 +2,24 @@ from __future__ import annotations
 
 from typing import Any
 
+from dispatchio.models import AttemptRecord
+
 
 def build_execution_context(
-    job_name: str, run_id: str, reference_time_iso: str
+    attempt: AttemptRecord, reference_time_iso: str
 ) -> dict[str, str]:
+    """Build the context dict injected into executor payloads.
+
+    Includes all Phase 2 attempt identity fields so jobs can report back
+    with the correct dispatchio_attempt_id, logical_run_id, and attempt.
+    The legacy 'run_id' key is preserved as an alias for backward compat.
+    """
     return {
-        "job_name": job_name,
-        "run_id": run_id,
+        "job_name": attempt.job_name,
+        "logical_run_id": attempt.logical_run_id,
+        "run_id": attempt.logical_run_id,  # backward compat alias
+        "attempt": str(attempt.attempt),
+        "dispatchio_attempt_id": str(attempt.dispatchio_attempt_id),
         "reference_time": reference_time_iso,
     }
 

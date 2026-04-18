@@ -1,13 +1,26 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from beartype import beartype
 
 from dispatchio.config.settings import DispatchioSettings
-from dispatchio.models import Status
+from dispatchio.models import AttemptRecord, Status
 from dispatchio.state.sqlalchemy_ import SQLAlchemyStateStore
 from dispatchio_aws.reporter.sqs import SQSReporter
+
+# Module-level singleton — reused across warm Lambda invocations so the
+# SQLAlchemy connection pool is not recreated on every event.
+_store: SQLAlchemyStateStore | None = None
+
+
+def _get_store() -> SQLAlchemyStateStore:
+    global _store
+    if _store is None:
+        cfg = DispatchioSettings().state
+        _store = SQLAlchemyStateStore(connection_string=cfg.connection_string)
+    return _store
 
 
 @beartype
@@ -23,20 +36,20 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 def _handle_stepfunctions_event(event: dict[str, Any]) -> dict[str, Any]:
     detail = event.get("detail", {})
     status = _stepfunctions_status_to_dispatchio(detail.get("status", ""))
-    execution_name = str(detail.get("name", ""))
+    execution_arn = detail.get("executionArn") or detail.get("execution_arn")
+    if not execution_arn:
+        raise ValueError("Step Functions event detail.executionArn is required")
 
-    if "--" not in execution_name:
-        raise ValueError(
-            "Step Functions event detail.name must be '<job_name>--<run_id>'"
-        )
-    job_name, run_id = execution_name.split("--", 1)
-    _report_completion(job_name=job_name, run_id=run_id, status=status)
+    record = _lookup_attempt_by_execution_arn(execution_arn)
+    _report_completion_from_record(record=record, status=status)
 
     return {
         "status": "ok",
         "source": "aws.states",
-        "job_name": job_name,
-        "run_id": run_id,
+        "job_name": record.job_name,
+        "logical_run_id": record.logical_run_id,
+        "attempt": record.attempt,
+        "dispatchio_attempt_id": str(record.dispatchio_attempt_id),
     }
 
 
@@ -47,50 +60,59 @@ def _handle_athena_event(event: dict[str, Any]) -> dict[str, Any]:
     if not query_execution_id:
         raise ValueError("Athena event detail.queryExecutionId is required")
 
-    job_name, run_id = _resolve_job_context_from_query_execution_id(query_execution_id)
-    _report_completion(job_name=job_name, run_id=run_id, status=status)
+    record = _lookup_attempt_by_query_execution_id(query_execution_id)
+    _report_completion_from_record(record=record, status=status)
 
     return {
         "status": "ok",
         "source": "aws.athena",
-        "job_name": job_name,
-        "run_id": run_id,
+        "job_name": record.job_name,
+        "logical_run_id": record.logical_run_id,
+        "attempt": record.attempt,
+        "dispatchio_attempt_id": str(record.dispatchio_attempt_id),
     }
 
 
-def _resolve_job_context_from_query_execution_id(
-    query_execution_id: str,
-) -> tuple[str, str]:
-    cfg = DispatchioSettings().state
-    store = SQLAlchemyStateStore(connection_string=cfg.connection_string)
-    for record in store.list_records(status=Status.RUNNING):
-        if record.metadata.get("query_execution_id") == query_execution_id:
-            return record.job_name, record.run_id
-        if (
-            record.executor_reference
-            and record.executor_reference.get("query_execution_id")
-            == query_execution_id
-        ):
-            return record.job_name, record.run_id
+def _lookup_attempt_by_execution_arn(execution_arn: str) -> AttemptRecord:
+    """Look up an attempt by execution_arn stored in trace.executor at submission time."""
+    record = _get_store().get_attempt_by_executor_trace("execution_arn", execution_arn)
+    if record is None:
+        raise LookupError(
+            f"No attempt record found for execution_arn={execution_arn!r}"
+        )
+    return record
 
-    raise LookupError(
-        f"No running record found for Athena query_execution_id={query_execution_id!r}"
+
+def _lookup_attempt_by_query_execution_id(query_execution_id: str) -> AttemptRecord:
+    """Look up an attempt by query_execution_id stored in trace.executor at submission time."""
+    record = _get_store().get_attempt_by_executor_trace(
+        "query_execution_id", query_execution_id
     )
+    if record is None:
+        raise LookupError(
+            f"No attempt record found for query_execution_id={query_execution_id!r}"
+        )
+    return record
 
 
-def _report_completion(job_name: str, run_id: str, status: Status) -> None:
+def _report_completion_from_record(record: AttemptRecord, status: Status) -> None:
     reporter = SQSReporter(
         queue_url=_required_env(
             "DISPATCHIO_RECEIVER__QUEUE_URL", "DISPATCHIO_SQS_QUEUE_URL"
         ),
         region=_optional_env("DISPATCHIO_RECEIVER__REGION", "DISPATCHIO_SQS_REGION"),
     )
-    reporter.report(job_name=job_name, run_id=run_id, status=status)
+    reporter.report(
+        job_name=record.job_name,
+        run_id=record.logical_run_id,
+        status=status,
+        logical_run_id=record.logical_run_id,
+        attempt=record.attempt,
+        dispatchio_attempt_id=record.dispatchio_attempt_id,
+    )
 
 
 def _required_env(primary: str, fallback: str) -> str:
-    import os
-
     value = os.environ.get(primary) or os.environ.get(fallback)
     if not value:
         raise RuntimeError(
@@ -100,8 +122,6 @@ def _required_env(primary: str, fallback: str) -> str:
 
 
 def _optional_env(primary: str, fallback: str) -> str | None:
-    import os
-
     return os.environ.get(primary) or os.environ.get(fallback)
 
 

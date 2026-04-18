@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 import boto3
 from beartype import beartype
 from botocore.client import BaseClient
 
-from dispatchio.models import Job, LambdaJob
+from dispatchio.models import AttemptRecord, Job, LambdaJob
 from dispatchio_aws.executor.base import build_execution_context, render_payload
 
 
@@ -23,12 +24,14 @@ class LambdaExecutor:
         client: BaseClient | None = None,
     ) -> None:
         self._client = client or boto3.client("lambda", region_name=region)
-        self._references: dict[tuple[str, str], dict[str, Any]] = {}
+        self._references: dict[
+            str, dict[str, Any]
+        ] = {}  # keyed by str(dispatchio_attempt_id)
 
     def submit(
         self,
         job: Job,
-        run_id: str,
+        attempt: AttemptRecord,
         reference_time: datetime,
         timeout: float | None = None,
     ) -> None:
@@ -39,8 +42,7 @@ class LambdaExecutor:
             )
 
         context = build_execution_context(
-            job_name=job.name,
-            run_id=run_id,
+            attempt=attempt,
             reference_time_iso=reference_time.isoformat(),
         )
         payload = render_payload(cfg.payload_template, context)
@@ -57,12 +59,12 @@ class LambdaExecutor:
             )
 
         request_id = response.get("ResponseMetadata", {}).get("RequestId")
-        self._references[(job.name, run_id)] = {
+        self._references[str(attempt.dispatchio_attempt_id)] = {
             "function_name": cfg.function_name,
             "request_id": request_id,
         }
 
     def get_executor_reference(
-        self, job_name: str, run_id: str
+        self, dispatchio_attempt_id: UUID
     ) -> dict[str, Any] | None:
-        return self._references.get((job_name, run_id))
+        return self._references.get(str(dispatchio_attempt_id))

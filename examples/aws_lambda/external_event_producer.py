@@ -22,12 +22,12 @@ def main() -> None:
     args = parser.parse_args()
 
     report_external_done(
-      event_name="event.user_registered",
+        event_name="event.user_registered",
         run_id=args.run_id,
         metadata={"source": "identity-service"},
     )
     report_external_done(
-      event_name="event.kyc_passed",
+        event_name="event.kyc_passed",
         run_id=args.run_id,
         metadata={"source": "compliance-service"},
     )

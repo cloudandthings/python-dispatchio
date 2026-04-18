@@ -95,7 +95,9 @@ def test_validate_external_dependencies_raises_on_duplicate_registry_names() -> 
         )
 
 
-def test_validate_event_dependencies_accepts_external_prefix_for_compatibility() -> None:
+def test_validate_event_dependencies_accepts_external_prefix_for_compatibility() -> (
+    None
+):
     job = Job.create(
         name="welcome",
         executor=SubprocessJob(command=["echo", "ok"]),

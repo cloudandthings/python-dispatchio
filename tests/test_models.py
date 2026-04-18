@@ -11,10 +11,11 @@ from dispatchio.models import (
     Job,
     JobTickResult,
     PythonJob,
-    RunRecord,
+    AttemptRecord,
     Status,
     SubprocessJob,
     TickResult,
+    TriggerType,
 )
 
 
@@ -23,32 +24,67 @@ class TestStatus:
         assert Status.DONE in Status.finished()
         assert Status.ERROR in Status.finished()
         assert Status.LOST in Status.finished()
-        assert Status.SKIPPED in Status.finished()
+        assert Status.CANCELLED in Status.finished()
 
     def test_active_statuses(self):
         assert Status.SUBMITTED in Status.active()
+        assert Status.QUEUED in Status.active()
         assert Status.RUNNING in Status.active()
         assert Status.DONE not in Status.active()
 
-    def test_run_record_is_finished(self):
-        record = RunRecord(job_name="x", run_id="1", status=Status.DONE)
+    def test_attempt_record_is_finished(self):
+        from uuid import uuid4
+
+        record = AttemptRecord(
+            job_name="x",
+            logical_run_id="1",
+            attempt=0,
+            dispatchio_attempt_id=uuid4(),
+            status=Status.DONE,
+        )
         assert record.is_finished()
 
-    def test_run_record_is_active(self):
-        record = RunRecord(job_name="x", run_id="1", status=Status.RUNNING)
+    def test_attempt_record_is_active(self):
+        from uuid import uuid4
+
+        record = AttemptRecord(
+            job_name="x",
+            logical_run_id="1",
+            attempt=0,
+            dispatchio_attempt_id=uuid4(),
+            status=Status.RUNNING,
+        )
         assert record.is_active()
         assert not record.is_finished()
 
 
-class TestRunRecord:
+class TestAttemptRecord:
     def test_defaults(self):
-        r = RunRecord(job_name="job", run_id="20250115", status=Status.PENDING)
+        from uuid import uuid4
+
+        r = AttemptRecord(
+            job_name="job",
+            logical_run_id="20250115",
+            attempt=0,
+            dispatchio_attempt_id=uuid4(),
+            status=Status.SUBMITTED,
+        )
         assert r.attempt == 0
-        assert r.metadata == {}
-        assert r.error_reason is None
+        assert r.trace == {}
+        assert r.reason is None
+        assert r.trigger_type == TriggerType.SCHEDULED
 
     def test_model_copy_update(self):
-        r = RunRecord(job_name="job", run_id="20250115", status=Status.RUNNING)
+        from uuid import uuid4
+
+        attempt_id = uuid4()
+        r = AttemptRecord(
+            job_name="job",
+            logical_run_id="20250115",
+            attempt=0,
+            dispatchio_attempt_id=attempt_id,
+            status=Status.RUNNING,
+        )
         updated = r.model_copy(update={"status": Status.DONE})
         assert updated.status == Status.DONE
         assert r.status == Status.RUNNING  # original unchanged

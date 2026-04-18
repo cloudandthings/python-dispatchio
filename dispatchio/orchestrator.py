@@ -30,6 +30,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from collections.abc import Iterable
+from uuid import UUID, uuid4
 
 from dispatchio.alerts.base import AlertEvent, AlertHandler, LogAlertHandler
 from dispatchio.cadence import DAILY, Cadence
@@ -42,9 +43,15 @@ from dispatchio.models import (
     JobAction,
     Job,
     JobTickResult,
-    RunRecord,
+    AttemptRecord,
+    RetryRequest,
     Status,
     TickResult,
+    TriggerType,
+    DeadLetterReasonCode,
+    DeadLetterRecord,
+    DeadLetterSourceBackend,
+    DeadLetterStatus,
 )
 from dispatchio.receiver.base import CompletionEvent, CompletionReceiver
 from dispatchio.run_id import resolve_run_id
@@ -53,14 +60,25 @@ from dispatchio.tick_log import TickLogRecord, TickLogStore
 
 logger = logging.getLogger(__name__)
 
+_EXECUTOR_TYPE_TO_SOURCE_BACKEND: dict[str, DeadLetterSourceBackend] = {
+    "subprocess": DeadLetterSourceBackend.SUBPROCESS,
+    "python": DeadLetterSourceBackend.PYTHON,
+    "lambda": DeadLetterSourceBackend.LAMBDA,
+    "stepfunctions": DeadLetterSourceBackend.STEPFUNCTIONS,
+    "athena": DeadLetterSourceBackend.ATHENA,
+    "http": DeadLetterSourceBackend.HTTP,
+}
+
 
 @dataclass
 class _PendingSubmission:
     """Carries submission intent out of the planning phase."""
 
     job: Job
-    run_id: str
+    logical_run_id: str
     attempt: int
+    trigger_type: TriggerType = TriggerType.SCHEDULED
+    trigger_reason: str | None = None
 
 
 class Orchestrator:
@@ -241,9 +259,11 @@ class Orchestrator:
         outcomes: list[JobTickResult | _PendingSubmission | None] = []
         for job in self.jobs:
             effective_cadence = job.cadence or self.default_cadence
-            run_id = resolve_run_id(effective_cadence, reference_time)
+            logical_run_id = resolve_run_id(effective_cadence, reference_time)
             outcomes.append(
-                self._evaluate_job(job, run_id, effective_cadence, reference_time)
+                self._evaluate_job(
+                    job, logical_run_id, effective_cadence, reference_time
+                )
             )
 
         # Phase 4 — apply per-tick submission cap
@@ -311,56 +331,205 @@ class Orchestrator:
     def _apply_completion_event(
         self, event: CompletionEvent, reference_time: datetime
     ) -> None:
-        now = event.occurred_at or reference_time
-        existing = self.state.get(event.job_name, event.run_id)
+        """
+        Apply a completion event, routing through strict or legacy correlation.
 
+        Strict mode (Phase 2): when dispatchio_attempt_id is present, validates
+        full identity (job_name, logical_run_id, attempt) before applying update.
+        Mismatches are dead-lettered.
+
+        Legacy mode: when dispatchio_attempt_id is absent, falls back to latest
+        attempt by (job_name, logical_run_id). Used for external events and
+        backward compatibility with pre-Phase-2 reporters.
+        """
+        now = event.occurred_at or reference_time
+
+        # Ignore RUNNING events (no longer used for liveness detection)
         if event.status == Status.RUNNING:
-            # Ignore RUNNING events (no longer used for liveness detection)
             return
 
-        if existing is None:
-            logger.warning(
-                "Received completion for unknown run %s/%s — creating record.",
-                event.job_name,
-                event.run_id,
+        # Require logical_run_id
+        try:
+            logical_run_id = event.get_logical_run_id()
+        except ValueError as exc:
+            self._dead_letter_completion(
+                event,
+                now,
+                DeadLetterReasonCode.VALIDATION_FAILURE,
+                f"Missing logical_run_id: {exc}",
             )
-            record = RunRecord(
-                job_name=event.job_name,
-                run_id=event.run_id,
-                status=event.status,
-                completed_at=now,
-                error_reason=event.error_reason,
-                metadata=event.metadata,
-            )
-        else:
-            if existing.is_finished():
-                logger.debug(
-                    "Ignoring completion event for already-finished run %s/%s (%s)",
-                    event.job_name,
-                    event.run_id,
-                    existing.status,
+            return
+
+        attempt_id = event.dispatchio_attempt_id
+
+        if attempt_id is not None:
+            # ---- Phase 2 strict path ----------------------------------------
+            attempt = event.attempt
+
+            # Look up attempt by dispatchio_attempt_id (authoritative)
+            existing = self.state.get_attempt(attempt_id)
+
+            if existing is None:
+                self._dead_letter_completion(
+                    event,
+                    now,
+                    DeadLetterReasonCode.CORRELATION_FAILURE,
+                    f"Unknown dispatchio_attempt_id {attempt_id}",
                 )
                 return
+
+            # Validate identity match (job_name, logical_run_id, attempt)
+            if not (
+                existing.job_name == event.job_name
+                and existing.logical_run_id == logical_run_id
+                and (attempt is None or existing.attempt == attempt)
+            ):
+                self._dead_letter_completion(
+                    event,
+                    now,
+                    DeadLetterReasonCode.CORRELATION_FAILURE,
+                    f"Identity mismatch: event=({event.job_name}, {logical_run_id}, {attempt}), "
+                    f"stored=({existing.job_name}, {existing.logical_run_id}, {existing.attempt})",
+                )
+                return
+
+            # Check for duplicate terminal status
+            if existing.is_finished():
+                if existing.status == event.status:
+                    logger.debug(
+                        "Idempotent completion event: %s/%s/%d already %s",
+                        event.job_name,
+                        logical_run_id,
+                        existing.attempt,
+                        existing.status.value,
+                    )
+                    return
+                self._dead_letter_completion(
+                    event,
+                    now,
+                    DeadLetterReasonCode.CONFLICT_FAILURE,
+                    f"Conflicting terminal status: stored={existing.status.value}, "
+                    f"event={event.status.value}",
+                )
+                return
+
+            # All validations passed — apply update
             record = existing.model_copy(
                 update={
                     "status": event.status,
                     "completed_at": now,
-                    "error_reason": event.error_reason,
-                    "metadata": {**existing.metadata, **event.metadata},
+                    "reason": event.reason or existing.reason,
+                    "completion_event_trace": event.trace or None,
                 }
             )
+            self.state.update_attempt(record)
 
-        self.state.put(record)
-        logger.info(
-            "Applied completion event: %s/%s → %s",
-            event.job_name,
-            event.run_id,
-            event.status.value,
-        )
+            logger.info(
+                "Applied completion event (strict): %s/%s/%d → %s (attempt_id=%s)",
+                event.job_name,
+                logical_run_id,
+                existing.attempt,
+                event.status.value,
+                attempt_id,
+            )
+
+        else:
+            # ---- Legacy / external-event path --------------------------------
+            logger.debug(
+                "Completion event without dispatchio_attempt_id for %s/%s — using legacy path",
+                event.job_name,
+                logical_run_id,
+            )
+            existing = self.state.get_latest_attempt(event.job_name, logical_run_id)
+
+            if existing is None:
+                # Auto-create a record for this external/legacy event
+                record = AttemptRecord(
+                    job_name=event.job_name,
+                    logical_run_id=logical_run_id,
+                    attempt=0,
+                    dispatchio_attempt_id=uuid4(),
+                    status=event.status,
+                    completed_at=now,
+                    reason=event.reason,
+                    trace={},
+                    completion_event_trace=event.trace or None,
+                )
+                self.state.append_attempt(record)
+            elif existing.is_finished():
+                logger.debug(
+                    "Ignoring completion for already-finished %s/%s (%s)",
+                    event.job_name,
+                    logical_run_id,
+                    existing.status.value,
+                )
+                return
+            else:
+                record = existing.model_copy(
+                    update={
+                        "status": event.status,
+                        "completed_at": now,
+                        "reason": event.reason or existing.reason,
+                        "completion_event_trace": event.trace or None,
+                    }
+                )
+                self.state.update_attempt(record)
+
+            logger.info(
+                "Applied completion event (legacy): %s/%s → %s",
+                event.job_name,
+                logical_run_id,
+                event.status.value,
+            )
 
         job = self._job_index.get(event.job_name)
         if job:
             self._check_terminal_alerts(job, record)
+
+    def _dead_letter_completion(
+        self,
+        event: CompletionEvent,
+        now: datetime,
+        reason_code: DeadLetterReasonCode,
+        reason_detail: str,
+    ) -> None:
+        """
+        Route a completion event to dead-letter.
+
+        Stores dead-letter record with full audit trail, logs warning,
+        and triggers alert for operator visibility.
+        """
+        job = self._job_index.get(event.job_name)
+        source_backend = (
+            _EXECUTOR_TYPE_TO_SOURCE_BACKEND.get(
+                job.executor.type, DeadLetterSourceBackend.OTHER
+            )
+            if job is not None
+            else DeadLetterSourceBackend.OTHER
+        )
+
+        dead_letter = DeadLetterRecord(
+            dead_letter_id=uuid4(),
+            occurred_at=now,
+            source_backend=source_backend,
+            reason_code=reason_code,
+            reason_detail=reason_detail,
+            status=DeadLetterStatus.OPEN,
+            job_name=event.job_name,
+            logical_run_id=event.logical_run_id,
+            attempt=event.attempt,
+            dispatchio_attempt_id=event.dispatchio_attempt_id,
+            raw_payload=event.model_dump(mode="json"),
+        )
+        self.state.append_dead_letter(dead_letter)
+
+        logger.warning(
+            "Dead-lettered completion event: %s reason=%s detail=%s (id=%s)",
+            f"{event.job_name}/{event.logical_run_id}/{event.attempt}",
+            reason_code.value,
+            reason_detail,
+            dead_letter.dead_letter_id,
+        )
 
     # ------------------------------------------------------------------
     # Phase 2 — detect lost jobs
@@ -370,8 +539,8 @@ class Orchestrator:
         results = []
         for job in self.jobs:
             effective_cadence = job.cadence or self.default_cadence
-            run_id = resolve_run_id(effective_cadence, reference_time)
-            record = self.state.get(job.name, run_id)
+            logical_run_id = resolve_run_id(effective_cadence, reference_time)
+            record = self.state.get_latest_attempt(job.name, logical_run_id)
             if record is None or not record.is_active():
                 continue
 
@@ -388,23 +557,25 @@ class Orchestrator:
                         "completed_at": reference_time,
                     }
                     if poke_status == Status.ERROR:
-                        update["error_reason"] = (
+                        update["reason"] = (
                             "process exited without posting a completion event"
                         )
                     updated = record.model_copy(update=update)
-                    self.state.put(updated)
+                    self.state.update_attempt(updated)
                     logger.warning(
                         "Job %s/%s %s via poke.",
                         job.name,
-                        run_id,
+                        logical_run_id,
                         poke_status.value,
                     )
                     if poke_status == Status.ERROR:
-                        self._emit_alert(AlertOn.ERROR, job, run_id, detail, updated)
+                        self._emit_alert(
+                            AlertOn.ERROR, job, logical_run_id, detail, updated
+                        )
                         results.append(
                             JobTickResult(
                                 job_name=job.name,
-                                run_id=run_id,
+                                run_id=logical_run_id,
                                 action=JobAction.MARKED_ERROR,
                                 detail=detail,
                             )
@@ -421,51 +592,57 @@ class Orchestrator:
     def _evaluate_job(
         self,
         job: Job,
-        run_id: str,
+        logical_run_id: str,
         cadence: Cadence,
         reference_time: datetime,
     ) -> JobTickResult | _PendingSubmission | None:
-        existing = self.state.get(job.name, run_id)
+        existing = self.state.get_latest_attempt(job.name, logical_run_id)
 
         if existing and existing.is_active():
             return JobTickResult(
                 job_name=job.name,
-                run_id=run_id,
+                run_id=logical_run_id,
                 action=JobAction.SKIPPED_ALREADY_ACTIVE,
             )
 
         if existing and existing.status == Status.DONE:
             return JobTickResult(
                 job_name=job.name,
-                run_id=run_id,
+                run_id=logical_run_id,
                 action=JobAction.SKIPPED_ALREADY_DONE,
             )
 
-        if existing and existing.status == Status.SKIPPED:
-            return None  # silently skip
-
         if existing and existing.status in (Status.ERROR, Status.LOST):
-            return self._plan_retry(job, existing, run_id, cadence, reference_time)
+            return self._plan_retry(
+                job, existing, logical_run_id, cadence, reference_time
+            )
 
         # Condition gate
         if job.condition is not None:
             if not job.condition.is_met(reference_time, cadence):
                 return JobTickResult(
                     job_name=job.name,
-                    run_id=run_id,
+                    run_id=logical_run_id,
                     action=JobAction.SKIPPED_CONDITION,
                     detail=f"condition not met: {type(job.condition).__name__}",
                 )
 
         # Dependency check
-        dep_result = self._check_dependencies(job, run_id, reference_time)
+        dep_result = self._check_dependencies(job, logical_run_id, reference_time)
         if dep_result is not None:
             return dep_result
 
         # NOT_STARTED_BY alert check (before submitting)
-        self._check_not_started_by_alert(job, run_id, reference_time, existing, cadence)
+        self._check_not_started_by_alert(
+            job, logical_run_id, reference_time, existing, cadence
+        )
 
-        return _PendingSubmission(job=job, run_id=run_id, attempt=0)
+        return _PendingSubmission(
+            job=job,
+            logical_run_id=logical_run_id,
+            attempt=0,
+            trigger_type=TriggerType.SCHEDULED,
+        )
 
     # ------------------------------------------------------------------
     # Retry planning (part of phase 3)
@@ -474,8 +651,8 @@ class Orchestrator:
     def _plan_retry(
         self,
         job: Job,
-        record: RunRecord,
-        run_id: str,
+        record: AttemptRecord,
+        logical_run_id: str,
         cadence: Cadence,
         reference_time: datetime,
     ) -> JobTickResult | _PendingSubmission:
@@ -485,25 +662,23 @@ class Orchestrator:
         if next_attempt >= policy.max_attempts:
             detail = (
                 f"max_attempts={policy.max_attempts} reached. "
-                f"Last error: {record.error_reason}"
+                f"Last error: {record.reason}"
             )
-            self._emit_alert(AlertOn.ERROR, job, run_id, detail, record)
+            self._emit_alert(AlertOn.ERROR, job, logical_run_id, detail, record)
             return JobTickResult(
                 job_name=job.name,
-                run_id=run_id,
+                run_id=logical_run_id,
                 action=JobAction.MARKED_ERROR,
                 detail=detail,
             )
 
-        if policy.retry_on and record.error_reason:
-            if not any(pat in record.error_reason for pat in policy.retry_on):
-                detail = (
-                    f"error_reason does not match retry_on patterns: {policy.retry_on}"
-                )
-                self._emit_alert(AlertOn.ERROR, job, run_id, detail, record)
+        if policy.retry_on and record.reason:
+            if not any(pat in record.reason for pat in policy.retry_on):
+                detail = f"reason does not match retry_on patterns: {policy.retry_on}"
+                self._emit_alert(AlertOn.ERROR, job, logical_run_id, detail, record)
                 return JobTickResult(
                     job_name=job.name,
-                    run_id=run_id,
+                    run_id=logical_run_id,
                     action=JobAction.MARKED_ERROR,
                     detail=detail,
                 )
@@ -511,16 +686,22 @@ class Orchestrator:
         if job.condition and not job.condition.is_met(reference_time, cadence):
             return JobTickResult(
                 job_name=job.name,
-                run_id=run_id,
+                run_id=logical_run_id,
                 action=JobAction.SKIPPED_CONDITION,
                 detail=f"retry: condition not met: {type(job.condition).__name__}",
             )
 
-        dep_result = self._check_dependencies(job, run_id, reference_time)
+        dep_result = self._check_dependencies(job, logical_run_id, reference_time)
         if dep_result is not None:
             return dep_result
 
-        return _PendingSubmission(job=job, run_id=run_id, attempt=next_attempt)
+        return _PendingSubmission(
+            job=job,
+            logical_run_id=logical_run_id,
+            attempt=next_attempt,
+            trigger_type=TriggerType.AUTO_RETRY,
+            trigger_reason="auto_retry_policy",
+        )
 
     # ------------------------------------------------------------------
     # Phase 5 — concurrent submission
@@ -534,16 +715,6 @@ class Orchestrator:
         if not pending:
             return []
 
-        if len(pending) == 1:
-            return [
-                self._submit(
-                    pending[0].job,
-                    pending[0].run_id,
-                    reference_time,
-                    pending[0].attempt,
-                )
-            ]
-
         # Pre-allocate result slots so we can write back by index from threads,
         # preserving the input order in the returned list.
         results: list[JobTickResult | None] = [None] * len(pending)
@@ -555,9 +726,11 @@ class Orchestrator:
                 pool.submit(
                     self._submit,
                     ps.job,
-                    ps.run_id,
+                    ps.logical_run_id,
                     reference_time,
                     ps.attempt,
+                    ps.trigger_type,
+                    ps.trigger_reason,
                 ): i
                 for i, ps in enumerate(pending)
             }
@@ -571,12 +744,12 @@ class Orchestrator:
                     logger.error(
                         "Unexpected error in submission thread for %s/%s: %s",
                         ps.job.name,
-                        ps.run_id,
+                        ps.logical_run_id,
                         exc,
                     )
                     results[idx] = JobTickResult(
                         job_name=ps.job.name,
-                        run_id=ps.run_id,
+                        run_id=ps.logical_run_id,
                         action=JobAction.SUBMISSION_FAILED,
                         detail=str(exc),
                     )
@@ -590,9 +763,12 @@ class Orchestrator:
     def _submit(
         self,
         job: Job,
-        run_id: str,
+        logical_run_id: str,
         reference_time: datetime,
         attempt: int,
+        trigger_type: TriggerType = TriggerType.SCHEDULED,
+        trigger_reason: str | None = None,
+        operator_name: str | None = None,
     ) -> JobTickResult:
         executor_type = job.executor.type
         executor = self.executors.get(executor_type)
@@ -601,53 +777,63 @@ class Orchestrator:
             logger.error(msg)
             return JobTickResult(
                 job_name=job.name,
-                run_id=run_id,
+                run_id=logical_run_id,
                 action=JobAction.SUBMISSION_FAILED,
                 detail=msg,
             )
 
         now = reference_time
-        record = RunRecord(
+        dispatchio_attempt_id = uuid4()
+        record = AttemptRecord(
             job_name=job.name,
-            run_id=run_id,
-            status=Status.SUBMITTED,
+            logical_run_id=logical_run_id,
             attempt=attempt,
+            dispatchio_attempt_id=dispatchio_attempt_id,
+            status=Status.SUBMITTED,
             submitted_at=now,
+            trigger_type=trigger_type,
+            trigger_reason=trigger_reason,
+            operator_name=operator_name,
+            trace={},
         )
-        self.state.put(record)
+        self.state.append_attempt(record)
 
         try:
-            executor.submit(job, run_id, reference_time, timeout=self.submit_timeout)
+            executor.submit(job, record, reference_time, timeout=self.submit_timeout)
 
             # Optionally retrieve executor reference if executor implements it
             if hasattr(executor, "get_executor_reference"):
-                ref = executor.get_executor_reference(job.name, run_id)
+                ref = executor.get_executor_reference(record.dispatchio_attempt_id)
                 if ref is not None:
-                    record = record.model_copy(update={"executor_reference": ref})
-                    self.state.put(record)
+                    record = record.model_copy(update={"trace": {"executor": ref}})
+                    self.state.update_attempt(record)
 
-            logger.info("Submitted %s/%s (attempt %d)", job.name, run_id, attempt)
+            logger.info(
+                "Submitted %s/%s (attempt %d)", job.name, logical_run_id, attempt
+            )
             action = JobAction.RETRYING if attempt > 0 else JobAction.SUBMITTED
             return JobTickResult(
                 job_name=job.name,
-                run_id=run_id,
+                run_id=logical_run_id,
                 action=action,
                 detail=f"attempt={attempt}",
             )
         except Exception as exc:
             error_msg = str(exc)
-            logger.error("Submission failed for %s/%s: %s", job.name, run_id, error_msg)
+            logger.error(
+                "Submission failed for %s/%s: %s", job.name, logical_run_id, error_msg
+            )
             failed_record = record.model_copy(
                 update={
                     "status": Status.ERROR,
-                    "error_reason": f"submission_failed: {error_msg}",
+                    "reason": f"submission_failed: {error_msg}",
                     "completed_at": now,
                 }
             )
-            self.state.put(failed_record)
+            self.state.update_attempt(failed_record)
             return JobTickResult(
                 job_name=job.name,
-                run_id=run_id,
+                run_id=logical_run_id,
                 action=JobAction.SUBMISSION_FAILED,
                 detail=error_msg,
             )
@@ -662,8 +848,8 @@ class Orchestrator:
         unmet = []
         for dep in job.depends_on:
             cadence = dep.cadence or job.cadence or self.default_cadence
-            dep_run_id = resolve_run_id(cadence, reference_time)
-            record = self.state.get(dep.job_name, dep_run_id)
+            dep_logical_run_id = resolve_run_id(cadence, reference_time)
+            record = self.state.get_latest_attempt(dep.job_name, dep_logical_run_id)
             if record is None or record.status != dep.required_status:
                 unmet.append(dep)
         return unmet
@@ -672,24 +858,23 @@ class Orchestrator:
         self, dep: Dependency, job: Job, reference_time: datetime
     ) -> bool:
         cadence = dep.cadence or job.cadence or self.default_cadence
-        dep_run_id = resolve_run_id(cadence, reference_time)
-        record = self.state.get(dep.job_name, dep_run_id)
+        dep_logical_run_id = resolve_run_id(cadence, reference_time)
+        record = self.state.get_latest_attempt(dep.job_name, dep_logical_run_id)
         return record is not None and record.is_finished()
 
     def _dep_status_matches(
         self, dep: Dependency, job: Job, reference_time: datetime
     ) -> bool:
         cadence = dep.cadence or job.cadence or self.default_cadence
-        dep_run_id = resolve_run_id(cadence, reference_time)
-        record = self.state.get(dep.job_name, dep_run_id)
+        dep_logical_run_id = resolve_run_id(cadence, reference_time)
+        record = self.state.get_latest_attempt(dep.job_name, dep_logical_run_id)
         return record is not None and record.status == dep.required_status
 
     def _check_dependencies(
-        self, job: Job, run_id: str, reference_time: datetime
+        self, job: Job, logical_run_id: str, reference_time: datetime
     ) -> JobTickResult | None:
         """
         Returns a blocking JobTickResult if deps are not satisfied, or None if clear to proceed.
-        For THRESHOLD unreachability, also writes a SKIPPED RunRecord to state.
         """
         if not job.depends_on:
             return None
@@ -707,7 +892,7 @@ class Orchestrator:
             )
             return JobTickResult(
                 job_name=job.name,
-                run_id=run_id,
+                run_id=logical_run_id,
                 action=JobAction.SKIPPED_DEPENDENCIES,
                 detail=detail,
             )
@@ -726,7 +911,7 @@ class Orchestrator:
             )
             return JobTickResult(
                 job_name=job.name,
-                run_id=run_id,
+                run_id=logical_run_id,
                 action=JobAction.SKIPPED_DEPENDENCIES,
                 detail=detail,
             )
@@ -749,16 +934,9 @@ class Orchestrator:
                 f"threshold={threshold} unreachable: "
                 f"{len(met)}/{len(deps)} succeeded, {len(not_yet_finished)} still running"
             )
-            self.state.put(
-                RunRecord(
-                    job_name=job.name,
-                    run_id=run_id,
-                    status=Status.SKIPPED,
-                )
-            )
             return JobTickResult(
                 job_name=job.name,
-                run_id=run_id,
+                run_id=logical_run_id,
                 action=JobAction.SKIPPED_THRESHOLD_UNREACHABLE,
                 detail=detail,
             )
@@ -766,7 +944,7 @@ class Orchestrator:
         detail = f"threshold={threshold}: {len(met)}/{len(deps)} succeeded"
         return JobTickResult(
             job_name=job.name,
-            run_id=run_id,
+            run_id=logical_run_id,
             action=JobAction.SKIPPED_DEPENDENCIES,
             detail=detail,
         )
@@ -775,14 +953,14 @@ class Orchestrator:
     # Alert helpers
     # ------------------------------------------------------------------
 
-    def _check_terminal_alerts(self, job: Job, record: RunRecord) -> None:
+    def _check_terminal_alerts(self, job: Job, record: AttemptRecord) -> None:
         for cond in job.alerts:
             if cond.on == AlertOn.ERROR and record.status == Status.ERROR:
                 self._emit_alert(
                     AlertOn.ERROR,
                     job,
-                    record.run_id,
-                    record.error_reason,
+                    record.logical_run_id,
+                    record.reason,
                     record,
                     cond.channels,
                 )
@@ -790,7 +968,7 @@ class Orchestrator:
                 self._emit_alert(
                     AlertOn.SUCCESS,
                     job,
-                    record.run_id,
+                    record.logical_run_id,
                     "Job completed successfully",
                     record,
                     cond.channels,
@@ -799,9 +977,9 @@ class Orchestrator:
     def _check_not_started_by_alert(
         self,
         job: Job,
-        run_id: str,
+        logical_run_id: str,
         reference_time: datetime,
-        existing: RunRecord | None,
+        existing: AttemptRecord | None,
         cadence: Cadence,
     ) -> None:
         if existing is not None:
@@ -814,7 +992,7 @@ class Orchestrator:
                 self._emit_alert(
                     AlertOn.NOT_STARTED_BY,
                     job,
-                    run_id,
+                    logical_run_id,
                     f"Job not started by {cond.not_by}",
                     None,
                     cond.channels,
@@ -824,9 +1002,9 @@ class Orchestrator:
         self,
         alert_on: AlertOn,
         job: Job,
-        run_id: str,
+        logical_run_id: str,
         detail: str | None,
-        record: RunRecord | None,
+        record: AttemptRecord | None,
         channels: list[str] | None = None,
     ) -> None:
         if channels is None:
@@ -834,7 +1012,7 @@ class Orchestrator:
         event = AlertEvent(
             alert_on=alert_on,
             job_name=job.name,
-            run_id=run_id,
+            run_id=logical_run_id,
             channels=channels or [],
             detail=detail,
             occurred_at=datetime.now(tz=timezone.utc),
@@ -844,3 +1022,149 @@ class Orchestrator:
             self.alert_handler.handle(event)
         except Exception as exc:
             logger.error("Alert handler raised: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Phase 3 — Manual retry/cancel operations
+    # ------------------------------------------------------------------
+
+    def manual_retry(
+        self,
+        job_name: str,
+        logical_run_id: str,
+        operator_name: str,
+        operator_reason: str,
+    ) -> AttemptRecord:
+        """
+        Create a new manual retry attempt for a job.
+
+        The latest attempt must be in a terminal state (DONE, ERROR, LOST, CANCELLED).
+        Creates a new attempt with status SUBMITTED, trigger_type=MANUAL_RETRY,
+        and operator context (who/why).
+
+        Args:
+            job_name: Job name (must be registered in this orchestrator)
+            logical_run_id: The logical run identifier
+            operator_name: Name/ID of operator requesting retry
+            operator_reason: Explanation for manual retry
+
+        Returns:
+            The newly created AttemptRecord (SUBMITTED status)
+
+        Raises:
+            ValueError: If job not found, or latest attempt not in terminal state
+        """
+        # Validate job exists
+        job = self._job_index.get(job_name)
+        if job is None:
+            raise ValueError(f"Job '{job_name}' not found in orchestrator")
+
+        # Get latest attempt
+        latest = self.state.get_latest_attempt(job_name, logical_run_id)
+        if latest is None:
+            raise ValueError(
+                f"No existing attempt for {job_name}/{logical_run_id}; "
+                "cannot retry non-existent job"
+            )
+
+        # Ensure latest is terminal
+        if not latest.is_finished():
+            raise ValueError(
+                f"Cannot retry {job_name}/{logical_run_id} while attempt {latest.attempt} "
+                f"is still {latest.status.value} (not terminal)"
+            )
+
+        new_attempt_num = latest.attempt + 1
+        now = datetime.now(tz=timezone.utc)
+
+        # Submit via the normal execution path so the job is actually dispatched.
+        # _submit writes the AttemptRecord (SUBMITTED) then calls executor.submit().
+        self._submit(
+            job=job,
+            logical_run_id=logical_run_id,
+            reference_time=now,
+            attempt=new_attempt_num,
+            trigger_type=TriggerType.MANUAL_RETRY,
+            trigger_reason=operator_reason,
+            operator_name=operator_name,
+        )
+
+        new_record = self.state.get_latest_attempt(job_name, logical_run_id)
+
+        retry_request = RetryRequest(
+            requested_at=now,
+            requested_by=operator_name,
+            logical_run_id=logical_run_id,
+            requested_jobs=[job_name],
+            cascade=False,
+            reason=operator_reason,
+            selected_jobs=[job_name],
+            assigned_attempt_by_job={job_name: new_attempt_num},
+        )
+        self.state.append_retry_request(retry_request)
+
+        logger.info(
+            "Manual retry submitted: %s/%s attempt %d (operator=%s reason=%s)",
+            job_name,
+            logical_run_id,
+            new_attempt_num,
+            operator_name,
+            operator_reason,
+        )
+
+        return new_record
+
+    def manual_cancel(
+        self, dispatchio_attempt_id: UUID, operator_name: str, operator_reason: str
+    ) -> AttemptRecord:
+        """
+        Manually cancel a running or queued attempt.
+
+        The attempt must be in an active state (SUBMITTED, QUEUED, RUNNING).
+        Updates status to CANCELLED with operator context.
+
+        Args:
+            dispatchio_attempt_id: UUID of the attempt to cancel
+            operator_name: Name/ID of operator requesting cancellation
+            operator_reason: Explanation for cancellation
+
+        Returns:
+            The updated AttemptRecord (CANCELLED status)
+
+        Raises:
+            ValueError: If attempt not found or already terminal
+        """
+        # Look up attempt by ID
+        attempt = self.state.get_attempt(dispatchio_attempt_id)
+        if attempt is None:
+            raise ValueError(
+                f"Attempt {dispatchio_attempt_id} not found; cannot cancel"
+            )
+
+        # Ensure not already finished
+        if attempt.is_finished():
+            raise ValueError(
+                f"Cannot cancel {attempt.job_name}/{attempt.logical_run_id}/{attempt.attempt}; "
+                f"already {attempt.status.value}"
+            )
+
+        # Update to CANCELLED with operator context
+        cancelled_record = attempt.model_copy(
+            update={
+                "status": Status.CANCELLED,
+                "completed_at": datetime.now(tz=timezone.utc),
+                "reason": operator_reason,
+                "operator_name": operator_name,
+            }
+        )
+        self.state.update_attempt(cancelled_record)
+
+        logger.info(
+            "Manual cancel: %s/%s/%d (operator=%s reason=%s)",
+            attempt.job_name,
+            attempt.logical_run_id,
+            attempt.attempt,
+            operator_name,
+            operator_reason,
+        )
+
+        return cancelled_record
