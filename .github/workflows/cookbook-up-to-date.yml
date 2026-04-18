@@ -1,0 +1,43 @@
+name: cookbook up-to-date
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  cookbook:
+    name: cookbook is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v3
+        with:
+          cache: true
+
+      - name: Regenerate cookbook
+        run: |
+          echo "Running cookbook generation task..."
+          mise build-cookbook
+
+      - name: Verify cookbook is up to date
+        run: |
+          if ! git diff --exit-code -- COOKBOOK.md; then
+            echo "COOKBOOK.md is out of date. Run 'mise build-cookbook' and commit the result." >&2
+            exit 1
+          fi

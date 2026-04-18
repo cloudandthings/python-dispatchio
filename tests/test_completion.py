@@ -11,6 +11,8 @@ from dispatchio.completion import (
     get_reporter,
     build_reporter,
     _CompletionReporterAdapter,
+    report_external_done,
+    report_external_event,
 )
 from dispatchio.config.settings import ReceiverSettings
 from dispatchio.models import Status
@@ -148,3 +150,60 @@ class TestCompletionReporterIntegration:
 
             # The orchestrator's executor should have injected the config
             assert orch.executors is not None
+
+
+class TestExternalEventHelpers:
+    """Tests for external event publishing helper functions."""
+
+    def test_report_external_done_filesystem_from_env(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("DISPATCHIO_RECEIVER__BACKEND", "filesystem")
+        monkeypatch.setenv("DISPATCHIO_RECEIVER__DROP_DIR", str(tmp_path))
+
+        sent = report_external_done(
+            event_name="event.user_registered",
+            run_id="20250115",
+            metadata={"source": "test"},
+        )
+
+        assert sent is True
+        files = list(tmp_path.glob("*.json"))
+        assert len(files) == 1
+        assert "event.user_registered__20250115__done.json" in files[0].name
+
+    def test_report_external_event_with_explicit_settings(self, tmp_path: Path) -> None:
+        sent = report_external_event(
+            event_name="event.kyc_passed",
+            run_id="20250115",
+            status=Status.DONE,
+            receiver_settings=ReceiverSettings(
+                backend="filesystem",
+                drop_dir=str(tmp_path),
+            ),
+        )
+
+        assert sent is True
+        files = list(tmp_path.glob("*.json"))
+        assert len(files) == 1
+        assert "event.kyc_passed__20250115__done.json" in files[0].name
+
+    def test_report_external_done_none_backend_returns_false(self, monkeypatch) -> None:
+        monkeypatch.setenv("DISPATCHIO_RECEIVER__BACKEND", "none")
+
+        sent = report_external_done(
+            event_name="event.user_registered",
+            run_id="20250115",
+        )
+
+        assert sent is False
+
+    def test_report_external_event_sqs_requires_queue_url(self, monkeypatch) -> None:
+        monkeypatch.setenv("DISPATCHIO_RECEIVER__BACKEND", "sqs")
+        monkeypatch.delenv("DISPATCHIO_RECEIVER__QUEUE_URL", raising=False)
+
+        with pytest.raises(ValueError, match="DISPATCHIO_RECEIVER__QUEUE_URL"):
+            report_external_done(
+                event_name="event.user_registered",
+                run_id="20250115",
+            )

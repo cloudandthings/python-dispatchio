@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-Generate COOKBOOK.md from per-example metadata.
+Generate COOKBOOK.md from examples/ directories.
 
-Each subdirectory of examples/ that contains an example.toml is
-included as one cookbook entry. Entries are ordered by the optional
-`order` field (integer, lower = earlier), then alphabetically by
-directory name as a tiebreaker.
+Each subdirectory of examples/ that contains a run.py is included as one
+cookbook entry. If example.toml is present, it is used as metadata; otherwise
+the script falls back to inferred defaults so the cookbook stays self-updating.
+
+Entries are ordered by the optional `order` field (integer, lower = earlier),
+then alphabetically by directory name as a tiebreaker.
 
 Usage:
     python scripts/build_cookbook.py
@@ -17,6 +19,7 @@ from __future__ import annotations
 import argparse
 import tomllib
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).parent.parent
 EXAMPLES_DIR = ROOT / "examples"
@@ -48,6 +51,54 @@ python examples/<name>/run.py
 ---
 
 """
+
+
+def _title_from_dir(name: str) -> str:
+    return name.replace("_", " ").replace("-", " ").title()
+
+
+def _default_show_files(example_dir: Path) -> list[str]:
+    preferred = ["jobs.py", "my_work.py", "run.py", "dispatchio.toml"]
+    show_files = [name for name in preferred if (example_dir / name).exists()]
+
+    if show_files:
+        return show_files
+
+    # Fallback for unusual examples: show all top-level Python files except __init__.
+    py_files = sorted(
+        p.name
+        for p in example_dir.glob("*.py")
+        if p.name != "__init__.py" and p.is_file()
+    )
+    return py_files
+
+
+def _load_meta(example_dir: Path) -> dict[str, Any]:
+    meta_path = example_dir / "example.toml"
+    if meta_path.exists():
+        with meta_path.open("rb") as fh:
+            meta: dict[str, Any] = tomllib.load(fh)
+    else:
+        meta = {}
+
+    title = str(meta.get("title", _title_from_dir(example_dir.name)))
+    summary = str(
+        meta.get(
+            "summary",
+            "Auto-discovered example (add example.toml for richer cookbook metadata).",
+        )
+    )
+    tags = [str(tag) for tag in meta.get("tags", [])]
+    show_files = [str(name) for name in meta.get("show_files", _default_show_files(example_dir))]
+    order = int(meta.get("order", 999))
+
+    return {
+        "title": title,
+        "summary": summary,
+        "tags": tags,
+        "show_files": show_files,
+        "order": order,
+    }
 
 
 def _code_block(path: Path) -> str:
@@ -82,12 +133,11 @@ def _render(example_dir: Path, meta: dict) -> str:
 def build(output: Path = DEFAULT_OUT) -> None:
     entries: list[tuple[int, str, Path, dict]] = []
 
-    for toml_path in EXAMPLES_DIR.glob("*/example.toml"):
-        with toml_path.open("rb") as fh:
-            meta = tomllib.load(fh)
-        entries.append(
-            (meta.get("order", 999), toml_path.parent.name, toml_path.parent, meta)
-        )
+    for example_dir in sorted(EXAMPLES_DIR.iterdir()):
+        if not example_dir.is_dir() or not (example_dir / "run.py").exists():
+            continue
+        meta = _load_meta(example_dir)
+        entries.append((meta["order"], example_dir.name, example_dir, meta))
 
     entries.sort(key=lambda e: (e[0], e[1]))
 

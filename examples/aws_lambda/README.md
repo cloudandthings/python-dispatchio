@@ -30,3 +30,16 @@ Run one tick:
 ```bash
 python examples/aws_lambda/run.py
 ```
+
+Publish external dependency events (single command sends two events):
+
+```bash
+python examples/aws_lambda/external_event_producer.py 20250115
+```
+
+This emits:
+
+- `event.user_registered`
+- `event.kyc_passed`
+
+Both are sent through the configured receiver backend (typically SQS in AWS).

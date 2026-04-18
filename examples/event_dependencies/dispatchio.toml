@@ -1,0 +1,13 @@
+# Dispatchio configuration — event_dependencies example
+
+[dispatchio]
+log_level = "INFO"
+default_cadence = "daily"
+
+[dispatchio.state]
+backend = "sqlalchemy"
+connection_string = "sqlite:///dispatchio.db"
+
+[dispatchio.receiver]
+backend  = "filesystem"
+drop_dir = ".dispatchio/completions"
