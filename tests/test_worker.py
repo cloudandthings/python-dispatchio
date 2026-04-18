@@ -24,7 +24,18 @@ class SpyReporter:
     def __init__(self):
         self.calls: list[dict[str, Any]] = []
 
-    def report(self, job_name, run_id, status, *, error_reason=None, metadata=None):
+    def report(
+        self,
+        job_name,
+        run_id,
+        status,
+        *,
+        error_reason=None,
+        metadata=None,
+        logical_run_id=None,
+        attempt=None,
+        dispatchio_attempt_id=None,
+    ):
         self.calls.append(
             {
                 "job_name": job_name,
@@ -32,6 +43,9 @@ class SpyReporter:
                 "status": status,
                 "error_reason": error_reason,
                 "metadata": metadata or {},
+                "logical_run_id": logical_run_id,
+                "attempt": attempt,
+                "dispatchio_attempt_id": dispatchio_attempt_id,
             }
         )
 

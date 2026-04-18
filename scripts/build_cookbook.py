@@ -89,7 +89,9 @@ def _load_meta(example_dir: Path) -> dict[str, Any]:
         )
     )
     tags = [str(tag) for tag in meta.get("tags", [])]
-    show_files = [str(name) for name in meta.get("show_files", _default_show_files(example_dir))]
+    show_files = [
+        str(name) for name in meta.get("show_files", _default_show_files(example_dir))
+    ]
     order = int(meta.get("order", 999))
 
     return {

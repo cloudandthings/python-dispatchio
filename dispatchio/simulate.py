@@ -88,9 +88,9 @@ def simulate(
         if stop_when(orchestrator.state, orchestrator.jobs, run_id):
             log.info("Stop condition met. Final state:")
             for j in orchestrator.jobs:
-                rec = orchestrator.state.get(j.name, run_id)
+                rec = orchestrator.state.get_latest_attempt(j.name, run_id)
                 status = rec.status.value if rec else "NO_RECORD"
-                suffix = f"  — {rec.error_reason}" if rec and rec.error_reason else ""
+                suffix = f"  — {rec.reason}" if rec and rec.reason else ""
                 log.info("  %-25s %s%s", j.name, status, suffix)
             return
 
@@ -102,4 +102,7 @@ def simulate(
 
 def _all_finished(store: StateStore, jobs: list[Job], run_id: str) -> bool:
     """Default stop condition: every job has a finished record for run_id."""
-    return all((rec := store.get(j.name, run_id)) and rec.is_finished() for j in jobs)
+    return all(
+        (rec := store.get_latest_attempt(j.name, run_id)) and rec.is_finished()
+        for j in jobs
+    )

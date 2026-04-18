@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any
+from uuid import UUID
 
 import boto3
 from beartype import beartype
@@ -36,6 +37,9 @@ class SQSReporter:
         *,
         error_reason: str | None = None,
         metadata: dict[str, Any] | None = None,
+        logical_run_id: str | None = None,
+        attempt: int | None = None,
+        dispatchio_attempt_id: UUID | None = None,
     ) -> None:
         try:
             event = CompletionEvent(
@@ -44,6 +48,9 @@ class SQSReporter:
                 status=status,
                 error_reason=error_reason,
                 metadata=metadata or {},
+                logical_run_id=logical_run_id or run_id,
+                attempt=attempt,
+                dispatchio_attempt_id=dispatchio_attempt_id,
             )
             self._client.send_message(
                 QueueUrl=self._queue_url,

@@ -41,6 +41,8 @@ Override via explicit arguments or env vars for testing.
 Environment variables (all optional):
     DISPATCHIO_RUN_ID      fallback if --run-id not in argv
     DISPATCHIO_DROP_DIR    fallback if --drop-dir not in argv (filesystem reporter)
+    DISPATCHIO_ATTEMPT     attempt number injected by executor (Phase 2)
+    DISPATCHIO_ATTEMPT_ID  attempt UUID injected by executor (Phase 2)
 """
 
 from __future__ import annotations
@@ -51,6 +53,7 @@ import os
 import sys
 from collections.abc import Callable
 from typing import Any
+from uuid import UUID
 
 from dispatchio.models import Status
 from dispatchio.worker.reporter.base import Reporter
@@ -207,6 +210,22 @@ def run_job(
     resolved_run_id = _resolve_run_id(run_id)
     resolved_reporter = _resolve_reporter(reporter)
 
+    # Phase 2: read attempt identity injected by executor env vars
+    attempt_id_str = os.environ.get("DISPATCHIO_ATTEMPT_ID")
+    attempt_str = os.environ.get("DISPATCHIO_ATTEMPT")
+    dispatchio_attempt_id: UUID | None = None
+    attempt_number: int | None = None
+    if attempt_id_str:
+        try:
+            dispatchio_attempt_id = UUID(attempt_id_str)
+        except ValueError:
+            logger.warning("Invalid DISPATCHIO_ATTEMPT_ID: %r", attempt_id_str)
+    if attempt_str:
+        try:
+            attempt_number = int(attempt_str)
+        except ValueError:
+            logger.warning("Invalid DISPATCHIO_ATTEMPT: %r", attempt_str)
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
@@ -225,7 +244,13 @@ def run_job(
 
         if resolved_reporter is not None:
             resolved_reporter.report(
-                job_name, resolved_run_id, Status.DONE, metadata=metadata
+                job_name,
+                resolved_run_id,
+                Status.DONE,
+                metadata=metadata,
+                logical_run_id=resolved_run_id,
+                attempt=attempt_number,
+                dispatchio_attempt_id=dispatchio_attempt_id,
             )
 
     except Exception as exc:
@@ -244,6 +269,9 @@ def run_job(
                 resolved_run_id,
                 Status.ERROR,
                 error_reason=error_reason,
+                logical_run_id=resolved_run_id,
+                attempt=attempt_number,
+                dispatchio_attempt_id=dispatchio_attempt_id,
             )
 
         sys.exit(1)

@@ -69,7 +69,6 @@ from dispatchio.models import (
     LambdaJob,
     PythonJob,
     RetryPolicy,
-    RunRecord,
     Status,
     StepFunctionJob,
     SubprocessJob,
@@ -104,7 +103,7 @@ def local_orchestrator(
     subprocess and python executors, and a file-drop completion receiver.
 
     Directory layout under base_dir:
-        state/          RunRecord JSON files
+        state/          AttemptRecord JSON files
         completions/    Completion event drop directory
         tick_log.jsonl  Append-only tick audit log
 
@@ -178,7 +177,6 @@ __all__ = [
     "LambdaJob",
     "PythonJob",
     "RetryPolicy",
-    "RunRecord",
     "Status",
     "StepFunctionJob",
     "SubprocessJob",

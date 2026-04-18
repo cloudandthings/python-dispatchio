@@ -23,7 +23,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
-from dispatchio import RunRecord, Status, simulate
+from uuid import uuid4
+from dispatchio.models import AttemptRecord, TriggerType
+from dispatchio import Status, simulate
 from examples.dependency_modes.jobs import orchestrator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -31,23 +33,38 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 REF = datetime(2025, 1, 15, 9, 0, tzinfo=timezone.utc)
 RUN_ID = REF.strftime("%Y%m%d")  # "20250115"
 
+
 # Seed the state store to simulate entity results without running the jobs.
-orchestrator.state.put(
-    RunRecord(job_name="entity_a", run_id=RUN_ID, status=Status.DONE)
-)
-orchestrator.state.put(
-    RunRecord(job_name="entity_b", run_id=RUN_ID, status=Status.DONE)
-)
-orchestrator.state.put(
-    RunRecord(
-        job_name="entity_c",
-        run_id=RUN_ID,
-        status=Status.ERROR,
-        error_reason="simulated failure",
+def _seed(job_name: str, status: Status, reason: str | None = None) -> None:
+    orchestrator.state.append_attempt(
+        AttemptRecord(
+            job_name=job_name,
+            logical_run_id=RUN_ID,
+            attempt=0,
+            dispatchio_attempt_id=uuid4(),
+            status=status,
+            reason=reason,
+            trigger_type=TriggerType.SCHEDULED,
+            trace={},
+        )
     )
-)
+
+
+_seed("entity_a", Status.DONE)
+_seed("entity_b", Status.DONE)
+_seed("entity_c", Status.ERROR, reason="simulated failure")
 
 simulate(
     orchestrator,
     reference_time=REF,
 )
+
+print("\nAttempt history with trigger metadata:")
+for attempt_record in orchestrator.state.list_attempts(logical_run_id=RUN_ID):
+    print(
+        f"- {attempt_record.job_name} "
+        f"attempt={attempt_record.attempt} "
+        f"status={attempt_record.status.value} "
+        f"trigger={attempt_record.trigger_type.value} "
+        f"reason={attempt_record.trigger_reason}"
+    )

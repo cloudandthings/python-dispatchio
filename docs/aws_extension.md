@@ -363,7 +363,7 @@ on each tick for jobs in RUNNING state, as a safe fallback alongside the push pa
 
 ```python
 class Pokeable(Protocol):
-    def poke(self, record: RunRecord) -> Status | None:
+    def poke(self, record: AttemptRecord) -> Status | None:
         """
         Check whether the job is still running by querying the service directly.
         Returns the current Status, or None if the execution ID is not available.
@@ -375,7 +375,7 @@ Executor implementations:
 
 ```python
 # AthenaExecutor
-def poke(self, record: RunRecord) -> Status | None:
+def poke(self, record: AttemptRecord) -> Status | None:
     query_id = record.metadata.get("query_execution_id")
     if not query_id:
         return None
@@ -385,7 +385,7 @@ def poke(self, record: RunRecord) -> Status | None:
     return _athena_state_to_status(state)   # SUCCEEDED→DONE, FAILED→ERROR, RUNNING→RUNNING
 
 # StepFunctionsExecutor
-def poke(self, record: RunRecord) -> Status | None:
+def poke(self, record: AttemptRecord) -> Status | None:
     arn = record.metadata.get("execution_arn")
     if not arn:
         return None

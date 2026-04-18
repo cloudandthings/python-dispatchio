@@ -103,7 +103,8 @@ simulate(
     reference_time=REFERENCE_TIME,
     tick_interval=0.5,
     stop_when=lambda store, jobs, _: all(
-        (rec := store.get(j.name, weekly_run_id)) and rec.is_finished() for j in jobs
+        (rec := store.get_latest_attempt(j.name, weekly_run_id)) and rec.is_finished()
+        for j in jobs
     ),
 )
 

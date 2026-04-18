@@ -17,7 +17,7 @@ from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
-from dispatchio.models import AlertOn, RunRecord
+from dispatchio.models import AlertOn, AttemptRecord
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class AlertEvent(BaseModel):
     channels: list[str]
     detail: str | None = None
     occurred_at: datetime
-    record: RunRecord | None = None  # full run record for context
+    record: AttemptRecord | None = None  # full run record for context
 
 
 @runtime_checkable

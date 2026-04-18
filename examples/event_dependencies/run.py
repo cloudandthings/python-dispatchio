@@ -57,6 +57,20 @@ def _submitted(rows: list[tuple[str, str]], job_name: str) -> bool:
     )
 
 
+def _log_attempts(run_id: str) -> None:
+    attempts = orchestrator.state.list_attempts(logical_run_id=run_id)
+    log.info("Attempt history for logical_run_id=%s", run_id)
+    for record in attempts:
+        log.info(
+            "  %s attempt=%d status=%s trigger=%s reason=%s",
+            record.job_name,
+            record.attempt,
+            record.status.value,
+            record.trigger_type.value,
+            record.trigger_reason,
+        )
+
+
 if __name__ == "__main__":
     reference_time = datetime(2025, 1, 15, 9, 0, tzinfo=timezone.utc)
     run_id = reference_time.strftime("%Y%m%d")
@@ -80,5 +94,7 @@ if __name__ == "__main__":
     # Tick 3: two-event dependency fan-in is now satisfied.
     tick3 = _tick("Tick 3 - event.kyc_passed received", reference_time)
     assert _submitted(tick3, "activate_paid_features")
+
+    _log_attempts(run_id)
 
     log.info("Event dependency demo completed successfully")

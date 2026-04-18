@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime, time
 from enum import Enum
 from typing import Annotated, Any, Literal
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -23,24 +24,79 @@ from dispatchio.conditions import AnyCondition
 
 
 class Status(str, Enum):
-    """Lifecycle states for a single job run."""
+    """Lifecycle states for a single job attempt."""
 
-    PENDING = "pending"  # known to scheduler, not yet submitted
     SUBMITTED = "submitted"  # handed off to executor, awaiting start confirmation
+    QUEUED = "queued"  # optional intermediate state; executor confirms queuing
     RUNNING = "running"  # executor confirmed start or job posted RUNNING status
     DONE = "done"  # completed successfully
-    ERROR = "error"  # failed; error_reason populated
+    ERROR = "error"  # failed; reason populated
     LOST = "lost"  # detected lost (e.g. via poke or timeout) — retry policy applied
-    SKIPPED = "skipped"  # explicitly skipped (e.g. upstream permanently failed)
+    CANCELLED = "cancelled"  # explicitly cancelled by user
 
     # Convenience groupings (not stored as status values)
     @classmethod
     def finished(cls) -> frozenset[Status]:
-        return frozenset({cls.DONE, cls.ERROR, cls.LOST, cls.SKIPPED})
+        return _FINISHED_STATUSES
 
     @classmethod
     def active(cls) -> frozenset[Status]:
-        return frozenset({cls.SUBMITTED, cls.RUNNING})
+        return _ACTIVE_STATUSES
+
+
+# Defined after the class so enum members exist; returned by finished()/active().
+_FINISHED_STATUSES: frozenset[Status] = frozenset(
+    {Status.DONE, Status.ERROR, Status.LOST, Status.CANCELLED}
+)
+_ACTIVE_STATUSES: frozenset[Status] = frozenset(
+    {Status.SUBMITTED, Status.QUEUED, Status.RUNNING}
+)
+
+
+# ---------------------------------------------------------------------------
+# Trigger type and dead letter enums
+# ---------------------------------------------------------------------------
+
+
+class TriggerType(str, Enum):
+    """Why an attempt was created."""
+
+    SCHEDULED = "scheduled"  # triggered by scheduler/cadence
+    AUTO_RETRY = "auto_retry"  # triggered by automatic retry policy
+    MANUAL_RETRY = "manual_retry"  # triggered by user/manual request
+
+
+class DeadLetterReasonCode(str, Enum):
+    """Why a completion event was rejected (dead-lettered)."""
+
+    VALIDATION_FAILURE = (
+        "validation_failure"  # payload missing required fields or invalid schema
+    )
+    CORRELATION_FAILURE = (
+        "correlation_failure"  # dispatchio_attempt_id + identity fields do not resolve
+    )
+    CONFLICT_FAILURE = "conflict_failure"  # duplicate dispatchio_attempt_id with incompatible terminal update
+    POLICY_REJECT = "policy_reject"  # invalid state transition or other orchestration rule violation
+
+
+class DeadLetterStatus(str, Enum):
+    """Status of a dead-letter entry."""
+
+    OPEN = "open"  # dead-letter recorded, not yet reviewed
+    REPLAYED = "replayed"  # operator replayed and resolved
+    IGNORED = "ignored"  # marked as safe to ignore
+
+
+class DeadLetterSourceBackend(str, Enum):
+    """Which backend/source submitted the dead-lettered completion."""
+
+    SUBPROCESS = "subprocess"
+    PYTHON = "python"
+    LAMBDA = "lambda"
+    STEPFUNCTIONS = "stepfunctions"
+    ATHENA = "athena"
+    HTTP = "http"
+    OTHER = "other"
 
 
 # ---------------------------------------------------------------------------
@@ -59,32 +115,100 @@ class DependencyMode(str, Enum):
 
 
 # ---------------------------------------------------------------------------
-# Run Record — the state store unit
+# Attempt Record — the core state store unit (immutable sequence per logical run)
 # ---------------------------------------------------------------------------
 
 
-class RunRecord(BaseModel):
+class AttemptRecord(BaseModel):
     """
-    A single execution instance of a job for a given run_id.
-    This is the unit stored in the state store.
+    A single immutable execution instance (attempt) of a job for a given logical_run_id.
+    This is the unit stored in the run_attempts table.
+
+    One logical run (e.g., a daily schedule) can have multiple attempts due to
+    retries. Attempts are numbered sequentially starting at 0.
+
+    Phase 3: Operator context fields track manual operations (retry, cancel).
     """
 
     job_name: str
-    run_id: str  # e.g. "20250115", "202501", "2025011502"
+    logical_run_id: str  # e.g. "20250115", "202501", "2025011502"
+    attempt: int  # 0-indexed; incremented for each retry/re-execution
+    dispatchio_attempt_id: UUID  # opaque UUID; primary correlation key
     status: Status
-    attempt: int = 0  # 0-indexed; increments on each retry
+    reason: str | None = None  # terminal state reason (all terminal states)
     submitted_at: datetime | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
-    error_reason: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    executor_reference: dict[str, Any] | None = None
+    trigger_type: TriggerType = TriggerType.SCHEDULED
+    trigger_reason: str | None = None
+    trace: dict[str, Any] = Field(default_factory=dict)  # executor/upstream metadata
+    completion_event_trace: dict[str, Any] | None = (
+        None  # raw completion payload snapshot
+    )
+    # Phase 3: Operator context for manual operations
+    operator_name: str | None = None  # who initiated manual operation (audit)
 
     def is_finished(self) -> bool:
         return self.status in Status.finished()
 
     def is_active(self) -> bool:
         return self.status in Status.active()
+
+
+# ---------------------------------------------------------------------------
+# Dead Letter Record — rejected completion events
+# ---------------------------------------------------------------------------
+
+
+class DeadLetterRecord(BaseModel):
+    """
+    A completion event that was rejected (dead-lettered) due to validation
+    failure, status conflict, or other issue.
+
+    Allows audit trail of problematic completions.
+    """
+
+    dead_letter_id: UUID = Field(default_factory=uuid4)
+    occurred_at: datetime
+    source_backend: DeadLetterSourceBackend
+    reason_code: DeadLetterReasonCode
+    reason_detail: str | None = None
+    status: DeadLetterStatus = DeadLetterStatus.OPEN
+    # Event identity fields (attempted correlation)
+    job_name: str
+    logical_run_id: str | None = None
+    attempt: int | None = None
+    dispatchio_attempt_id: UUID | None = None
+    # Raw event payload for audit
+    raw_payload: dict[str, Any] = Field(default_factory=dict)
+    # Resolution tracking
+    resolved_at: datetime | None = None
+    resolver_notes: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# RetryRequest — audit record for manual retry operations
+# ---------------------------------------------------------------------------
+
+
+class RetryRequest(BaseModel):
+    """
+    Audit record for a manual retry request.
+
+    Created once per `dispatchio retry create` invocation so that operators
+    can answer: who requested a retry, why, and which attempt numbers were
+    assigned.
+    """
+
+    retry_request_id: UUID = Field(default_factory=uuid4)
+    requested_at: datetime
+    requested_by: str
+    logical_run_id: str
+    requested_jobs: list[str] = Field(default_factory=list)
+    cascade: bool = True
+    reason: str | None = None
+    selected_jobs: list[str] = Field(default_factory=list)
+    assigned_attempt_by_job: dict[str, int] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +488,17 @@ class JobAction(str, Enum):
     ALERT_SENT = "alert_sent"
 
 
+_SKIPPED_ACTIONS: frozenset[JobAction] = frozenset(
+    {
+        JobAction.SKIPPED_CONDITION,
+        JobAction.SKIPPED_DEPENDENCIES,
+        JobAction.SKIPPED_THRESHOLD_UNREACHABLE,
+        JobAction.SKIPPED_ALREADY_ACTIVE,
+        JobAction.SKIPPED_ALREADY_DONE,
+    }
+)
+
+
 class JobTickResult(BaseModel):
     job_name: str
     run_id: str
@@ -379,4 +514,4 @@ class TickResult(BaseModel):
         return [r for r in self.results if r.action == JobAction.SUBMITTED]
 
     def skipped(self) -> list[JobTickResult]:
-        return [r for r in self.results if r.action.value.startswith("skipped")]
+        return [r for r in self.results if r.action in _SKIPPED_ACTIONS]

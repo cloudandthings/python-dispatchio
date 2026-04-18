@@ -13,8 +13,12 @@ No migration tooling is required for a fresh deployment.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
+import threading
+from collections.abc import Iterator
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import (
     JSON,
@@ -24,13 +28,48 @@ from sqlalchemy import (
     Text,
     TypeDecorator,
     UniqueConstraint,
+    cast,
     create_engine,
+    desc,
+    and_,
     select,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from dispatchio.models import RunRecord, Status
+from dispatchio.models import AttemptRecord, DeadLetterRecord, RetryRequest, Status
+from dispatchio.models import (
+    TriggerType,
+    DeadLetterReasonCode,
+    DeadLetterStatus,
+    DeadLetterSourceBackend,
+)
+
+
+# ---------------------------------------------------------------------------
+# Custom type: UUID
+# ---------------------------------------------------------------------------
+
+
+class _UUIDType(TypeDecorator):
+    """Store UUID as string for maximum database compatibility."""
+
+    impl = String(36)
+    cache_ok = True
+
+    def process_bind_param(self, value: UUID | None, dialect) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        return str(value)
+
+    def process_result_value(self, value: str | None, dialect) -> UUID | None:
+        if value is None:
+            return None
+        if isinstance(value, UUID):
+            return value
+        return UUID(value)
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +102,7 @@ class _UTCDateTime(TypeDecorator):
 
 
 # ---------------------------------------------------------------------------
-# ORM model
+# ORM models
 # ---------------------------------------------------------------------------
 
 
@@ -71,30 +110,91 @@ class _Base(DeclarativeBase):
     pass
 
 
-class _RunRecordRow(_Base):
-    __tablename__ = "run_records"
+class _AttemptRecordRow(_Base):
+    """Immutable row per attempt."""
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    __tablename__ = "run_attempts"
+
+    # PK: dispatchio_attempt_id as UUID string
+    dispatchio_attempt_id: Mapped[str] = mapped_column(_UUIDType, primary_key=True)
+    # Identity key: (job_name, logical_run_id, attempt)
     job_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    run_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    logical_run_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Status and reason
     status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
-    attempt: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Timestamps
     submitted_at: Mapped[datetime | None] = mapped_column(_UTCDateTime, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(_UTCDateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(
         _UTCDateTime, nullable=True, index=True
     )
-    error_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Column name is "metadata" in DB; attribute is metadata_ to avoid shadowing
-    # SQLAlchemy's own metadata descriptor on mapped classes.
-    metadata_: Mapped[dict[str, Any]] = mapped_column(
-        "metadata", JSON, nullable=False, default=dict
+    # Trigger and trace
+    trigger_type: Mapped[str] = mapped_column(
+        String(50), nullable=False, default=TriggerType.SCHEDULED.value
     )
-    executor_reference: Mapped[dict[str, Any] | None] = mapped_column(
+    trigger_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    trace: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    completion_event_trace: Mapped[dict[str, Any] | None] = mapped_column(
         JSON, nullable=True
     )
+    # Phase 3: Operator context for manual operations
+    operator_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
-    __table_args__ = (UniqueConstraint("job_name", "run_id", name="uq_job_run"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "job_name", "logical_run_id", "attempt", name="uq_job_logical_run_attempt"
+        ),
+    )
+
+
+class _RetryRequestRow(_Base):
+    """Audit row for a manual retry request."""
+
+    __tablename__ = "retry_requests"
+
+    retry_request_id: Mapped[str] = mapped_column(_UUIDType, primary_key=True)
+    requested_at: Mapped[datetime] = mapped_column(
+        _UTCDateTime, nullable=False, index=True
+    )
+    requested_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    logical_run_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    requested_jobs: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    cascade: Mapped[bool] = mapped_column(Integer, nullable=False, default=1)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    selected_jobs: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    assigned_attempt_by_job: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+
+
+class _DeadLetterRow(_Base):
+    """Dead-letter log for rejected completion events."""
+
+    __tablename__ = "dead_letters"
+
+    dead_letter_id: Mapped[str] = mapped_column(_UUIDType, primary_key=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        _UTCDateTime, nullable=False, index=True
+    )
+    source_backend: Mapped[str] = mapped_column(String(50), nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    reason_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(50), nullable=False, default=DeadLetterStatus.OPEN.value
+    )
+    # Event identity
+    job_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    logical_run_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    attempt: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dispatchio_attempt_id: Mapped[str | None] = mapped_column(_UUIDType, nullable=True)
+    # Audit
+    raw_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(_UTCDateTime, nullable=True)
+    resolver_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 # ---------------------------------------------------------------------------
@@ -102,33 +202,132 @@ class _RunRecordRow(_Base):
 # ---------------------------------------------------------------------------
 
 
-def _row_to_record(row: _RunRecordRow) -> RunRecord:
-    return RunRecord(
+def _row_to_attempt_record(row: _AttemptRecordRow) -> AttemptRecord:
+    attempt_id = row.dispatchio_attempt_id
+    if isinstance(attempt_id, str):
+        attempt_id = UUID(attempt_id)
+    return AttemptRecord(
         job_name=row.job_name,
-        run_id=row.run_id,
-        status=Status(row.status),
+        logical_run_id=row.logical_run_id,
         attempt=row.attempt,
+        dispatchio_attempt_id=attempt_id,
+        status=Status(row.status),
+        reason=row.reason,
         submitted_at=row.submitted_at,
         started_at=row.started_at,
         completed_at=row.completed_at,
-        error_reason=row.error_reason,
-        metadata=row.metadata_ or {},
-        executor_reference=row.executor_reference,
+        trigger_type=TriggerType(row.trigger_type),
+        trigger_reason=row.trigger_reason,
+        trace=row.trace or {},
+        completion_event_trace=row.completion_event_trace,
+        operator_name=row.operator_name,
     )
 
 
-def _apply_record_to_row(record: RunRecord, row: _RunRecordRow) -> None:
-    """Write all RunRecord fields onto an existing (or new) ORM row in-place."""
+def _apply_attempt_record_to_row(record: AttemptRecord, row: _AttemptRecordRow) -> None:
+    """Write all AttemptRecord fields onto an existing (or new) ORM row in-place."""
+    row.dispatchio_attempt_id = str(record.dispatchio_attempt_id)
     row.job_name = record.job_name
-    row.run_id = record.run_id
-    row.status = record.status.value
+    row.logical_run_id = record.logical_run_id
     row.attempt = record.attempt
+    row.status = record.status.value
+    row.reason = record.reason
     row.submitted_at = record.submitted_at
     row.started_at = record.started_at
     row.completed_at = record.completed_at
-    row.error_reason = record.error_reason
-    row.metadata_ = record.metadata
-    row.executor_reference = record.executor_reference
+    row.trigger_type = record.trigger_type.value
+    row.trigger_reason = record.trigger_reason
+    row.trace = record.trace
+    row.completion_event_trace = record.completion_event_trace
+    row.operator_name = record.operator_name
+
+
+def _row_to_retry_request(row: _RetryRequestRow) -> RetryRequest:
+    retry_request_id = (
+        row.retry_request_id
+        if isinstance(row.retry_request_id, UUID)
+        else UUID(row.retry_request_id)
+    )
+    return RetryRequest(
+        retry_request_id=retry_request_id,
+        requested_at=row.requested_at,
+        requested_by=row.requested_by,
+        logical_run_id=row.logical_run_id,
+        requested_jobs=row.requested_jobs or [],
+        cascade=bool(row.cascade),
+        reason=row.reason,
+        selected_jobs=row.selected_jobs or [],
+        assigned_attempt_by_job=row.assigned_attempt_by_job or {},
+    )
+
+
+def _apply_retry_request_to_row(record: RetryRequest, row: _RetryRequestRow) -> None:
+    row.retry_request_id = str(record.retry_request_id)
+    row.requested_at = record.requested_at
+    row.requested_by = record.requested_by
+    row.logical_run_id = record.logical_run_id
+    row.requested_jobs = record.requested_jobs
+    row.cascade = int(record.cascade)
+    row.reason = record.reason
+    row.selected_jobs = record.selected_jobs
+    row.assigned_attempt_by_job = record.assigned_attempt_by_job
+
+
+def _row_to_dead_letter_record(row: _DeadLetterRow) -> DeadLetterRecord:
+    dead_letter_id = (
+        row.dead_letter_id
+        if isinstance(row.dead_letter_id, UUID)
+        else UUID(row.dead_letter_id)
+    )
+    dispatchio_attempt_id = None
+    if row.dispatchio_attempt_id:
+        dispatchio_attempt_id = (
+            row.dispatchio_attempt_id
+            if isinstance(row.dispatchio_attempt_id, UUID)
+            else UUID(row.dispatchio_attempt_id)
+        )
+    return DeadLetterRecord(
+        dead_letter_id=dead_letter_id,
+        occurred_at=row.occurred_at,
+        source_backend=DeadLetterSourceBackend(row.source_backend),
+        reason_code=DeadLetterReasonCode(row.reason_code),
+        reason_detail=row.reason_detail,
+        status=DeadLetterStatus(row.status),
+        job_name=row.job_name,
+        logical_run_id=row.logical_run_id,
+        attempt=row.attempt,
+        dispatchio_attempt_id=dispatchio_attempt_id,
+        raw_payload=row.raw_payload or {},
+        resolved_at=row.resolved_at,
+        resolver_notes=row.resolver_notes,
+    )
+
+
+def _apply_dead_letter_record_to_row(
+    record: DeadLetterRecord, row: _DeadLetterRow
+) -> None:
+    """Write all DeadLetterRecord fields onto an existing (or new) ORM row in-place."""
+    row.dead_letter_id = str(record.dead_letter_id)
+    row.occurred_at = record.occurred_at
+    row.source_backend = record.source_backend.value
+    row.reason_code = record.reason_code.value
+    row.reason_detail = record.reason_detail
+    row.status = record.status.value
+    row.job_name = record.job_name
+    row.logical_run_id = record.logical_run_id
+    row.attempt = record.attempt
+    row.dispatchio_attempt_id = (
+        str(record.dispatchio_attempt_id) if record.dispatchio_attempt_id else None
+    )
+    row.raw_payload = record.raw_payload
+    row.resolved_at = record.resolved_at
+    row.resolver_notes = record.resolver_notes
+
+
+@contextmanager
+def _nullctx() -> Iterator[None]:
+    """A no-op context manager used when no lock is needed."""
+    yield
 
 
 # ---------------------------------------------------------------------------
@@ -170,48 +369,182 @@ class SQLAlchemyStateStore:
         self._engine = create_engine(connection_string, **engine_kwargs)
         _Base.metadata.create_all(self._engine)
         self._Session = sessionmaker(bind=self._engine)
+        # Protect in-memory SQLite's StaticPool from concurrent threads
+        self._lock: threading.Lock | None = threading.Lock() if is_memory else None
 
     # ------------------------------------------------------------------
-    # StateStore protocol
+    # StateStore protocol - Attempt API
     # ------------------------------------------------------------------
 
-    def get(self, job_name: str, run_id: str) -> RunRecord | None:
-        with Session(self._engine) as session:
-            row = session.scalar(
-                select(_RunRecordRow).where(
-                    _RunRecordRow.job_name == job_name,
-                    _RunRecordRow.run_id == run_id,
+    def get_latest_attempt(
+        self, job_name: str, logical_run_id: str
+    ) -> AttemptRecord | None:
+        with self._lock or _nullctx():
+            with Session(self._engine) as session:
+                row = session.scalar(
+                    select(_AttemptRecordRow)
+                    .where(
+                        and_(
+                            _AttemptRecordRow.job_name == job_name,
+                            _AttemptRecordRow.logical_run_id == logical_run_id,
+                        )
+                    )
+                    .order_by(desc(_AttemptRecordRow.attempt))
+                    .limit(1)
                 )
-            )
-            return _row_to_record(row) if row is not None else None
+                return _row_to_attempt_record(row) if row is not None else None
 
-    def put(self, record: RunRecord) -> None:
-        with Session(self._engine) as session:
-            existing = session.scalar(
-                select(_RunRecordRow).where(
-                    _RunRecordRow.job_name == record.job_name,
-                    _RunRecordRow.run_id == record.run_id,
+    def get_attempt(self, dispatchio_attempt_id: UUID) -> AttemptRecord | None:
+        with self._lock or _nullctx():
+            with Session(self._engine) as session:
+                row = session.scalar(
+                    select(_AttemptRecordRow).where(
+                        _AttemptRecordRow.dispatchio_attempt_id
+                        == str(dispatchio_attempt_id)
+                    )
                 )
-            )
-            if existing is None:
-                row = _RunRecordRow()
-                _apply_record_to_row(record, row)
+                return _row_to_attempt_record(row) if row is not None else None
+
+    def append_attempt(self, record: AttemptRecord) -> None:
+        """Insert a new attempt row."""
+        with self._lock or _nullctx():
+            with Session(self._engine) as session:
+                row = _AttemptRecordRow()
+                _apply_attempt_record_to_row(record, row)
                 session.add(row)
-            else:
-                _apply_record_to_row(record, existing)
-            session.commit()
+                session.commit()
 
-    def list_records(
+    def update_attempt(self, record: AttemptRecord) -> None:
+        """Update an existing attempt row by dispatchio_attempt_id."""
+        with self._lock or _nullctx():
+            with Session(self._engine) as session:
+                existing = session.scalar(
+                    select(_AttemptRecordRow).where(
+                        _AttemptRecordRow.dispatchio_attempt_id
+                        == str(record.dispatchio_attempt_id)
+                    )
+                )
+                if existing is not None:
+                    _apply_attempt_record_to_row(record, existing)
+                    session.commit()
+
+    def list_attempts(
         self,
         job_name: str | None = None,
+        logical_run_id: str | None = None,
+        attempt: int | None = None,
         status: Status | None = None,
-    ) -> list[RunRecord]:
-        with Session(self._engine) as session:
-            q = select(_RunRecordRow)
-            if job_name is not None:
-                q = q.where(_RunRecordRow.job_name == job_name)
-            if status is not None:
-                q = q.where(_RunRecordRow.status == status.value)
-            q = q.order_by(_RunRecordRow.job_name, _RunRecordRow.run_id)
-            rows = session.scalars(q).all()
-            return [_row_to_record(r) for r in rows]
+    ) -> list[AttemptRecord]:
+        with self._lock or _nullctx():
+            with Session(self._engine) as session:
+                q = select(_AttemptRecordRow)
+                if job_name is not None:
+                    q = q.where(_AttemptRecordRow.job_name == job_name)
+                if logical_run_id is not None:
+                    q = q.where(_AttemptRecordRow.logical_run_id == logical_run_id)
+                if attempt is not None:
+                    q = q.where(_AttemptRecordRow.attempt == attempt)
+                if status is not None:
+                    q = q.where(_AttemptRecordRow.status == status.value)
+                q = q.order_by(
+                    _AttemptRecordRow.job_name,
+                    _AttemptRecordRow.logical_run_id,
+                    desc(_AttemptRecordRow.attempt),
+                )
+                rows = session.scalars(q).all()
+                return [_row_to_attempt_record(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # StateStore protocol - Dead Letter API
+    # ------------------------------------------------------------------
+
+    def append_dead_letter(self, record: DeadLetterRecord) -> None:
+        """Record a rejected completion event."""
+        with self._lock or _nullctx():
+            with Session(self._engine) as session:
+                row = _DeadLetterRow()
+                _apply_dead_letter_record_to_row(record, row)
+                session.add(row)
+                session.commit()
+
+    def get_dead_letter(self, dead_letter_id: UUID) -> DeadLetterRecord | None:
+        with self._lock or _nullctx():
+            with Session(self._engine) as session:
+                row = session.scalar(
+                    select(_DeadLetterRow).where(
+                        _DeadLetterRow.dead_letter_id == str(dead_letter_id)
+                    )
+                )
+                return _row_to_dead_letter_record(row) if row is not None else None
+
+    def get_attempt_by_executor_trace(
+        self, trace_key: str, trace_value: str
+    ) -> AttemptRecord | None:
+        """
+        Find the first attempt whose trace.executor[trace_key] == trace_value.
+
+        Used by AWS completion handlers to correlate by execution_arn or
+        query_execution_id stored in trace at submission time.
+
+        Uses a SQL LIKE pre-filter on the JSON column text to avoid a full
+        table scan, then does an exact Python-side match for correctness.
+        trace_value is typically a unique ARN or ID, so the pre-filter usually
+        returns at most one row.
+        """
+        with self._lock or _nullctx():
+            with Session(self._engine) as session:
+                rows = session.scalars(
+                    select(_AttemptRecordRow).where(
+                        cast(_AttemptRecordRow.trace, String).like(f"%{trace_value}%")
+                    )
+                ).all()
+                for row in rows:
+                    executor_trace = (row.trace or {}).get("executor", {})
+                    if executor_trace.get(trace_key) == trace_value:
+                        return _row_to_attempt_record(row)
+                return None
+
+    def list_dead_letters(
+        self,
+        job_name: str | None = None,
+        status: str | None = None,
+    ) -> list[DeadLetterRecord]:
+        with self._lock or _nullctx():
+            with Session(self._engine) as session:
+                q = select(_DeadLetterRow)
+                if job_name is not None:
+                    q = q.where(_DeadLetterRow.job_name == job_name)
+                if status is not None:
+                    q = q.where(_DeadLetterRow.status == status)
+                q = q.order_by(_DeadLetterRow.occurred_at.desc())
+                rows = session.scalars(q).all()
+                return [_row_to_dead_letter_record(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # StateStore protocol - Retry Request API
+    # ------------------------------------------------------------------
+
+    def append_retry_request(self, record: RetryRequest) -> None:
+        """Record a manual retry request for audit."""
+        with self._lock or _nullctx():
+            with Session(self._engine) as session:
+                row = _RetryRequestRow()
+                _apply_retry_request_to_row(record, row)
+                session.add(row)
+                session.commit()
+
+    def list_retry_requests(
+        self,
+        logical_run_id: str | None = None,
+        requested_by: str | None = None,
+    ) -> list[RetryRequest]:
+        with self._lock or _nullctx():
+            with Session(self._engine) as session:
+                q = select(_RetryRequestRow)
+                if logical_run_id is not None:
+                    q = q.where(_RetryRequestRow.logical_run_id == logical_run_id)
+                if requested_by is not None:
+                    q = q.where(_RetryRequestRow.requested_by == requested_by)
+                q = q.order_by(_RetryRequestRow.requested_at.desc())
+                rows = session.scalars(q).all()
+                return [_row_to_retry_request(r) for r in rows]

@@ -341,8 +341,34 @@ RetryPolicy(max_attempts=3)                    # retry up to 3 times on any erro
 RetryPolicy(max_attempts=3, retry_on=["timeout", "503"])  # only retry on matching errors
 ```
 
-`retry_on` matches substrings of the `error_reason` field in the completion event.
+`retry_on` matches substrings of the completion `reason` field.
 If `retry_on` is empty, any error triggers a retry (up to `max_attempts`).
+
+### Operator retries and attempt inspection
+
+The orchestrator exposes manual retry/cancel operations with audit metadata:
+
+```python
+new_attempt = orchestrator.manual_retry(
+    job_name="ingest",
+    logical_run_id="20260418",
+    operator_name="oncall-alice",
+    operator_reason="upstream partition repaired",
+)
+
+cancelled = orchestrator.manual_cancel(
+    dispatchio_attempt_id=new_attempt.dispatchio_attempt_id,
+    operator_name="oncall-alice",
+    operator_reason="paused for investigation",
+)
+```
+
+Inspect immutable attempt history (including trigger metadata):
+
+```python
+for a in orchestrator.state.list_attempts(job_name="ingest", logical_run_id="20260418"):
+    print(a.attempt, a.status.value, a.trigger_type.value, a.trigger_reason)
+```
 
 ### Alerts
 
@@ -567,6 +593,8 @@ No changes needed. See [Completion Reporting](docs/completion_reporting.md) for 
 
 For event-driven pipelines, see [Event Dependencies](docs/external_events.md)
 for single-event and two-event fan-in patterns using the existing receiver queue.
+
+For operator runbooks, see [Retries, Attempts, and Audit Workflows](docs/retries_attempts_audit.md).
 
 ---
 
