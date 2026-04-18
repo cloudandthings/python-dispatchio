@@ -30,7 +30,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from dispatchio import (
-    Job, PythonJob, WEEKLY, simulate, orchestrator_from_config, resolve_run_id,
+    Job,
+    PythonJob,
+    WEEKLY,
+    simulate,
+    orchestrator_from_config,
+    resolve_run_id,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -98,8 +103,7 @@ simulate(
     reference_time=REFERENCE_TIME,
     tick_interval=0.5,
     stop_when=lambda store, jobs, _: all(
-        (rec := store.get(j.name, weekly_run_id)) and rec.is_finished()
-        for j in jobs
+        (rec := store.get(j.name, weekly_run_id)) and rec.is_finished() for j in jobs
     ),
 )
 
@@ -117,8 +121,7 @@ for orch in [daily, weekly]:
         continue
     records = orch.tick_log.list(limit=10)
     submitted_total = sum(
-        sum(1 for a in r.actions if a["action"] == "submitted")
-        for r in records
+        sum(1 for a in r.actions if a["action"] == "submitted") for r in records
     )
     print(f"  {orch.name}:")
     print(f"    {len(records)} tick(s) recorded, {submitted_total} total submission(s)")
@@ -140,10 +143,10 @@ daily_cfg = (BASE / "daily.toml").resolve()
 weekly_cfg = (BASE / "weekly.toml").resolve()
 print(f"    dispatchio context add daily-etl {daily_cfg}")
 print(f"    dispatchio context add weekly-reports {weekly_cfg}")
-print( "    dispatchio context use daily-etl")
+print("    dispatchio context use daily-etl")
 print()
-print( "    dispatchio ticks                           # daily-etl history")
-print( "    dispatchio ticks --context weekly-reports  # weekly-reports history")
-print( "    dispatchio status                          # daily-etl job status")
-print( "    dispatchio status --context weekly-reports")
+print("    dispatchio ticks                           # daily-etl history")
+print("    dispatchio ticks --context weekly-reports  # weekly-reports history")
+print("    dispatchio status                          # daily-etl job status")
+print("    dispatchio status --context weekly-reports")
 print()

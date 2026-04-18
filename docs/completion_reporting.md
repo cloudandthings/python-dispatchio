@@ -44,12 +44,12 @@ from dispatchio.completion import get_reporter
 
 def main(run_id: str) -> None:
     reporter = get_reporter("my_job")
-    
+
     print(f"Processing {run_id}...")
     try:
         # do work...
         rows = do_ingest()
-        
+
         # report success with metadata
         reporter.report_success(run_id, metadata={"rows": rows})
     except Exception as exc:
@@ -78,7 +78,7 @@ from dispatchio.completion import get_reporter
 
 def main(run_id: str) -> None:
     reporter = get_reporter("my_job")
-    
+
     print(f"Processing {run_id}...")
     try:
         # do work...
@@ -248,10 +248,10 @@ def test_my_job(tmp_path):
     # Create a temporary reporter
     fs_reporter = FilesystemReporter(tmp_path)
     reporter = _CompletionReporterAdapter("my_job", fs_reporter)
-    
+
     # Call your job logic with the reporter
     # ... test code ...
-    
+
     # Verify completion event was written
     files = list(tmp_path.glob("*.json"))
     assert len(files) == 1
@@ -265,7 +265,7 @@ from dispatchio.completion import _CompletionReporterAdapter
 def test_my_job_logic():
     # No-op reporter (logs warnings but doesn't fail)
     reporter = _CompletionReporterAdapter("my_job", None)
-    
+
     # Test your job logic
     # ... test code ...
 ```

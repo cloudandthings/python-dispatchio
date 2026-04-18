@@ -406,8 +406,6 @@ class TestRetryLogic:
         assert not any(r.action == JobAction.RETRYING for r in result.results)
 
 
-
-
 # ---------------------------------------------------------------------------
 # Completion receiver
 # ---------------------------------------------------------------------------
@@ -925,22 +923,35 @@ class TestPerformance:
         for chain_id in range(10):
             for pos in range(5):
                 depends = (
-                    [Dependency(job_name=f"chain_{chain_id:02d}_job_{pos-1:02d}", cadence=DAILY)]
+                    [
+                        Dependency(
+                            job_name=f"chain_{chain_id:02d}_job_{pos - 1:02d}",
+                            cadence=DAILY,
+                        )
+                    ]
                     if pos > 0
                     else []
                 )
-                jobs.append(_job(
-                    f"chain_{chain_id:02d}_job_{pos:02d}",
-                    depends_on=depends,
-                ))
+                jobs.append(
+                    _job(
+                        f"chain_{chain_id:02d}_job_{pos:02d}",
+                        depends_on=depends,
+                    )
+                )
 
         # Fan-in jobs: 50 jobs, each depends on a random independent job
         for i in range(50):
             independent_idx = i % 50
-            jobs.append(_job(
-                f"fan_in_{i:03d}",
-                depends_on=[Dependency(job_name=f"independent_{independent_idx:03d}", cadence=DAILY)],
-            ))
+            jobs.append(
+                _job(
+                    f"fan_in_{i:03d}",
+                    depends_on=[
+                        Dependency(
+                            job_name=f"independent_{independent_idx:03d}", cadence=DAILY
+                        )
+                    ],
+                )
+            )
 
         # Fan-out jobs: 5 jobs that each depend on 5 different independent jobs
         for i in range(5):
@@ -948,11 +959,13 @@ class TestPerformance:
                 Dependency(job_name=f"independent_{j:03d}", cadence=DAILY)
                 for j in range(i * 10, (i + 1) * 10)
             ]
-            jobs.append(_job(
-                f"fan_out_{i}",
-                depends_on=depends,
-                dependency_mode=DependencyMode.ALL_SUCCESS,
-            ))
+            jobs.append(
+                _job(
+                    f"fan_out_{i}",
+                    depends_on=depends,
+                    dependency_mode=DependencyMode.ALL_SUCCESS,
+                )
+            )
 
         assert len(jobs) == 155
 
@@ -972,7 +985,7 @@ class TestPerformance:
 
         # Final verification
         final_run_id = REF.strftime("%Y%m%d")
-        final_result = orch.tick(REF)
+        orch.tick(REF)
 
         # Should have submissions across ticks
         assert len(executor.calls) >= 50  # At least independent jobs
@@ -1010,11 +1023,13 @@ class TestPerformance:
 
         # Mark all upstream jobs as DONE
         for i in range(100):
-            store.put(RunRecord(
-                job_name=f"upstream_{i:03d}",
-                run_id=REF.strftime("%Y%m%d"),
-                status=Status.DONE,
-            ))
+            store.put(
+                RunRecord(
+                    job_name=f"upstream_{i:03d}",
+                    run_id=REF.strftime("%Y%m%d"),
+                    status=Status.DONE,
+                )
+            )
 
         # Second tick: downstream job should submit now
         result = orch.tick(REF)
@@ -1032,14 +1047,21 @@ class TestPerformance:
         for chain_id in range(5):
             for pos in range(20):
                 depends = (
-                    [Dependency(job_name=f"chain_{chain_id:02d}_job_{pos-1:02d}", cadence=DAILY)]
+                    [
+                        Dependency(
+                            job_name=f"chain_{chain_id:02d}_job_{pos - 1:02d}",
+                            cadence=DAILY,
+                        )
+                    ]
                     if pos > 0
                     else []
                 )
-                jobs.append(_job(
-                    f"chain_{chain_id:02d}_job_{pos:02d}",
-                    depends_on=depends,
-                ))
+                jobs.append(
+                    _job(
+                        f"chain_{chain_id:02d}_job_{pos:02d}",
+                        depends_on=depends,
+                    )
+                )
 
         assert len(jobs) == 100
 
@@ -1048,15 +1070,17 @@ class TestPerformance:
         # Simulate progression through chain
         for tick_num in range(1, 21):
             tick_ref = REF + timedelta(hours=tick_num - 1)
-            result = orch.tick(tick_ref)
+            orch.tick(tick_ref)
 
             # Mark submitted jobs as DONE to advance chains
             for call in executor.calls:
-                store.put(RunRecord(
-                    job_name=call["job"],
-                    run_id=call["run_id"],
-                    status=Status.DONE,
-                ))
+                store.put(
+                    RunRecord(
+                        job_name=call["job"],
+                        run_id=call["run_id"],
+                        status=Status.DONE,
+                    )
+                )
 
             executor.calls.clear()
 

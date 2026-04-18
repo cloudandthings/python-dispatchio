@@ -147,7 +147,6 @@ class RetryPolicy(BaseModel):
     # populated = only retry when error_reason contains one of these strings
 
 
-
 # ---------------------------------------------------------------------------
 
 # Alert conditions
@@ -227,8 +226,34 @@ class PythonJob(BaseModel):
         return self
 
 
+class LambdaJob(BaseModel):
+    """Run the job by invoking an AWS Lambda function asynchronously."""
+
+    type: Literal["lambda"] = "lambda"
+    function_name: str
+    payload_template: dict[str, Any] | None = None
+
+
+class StepFunctionJob(BaseModel):
+    """Run the job by starting an AWS Step Functions execution asynchronously."""
+
+    type: Literal["stepfunctions"] = "stepfunctions"
+    state_machine_arn: str
+    payload_template: dict[str, Any] | None = None
+
+
+class AthenaJob(BaseModel):
+    """Run the job by submitting an Athena query execution."""
+
+    type: Literal["athena"] = "athena"
+    query_string: str
+    database: str
+    output_location: str
+    workgroup: str = "primary"
+
+
 ExecutorConfig = Annotated[
-    SubprocessJob | HttpJob | PythonJob,
+    SubprocessJob | HttpJob | PythonJob | LambdaJob | StepFunctionJob | AthenaJob,
     Field(discriminator="type"),
 ]
 

@@ -30,6 +30,8 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from dispatchio.models import RunRecord, Status
+
 
 # ---------------------------------------------------------------------------
 # Custom type: always returns UTC-aware datetimes (SQLite drops tz info)
@@ -58,8 +60,6 @@ class _UTCDateTime(TypeDecorator):
             # SQLite commonly returns naive values even for tz-aware columns.
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
-
-from dispatchio.models import RunRecord, Status
 
 
 # ---------------------------------------------------------------------------

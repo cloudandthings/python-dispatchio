@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 
 from dispatchio.models import RunRecord, Status
 from dispatchio.state.sqlalchemy_ import SQLAlchemyStateStore

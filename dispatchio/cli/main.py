@@ -341,9 +341,15 @@ def status(
 @cli.command()
 @_context_option
 @click.option("--limit", "-n", default=20, show_default=True, help="Max ticks to show.")
-@click.option("--since", default=None, help="Show ticks at or after this ISO timestamp.")
-@click.option("--until", default=None, help="Show ticks at or before this ISO timestamp.")
-@click.option("--detail", is_flag=True, default=False, help="Show individual job actions.")
+@click.option(
+    "--since", default=None, help="Show ticks at or after this ISO timestamp."
+)
+@click.option(
+    "--until", default=None, help="Show ticks at or before this ISO timestamp."
+)
+@click.option(
+    "--detail", is_flag=True, default=False, help="Show individual job actions."
+)
 def ticks(
     context_name: str | None,
     limit: int,
@@ -480,7 +486,9 @@ def context_add(name: str, config_path: str, description: str):
     if not Path(abs_path).exists():
         raise click.ClickException(f"Config file not found: {abs_path}")
 
-    ContextStore().add(ContextEntry(name=name, config_path=abs_path, description=description))
+    ContextStore().add(
+        ContextEntry(name=name, config_path=abs_path, description=description)
+    )
     click.echo(f"Added context {name!r} → {abs_path}")
 
 
@@ -494,7 +502,9 @@ def context_list():
     current = store.current_name()
 
     if not entries:
-        click.echo("No contexts registered. Use 'dispatchio context add' to register one.")
+        click.echo(
+            "No contexts registered. Use 'dispatchio context add' to register one."
+        )
         return
 
     header = f"{'':2} {'NAME':<24} {'CONFIG PATH'}"

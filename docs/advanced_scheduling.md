@@ -35,7 +35,7 @@ This has been implemented.
 
 ### Problem
 
-Dispatchio's job list was previously fixed at `Orchestrator` construction time. 
+Dispatchio's job list was previously fixed at `Orchestrator` construction time.
 We have recently added some related behaviour which allows jobs to be added to an orchestrator, although it is not clear if this is done "per tick".
 
 Generating jobs dynamically from metadata (e.g. "process all changed

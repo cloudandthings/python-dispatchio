@@ -97,6 +97,23 @@ def _resolve_reporter(reporter: Reporter | None) -> Reporter | None:
     if drop_dir:
         return FilesystemReporter(drop_dir)
 
+    queue_url = os.environ.get("DISPATCHIO_RECEIVER__QUEUE_URL") or os.environ.get(
+        "DISPATCHIO_SQS_QUEUE_URL"
+    )
+    if queue_url:
+        region = os.environ.get("DISPATCHIO_RECEIVER__REGION") or os.environ.get(
+            "DISPATCHIO_SQS_REGION"
+        )
+        try:
+            from dispatchio_aws.reporter.sqs import SQSReporter  # type: ignore[import]
+
+            return SQSReporter(queue_url=queue_url, region=region)
+        except ImportError:
+            logger.warning(
+                "SQS reporter requested but dispatchio[aws] is not installed. "
+                "Install with: pip install dispatchio[aws]"
+            )
+
     logger.warning(
         "No reporter configured. Completion events will NOT be sent to Dispatchio. "
         "Pass a reporter to run_job(), use --drop-dir, or set DISPATCHIO_DROP_DIR."

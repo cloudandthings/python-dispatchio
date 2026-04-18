@@ -48,7 +48,9 @@ def test_example_runs(example: ExampleCase, tmp_path: Path) -> None:
     """Each example script should run to completion with exit code 0."""
     env = os.environ.copy()
     env["DISPATCHIO_STATE__BACKEND"] = "sqlalchemy"
-    env["DISPATCHIO_STATE__CONNECTION_STRING"] = f"sqlite:///{tmp_path / 'dispatchio.db'}"
+    env["DISPATCHIO_STATE__CONNECTION_STRING"] = (
+        f"sqlite:///{tmp_path / 'dispatchio.db'}"
+    )
     env["DISPATCHIO_RECEIVER__DROP_DIR"] = str(tmp_path / "completions")
     env["DISPATCHIO_STATE__TICK_LOG_PATH"] = str(tmp_path / "tick_log.jsonl")
     env["DISPATCHIO_TICK_INTERVAL"] = "0.01"  # Fast ticks for tests

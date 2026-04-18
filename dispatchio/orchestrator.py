@@ -383,7 +383,10 @@ class Orchestrator:
                 poke_status = executor.poke(record)
                 if poke_status is not None and poke_status != Status.RUNNING:
                     detail = f"poke: process exited with status={poke_status.value}"
-                    update: dict = {"status": poke_status, "completed_at": reference_time}
+                    update: dict = {
+                        "status": poke_status,
+                        "completed_at": reference_time,
+                    }
                     if poke_status == Status.ERROR:
                         update["error_reason"] = (
                             "process exited without posting a completion event"
