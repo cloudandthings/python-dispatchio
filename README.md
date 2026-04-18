@@ -33,11 +33,15 @@ cron (every 5 min)
 ## Installation
 
 ```bash
-pip install dispatchio          # core (filesystem state, subprocess executor)
-pip install "dispatchio[aws]"   # adds DynamoDB, S3, SQS, ECS, Lambda
+pip install dispatchio           # core package only
+pip install "dispatchio[aws]"    # core + optional AWS extension (dispatchio_aws)
 ```
 
 Requires Python 3.11+.
+
+`dispatchio_aws` is optional. If you install only `dispatchio`, you still get
+core scheduling, SQLAlchemy state, filesystem receiver, and local executors.
+AWS receivers/executors are available only when `dispatchio[aws]` is installed.
 
 ## Quick start
 
@@ -114,7 +118,7 @@ def main(run_id: str) -> None:
     """Main job logic — exit or raise exception to signal status."""
     print(f"Ingesting data for {run_id}")
     reporter = get_reporter("ingest")
-    
+
     try:
         # do work...
         rows = load_data()
@@ -226,6 +230,35 @@ Job(
 ```
 
 Use `PythonJob` with the `run_job()` harness (see [Signal completion](#3-signal-completion-from-your-job)).
+
+### AWS executors (`dispatchio[aws]` only)
+
+AWS-backed executors are provided by the optional package and are configured
+through `dispatchio_aws.config.aws_orchestrator_from_config`.
+
+Supported executor configs:
+
+- `LambdaJob`
+- `StepFunctionJob`
+- `AthenaJob`
+
+Example (optional package):
+
+```python
+from dispatchio import Job, LambdaJob
+from dispatchio_aws.config import aws_orchestrator_from_config
+
+JOBS = [
+    Job.create(
+        "ingest",
+        executor=LambdaJob(function_name="dispatchio-ingest"),
+    )
+]
+
+orchestrator = aws_orchestrator_from_config(JOBS, config="dispatchio.toml")
+```
+
+See `examples/aws_lambda/README.md` for a complete optional AWS setup.
 
 ---
 
@@ -655,17 +688,17 @@ from dispatchio.state.sqlalchemy_ import SQLAlchemyStateStore
 def test_dependencies():
     # In-memory SQLite for testing
     state = SQLAlchemyStateStore("sqlite:///:memory:")
-    
+
     orchestrator = Orchestrator(
         jobs=JOBS,
         state=state,
         receiver=None,  # no receiver needed for testing
         executors={...},
     )
-    
+
     # Seed state with preconditions
     state.put(RunRecord(job_name="upstream", run_id="20250115", status=Status.DONE))
-    
+
     # Tick and verify downstream is submitted
     result = orchestrator.tick()
     assert any(e.job_name == "downstream" for e in result.results)

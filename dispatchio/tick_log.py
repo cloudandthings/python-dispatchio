@@ -21,10 +21,12 @@ from typing import Protocol, runtime_checkable
 class TickLogRecord:
     """Record of a single tick() invocation."""
 
-    ticked_at: str          # Wall-clock ISO timestamp (UTC) — when tick() actually ran
-    reference_time: str     # Logical time passed to tick() (ISO)
+    ticked_at: str  # Wall-clock ISO timestamp (UTC) — when tick() actually ran
+    reference_time: str  # Logical time passed to tick() (ISO)
     duration_seconds: float
-    actions: list[dict]     # Serialised JobTickResult list: job_name, run_id, action, detail
+    actions: list[
+        dict
+    ]  # Serialised JobTickResult list: job_name, run_id, action, detail
 
 
 @runtime_checkable

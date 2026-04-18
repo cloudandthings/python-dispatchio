@@ -11,7 +11,7 @@ Typical usage from job code:
     reporter = get_reporter(job_name="my_job")
     if reporter:
         reporter.report_success(run_id="20250115", metadata={"rows": 1000})
-    
+
     # Or manually build for a specific backend
     from dispatchio.config import ReceiverSettings
     receiver_cfg = ReceiverSettings(backend="filesystem", drop_dir="/tmp/drops")
@@ -36,7 +36,9 @@ logger = logging.getLogger(__name__)
 class CompletionReporter(Protocol):
     """Higher-level reporter interface for job code."""
 
-    def report_success(self, run_id: str, metadata: dict[str, Any] | None = None) -> None:
+    def report_success(
+        self, run_id: str, metadata: dict[str, Any] | None = None
+    ) -> None:
         """Report job completed successfully."""
         ...
 
@@ -56,7 +58,9 @@ class _CompletionReporterAdapter:
         self.job_name = job_name
         self.reporter = reporter
 
-    def report_success(self, run_id: str, metadata: dict[str, Any] | None = None) -> None:
+    def report_success(
+        self, run_id: str, metadata: dict[str, Any] | None = None
+    ) -> None:
         if self.reporter is None:
             logger.warning("No reporter configured; completion NOT sent")
             return
@@ -155,7 +159,9 @@ def get_reporter(job_name: str) -> CompletionReporter:
         return _CompletionReporterAdapter(job_name, None)
 
     if backend == "filesystem":
-        drop_dir = os.environ.get("DISPATCHIO_RECEIVER__DROP_DIR", ".dispatchio/completions")
+        drop_dir = os.environ.get(
+            "DISPATCHIO_RECEIVER__DROP_DIR", ".dispatchio/completions"
+        )
         from dispatchio.worker.reporter.filesystem import FilesystemReporter
 
         reporter = FilesystemReporter(drop_dir)

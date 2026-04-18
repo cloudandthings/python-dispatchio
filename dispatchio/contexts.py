@@ -109,6 +109,5 @@ class ContextStore:
         """Return all registered contexts."""
         data = self._load()
         return [
-            ContextEntry(name=name, **info)
-            for name, info in data["contexts"].items()
+            ContextEntry(name=name, **info) for name, info in data["contexts"].items()
         ]

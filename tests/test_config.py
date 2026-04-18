@@ -24,6 +24,7 @@ from dispatchio.models import Job, SubprocessJob
 from dispatchio.orchestrator import Orchestrator
 from dispatchio.state import SQLAlchemyStateStore
 from dispatchio.receiver import FilesystemReceiver
+from dispatchio_aws.receiver.sqs import SQSReceiver
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +234,9 @@ class TestPriority:
         """,
             tmp_path / "dispatchio.toml",
         )
-        monkeypatch.setenv("DISPATCHIO_STATE__CONNECTION_STRING", "sqlite:///from_env.db")
+        monkeypatch.setenv(
+            "DISPATCHIO_STATE__CONNECTION_STRING", "sqlite:///from_env.db"
+        )
         s = load_config(f)
         assert s.state.connection_string == "sqlite:///from_env.db"  # env wins
 
@@ -251,7 +254,9 @@ class TestPriority:
 class TestOrchestratorFromConfig:
     def test_returns_orchestrator(self, simple_job, tmp_path):
         settings = DispatchioSettings(
-            state=StateSettings(backend="sqlalchemy", connection_string="sqlite:///:memory:"),
+            state=StateSettings(
+                backend="sqlalchemy", connection_string="sqlite:///:memory:"
+            ),
             receiver=ReceiverSettings(backend="none"),
         )
         orch = orchestrator_from_config([simple_job], config=settings)
@@ -259,7 +264,9 @@ class TestOrchestratorFromConfig:
 
     def test_sqlalchemy_state_backend(self, simple_job, tmp_path):
         settings = DispatchioSettings(
-            state=StateSettings(backend="sqlalchemy", connection_string="sqlite:///:memory:"),
+            state=StateSettings(
+                backend="sqlalchemy", connection_string="sqlite:///:memory:"
+            ),
             receiver=ReceiverSettings(backend="none"),
         )
         orch = orchestrator_from_config([simple_job], config=settings)
@@ -267,7 +274,9 @@ class TestOrchestratorFromConfig:
 
     def test_filesystem_receiver(self, simple_job, tmp_path):
         settings = DispatchioSettings(
-            state=StateSettings(backend="sqlalchemy", connection_string="sqlite:///:memory:"),
+            state=StateSettings(
+                backend="sqlalchemy", connection_string="sqlite:///:memory:"
+            ),
             receiver=ReceiverSettings(
                 backend="filesystem",
                 drop_dir=str(tmp_path / "completions"),
@@ -278,7 +287,9 @@ class TestOrchestratorFromConfig:
 
     def test_no_receiver_when_none(self, simple_job):
         settings = DispatchioSettings(
-            state=StateSettings(backend="sqlalchemy", connection_string="sqlite:///:memory:"),
+            state=StateSettings(
+                backend="sqlalchemy", connection_string="sqlite:///:memory:"
+            ),
             receiver=ReceiverSettings(backend="none"),
         )
         orch = orchestrator_from_config([simple_job], config=settings)
@@ -300,7 +311,9 @@ class TestOrchestratorFromConfig:
 
     def test_jobs_are_passed_through(self, simple_job):
         settings = DispatchioSettings(
-            state=StateSettings(backend="sqlalchemy", connection_string="sqlite:///:memory:"),
+            state=StateSettings(
+                backend="sqlalchemy", connection_string="sqlite:///:memory:"
+            ),
             receiver=ReceiverSettings(backend="none"),
         )
         orch = orchestrator_from_config([simple_job], config=settings)
@@ -309,7 +322,9 @@ class TestOrchestratorFromConfig:
 
     def test_jobs_default_to_empty_list(self):
         settings = DispatchioSettings(
-            state=StateSettings(backend="sqlalchemy", connection_string="sqlite:///:memory:"),
+            state=StateSettings(
+                backend="sqlalchemy", connection_string="sqlite:///:memory:"
+            ),
             receiver=ReceiverSettings(backend="none"),
         )
         orch = orchestrator_from_config(config=settings)
@@ -320,7 +335,9 @@ class TestOrchestratorFromConfig:
 
         handler = LogAlertHandler()
         settings = DispatchioSettings(
-            state=StateSettings(backend="sqlalchemy", connection_string="sqlite:///:memory:"),
+            state=StateSettings(
+                backend="sqlalchemy", connection_string="sqlite:///:memory:"
+            ),
             receiver=ReceiverSettings(backend="none"),
         )
         orch = orchestrator_from_config(
@@ -346,10 +363,16 @@ class TestOrchestratorFromConfig:
         with pytest.raises(ImportError, match="dispatchio\\[aws\\]"):
             orchestrator_from_config([simple_job], config=settings)
 
-    def test_sqs_backend_without_aws_raises(self, simple_job):
+    def test_sqs_backend_builds_receiver(self, simple_job):
         settings = DispatchioSettings(
-            state=StateSettings(backend="sqlalchemy", connection_string="sqlite:///:memory:"),
-            receiver=ReceiverSettings(backend="sqs"),
+            state=StateSettings(
+                backend="sqlalchemy", connection_string="sqlite:///:memory:"
+            ),
+            receiver=ReceiverSettings(
+                backend="sqs",
+                queue_url="https://sqs.eu-west-1.amazonaws.com/123456789/dispatchio",
+                region="eu-west-1",
+            ),
         )
-        with pytest.raises(ImportError, match="dispatchio\\[aws\\]"):
-            orchestrator_from_config([simple_job], config=settings)
+        orch = orchestrator_from_config([simple_job], config=settings)
+        assert isinstance(orch.receiver, SQSReceiver)

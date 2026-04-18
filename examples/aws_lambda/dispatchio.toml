@@ -1,0 +1,19 @@
+# AWS example configuration (optional dispatchio_aws package)
+#
+# Environment variables should provide secrets/URLs in real deployments.
+
+[dispatchio]
+name = "aws-lambda-example"
+log_level = "INFO"
+default_cadence = "daily"
+
+[dispatchio.state]
+backend = "sqlalchemy"
+# For local experimentation only. In AWS use PostgreSQL/MySQL on RDS/Aurora.
+connection_string = "sqlite:///dispatchio-aws-example.db"
+
+[dispatchio.receiver]
+backend = "sqs"
+# Override in env for real use.
+queue_url = "https://sqs.eu-west-1.amazonaws.com/123456789012/dispatchio-completions"
+region = "eu-west-1"

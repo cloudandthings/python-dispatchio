@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 from pathlib import Path
 
 import pytest
 
 from dispatchio.completion import (
-    CompletionReporter,
     get_reporter,
     build_reporter,
     _CompletionReporterAdapter,
@@ -135,7 +133,7 @@ class TestCompletionReporterIntegration:
 
     def test_orchestrator_injects_receiver_config(self):
         """orchestrator_from_config should inject receiver settings as env vars."""
-        from dispatchio.config import orchestrator_from_config, load_config
+        from dispatchio.config import orchestrator_from_config
         from dispatchio.config.settings import DispatchioSettings, ReceiverSettings
 
         with tempfile.TemporaryDirectory() as tmp_dir:

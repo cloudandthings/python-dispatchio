@@ -60,5 +60,4 @@ class Pokeable(Protocol):
                          other liveness mechanisms
     """
 
-    def poke(self, record: RunRecord) -> Status | None:
-        ...
+    def poke(self, record: RunRecord) -> Status | None: ...

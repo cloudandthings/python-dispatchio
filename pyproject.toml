@@ -22,6 +22,7 @@ classifiers = [
     "Topic :: Utilities",
 ]
 dependencies = [
+    "beartype>=0.19",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "click>=8.0",
@@ -45,13 +46,14 @@ dev = [
     "pytest>=7.0",
     "freezegun>=1.2",
     "pytest-cov>=4.0",
+    "moto[sqs,lambda,stepfunctions,athena]>=5.0",
 ]
 
 [project.scripts]
 dispatchio = "dispatchio.cli.main:cli"
 
 [tool.hatch.build.targets.wheel]
-packages = ["dispatchio"]
+packages = ["dispatchio", "dispatchio_aws"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

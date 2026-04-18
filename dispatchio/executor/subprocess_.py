@@ -44,7 +44,6 @@ class SubprocessExecutor:
         self._processes: dict[tuple[str, str], subprocess.Popen] = {}
         self._references: dict[tuple[str, str], dict] = {}
 
-
     def submit(
         self,
         job: Job,
@@ -84,7 +83,6 @@ class SubprocessExecutor:
             "pid": proc.pid,
             "start_time": time.time(),
         }
-
 
     def poke(self, record: RunRecord) -> Status | None:
         """
@@ -142,7 +140,6 @@ class SubprocessExecutor:
             # Process doesn't exist or can't be accessed — it's dead
             return Status.ERROR
 
-
     def get_executor_reference(self, job_name: str, run_id: str) -> dict | None:
         """
         Retrieve the executor reference for a given job/run_id.
@@ -150,4 +147,3 @@ class SubprocessExecutor:
         Returns {"pid": ..., "start_time": ...} or None if not tracked.
         """
         return self._references.get((job_name, run_id))
-

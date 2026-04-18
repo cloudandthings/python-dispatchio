@@ -3,41 +3,57 @@
 ## Overview
 
 `dispatchio[aws]` is an optional AWS extension providing cloud-native infrastructure
-for dispatchio: S3-backed state, SQS-based completion events, and executors for
-Lambda, Step Functions, and Athena. The core package remains dependency-free;
-everything here requires `boto3` and is installed via `pip install dispatchio[aws]`.
+for dispatchio: RDS-backed state, SQS-based completion events, and executors for
+Lambda, Step Functions, and Athena. The core package uses SQLAlchemy for state
+management, making RDS (PostgreSQL, MySQL, Aurora) a natural fit. Everything here
+requires `boto3` and is installed via `pip install dispatchio[aws]`.
+
+---
+
+## Current state (as of April 2026)
+
+The core `dispatchio` package has evolved:
+- **State store:** SQLAlchemy-based (`SQLAlchemyStateStore`) with in-memory and SQLite support
+- **Configuration:** Pydantic-based settings with environment variable + TOML support
+- **Executor protocol:** Extensible; supports `Pokeable` for liveness detection
+- **No AWS extension yet:** This document outlines the plan to add `dispatchio_aws`
+
+The most relevant current state store is `SQLAlchemyStateStore`, which can connect
+to any SQLAlchemy-compatible database: SQLite, PostgreSQL (RDS), MySQL (RDS Aurora),
+etc. This is the foundation for the AWS integration.
 
 ---
 
 ## Repo structure
 
 Keep everything in the same repo, as a separate Python package under `dispatchio_aws/`.
-The loader already gates on `ImportError`, so the two packages are decoupled at runtime.
+The core `dispatchio` package is dependency-lite (SQLAlchemy is already required);
+the AWS extension adds `boto3` for cloud services.
 
 ```
 python-dispatchio/                  ← repo root
 │
-├── dispatchio/                     ← core package (current)
+├── dispatchio/                     ← core package (uses SQLAlchemy)
+│   ├── state/
+│   │   └── sqlalchemy_.py          ← Universal state store (RDS, SQLite, etc.)
 │   └── ...
 │
 ├── dispatchio_aws/                 ← AWS extension package (new)
 │   ├── pyproject.toml              ← separate build config; depends on dispatchio + boto3
 │   ├── dispatchio_aws/
 │   │   ├── __init__.py
-│   │   ├── state/
-│   │   │   ├── s3_sqlite.py        ← S3+SQLite state store
-│   │   │   └── dynamodb.py         ← DynamoDB state store (already stubbed)
 │   │   ├── receiver/
-│   │   │   └── sqs.py              ← SQS completion receiver (already stubbed)
+│   │   │   └── sqs.py              ← SQS completion receiver
 │   │   ├── reporter/
 │   │   │   └── sqs.py              ← SQS completion reporter (worker side)
 │   │   ├── executor/
 │   │   │   ├── lambda_.py          ← async Lambda invocation
 │   │   │   ├── stepfunctions.py    ← async Step Functions execution
-│   │   │   └── athena.py           ← Athena query submission (see notes)
+│   │   │   └── athena.py           ← Athena query submission
 │   │   ├── worker/
-│   │   │   └── lambda_handler.py   ← harness for dispatchio jobs running in Lambda
-│   │   └── config.py               ← AWS-specific settings models + orchestrator factory
+│   │   │   ├── lambda_handler.py   ← harness for dispatchio jobs running in Lambda
+│   │   │   └── completion_handler.py ← thin Lambda for EventBridge → SQS
+│   │   └── config.py               ← AWS-specific settings + orchestrator factory
 │   └── tests/
 │       └── ...                     ← AWS code can be tested using moto
 │
@@ -47,13 +63,16 @@ python-dispatchio/                  ← repo root
 └── pyproject.toml                  ← core; [aws] extra points at dispatchio_aws
 ```
 
-### Why same repo
+### Key design decisions
 
-- Cross-cutting changes (e.g. new context keys, new `StateStore` protocol methods) can
-  be made in one PR without coordination between repos.
-- CI can run integration tests across both packages together.
-- Single place for issues and versioning. The packages can be released independently
-  when needed.
+- **No S3+SQLite state store in `dispatchio_aws`:** The core `SQLAlchemyStateStore`
+  already handles database connections. For AWS, point it to RDS and let SQLAlchemy
+  handle the transport — cleaner than download/upload cycles.
+- **State lifecycle in RDS:** RDS (Aurora/managed) is always-on and transactional,
+  making it ideal for tick-based state updates. No S3 bucket needed.
+- **Decoupling:** The two packages are decoupled at runtime (the core works without
+  `boto3`). Cross-cutting changes can be coordinated in one PR.
+
 
 ### Installation
 
@@ -73,13 +92,13 @@ can be co-published to PyPI as `dispatchio-aws` and listed there as well.
 EventBridge (cron)
        │
        ▼
-  Orchestrator Lambda          ← runs tick(), reads/writes state, submits jobs
-       │  └─ downloads state.db from S3
+  Orchestrator Lambda          ← runs tick(), reads/writes state to RDS, submits jobs
+       │  └─ reads/writes to RDS Aurora or managed RDS instance
        │  └─ polls SQS for completion events (Phase 1: primary completion path)
        │  └─ pokes RUNNING jobs via service APIs (Phase 2: safe fallback)
        │  └─ evaluates job graph
        │  └─ submits pending jobs → stores external ID in RunRecord.metadata
-       └─ uploads state.db to S3
+       └─ state persisted to RDS
               │
               ├── Worker Lambda A  ──────────────────────────────┐
               ├── Step Function B  ──── EventBridge ──┐          │
@@ -94,8 +113,9 @@ EventBridge (cron)
 ```
 
 The orchestrator Lambda is short-lived and stateless. State persistence is entirely
-in S3 (SQLite file) or DynamoDB. Jobs are fire-and-forget from the orchestrator's
-perspective; completions arrive via SQS on the next tick.
+in RDS (Aurora or managed RDS instance, provisioned outside this package). Jobs are
+fire-and-forget from the orchestrator's perspective; completions arrive via SQS on
+the next tick.
 
 There are two completion paths, both converging on the same SQS queue:
 
@@ -108,73 +128,69 @@ There are two completion paths, both converging on the same SQS queue:
 
 ## Components
 
-### 1. S3 + SQLite state store  `dispatchio_aws.state.s3_sqlite`
+### 1. RDS State Store Configuration
 
-**Pattern:** download → open → read/write → close → upload, all within a single tick.
+The core `SQLAlchemyStateStore` is the universal state backend. For AWS deployments,
+configure it to point to an RDS instance (Aurora PostgreSQL, Aurora MySQL, or
+managed RDS).
 
-This is safe because dispatchio ticks are non-overlapping by design (one Lambda
-invocation per EventBridge trigger). If concurrent ticks are ever needed, a DynamoDB
-lock or S3 conditional write can guard the upload.
+**Setup in dispatchio_aws:**
 
-**Why SQLite over S3?**
-- The state file can be downloaded locally and queried with any SQL tool for ad-hoc
-  inspection — useful for support.
-- No extra AWS service (DynamoDB) required; just one S3 bucket.
-- The file is self-contained and can be version-controlled or snapshotted by S3.
+```python
+from dispatchio.state.sqlalchemy_ import SQLAlchemyStateStore
 
-**Schema (proposed):**
+# Create a store pointing to RDS Aurora PostgreSQL
+state_store = SQLAlchemyStateStore(
+    connection_string="postgresql://user:password@my-db.rds.amazonaws.com:5432/dispatchio"
+)
+```
+
+**Or via TOML config:**
+
+```toml
+[dispatchio.state]
+backend = "sqlalchemy"
+connection_string = "postgresql://user:password@my-db.rds.amazonaws.com:5432/dispatchio"
+# Optionally: connection pool size, timeout, etc.
+pool_size = 10
+pool_recycle = 3600
+```
+
+**Database schema:**
+
+The schema is created automatically by SQLAlchemy. Minimal table:
 
 ```sql
-CREATE TABLE IF NOT EXISTS run_records (
-    job_name        TEXT NOT NULL,
-    run_id          TEXT NOT NULL,
-    status          TEXT NOT NULL,
+CREATE TABLE run_records (
+    job_name        VARCHAR NOT NULL,
+    run_id          VARCHAR NOT NULL,
+    status          VARCHAR NOT NULL,
     attempt         INTEGER NOT NULL DEFAULT 0,
-    submitted_at    TEXT,
-    started_at      TEXT,
-    completed_at    TEXT,
+    submitted_at    TIMESTAMP,
+    started_at      TIMESTAMP,
+    completed_at    TIMESTAMP,
     error_reason    TEXT,
-    metadata        TEXT,   -- JSON blob
-    executor_reference TEXT,  -- JSON blob for executor liveness tracking
+    metadata        JSON,
+    executor_reference JSON,
     PRIMARY KEY (job_name, run_id)
 );
 ```
 
-**Interface:**
+**Why RDS over S3+SQLite:**
 
-```python
-class S3SQLiteStateStore:
-    def __init__(self, bucket: str, key: str, local_path: str | None = None) -> None:
-        ...
+- **Always-on:** No download/upload cycles. State is immediately visible to the next tick.
+- **Transactional:** ACID guarantees for concurrent ticks (if ever needed).
+- **Queryable:** Ad-hoc inspection via any SQL client for debugging and support.
+- **Scalable:** Managed service handles backups, replication, failover.
+- **Cost-effective:** No Lambda storage concerns; minimal I/O per tick.
 
-    def __enter__(self) -> S3SQLiteStateStore:
-        # download from S3, open connection
-        ...
+**Connection pooling note:**
 
-    def __exit__(self, *_) -> None:
-        # close connection, upload to S3
-        ...
-
-    # implements StateStore protocol: get, put, list_records
-```
-
-The orchestrator factory would wrap the store in a context manager around the tick:
-
-```python
-with state_store:
-    orchestrator.tick()
-```
-
-Alternatively, `tick()` itself could call store lifecycle hooks if the store implements
-an optional protocol — keeping the orchestrator unaware of the upload concern.
-
-**Simpler alternative for now:** implement it without a context manager by downloading
-at `__init__` and uploading explicitly after `tick()`. The factory function handles
-the sequencing.
+For Lambda, set `pool_pre_ping=True` to validate connections before use (RDS connections
+may be recycled between Lambda invocations). The `SQLAlchemyStateStore` already handles
+this via Pydantic settings.
 
 ---
-
-### 2. SQS receiver  `dispatchio_aws.receiver.sqs`  *(already stubbed)*
 
 Polls SQS at the start of each tick. Each message is a JSON completion event:
 
@@ -397,9 +413,10 @@ name = "daily-etl"
 default_cadence = "daily"
 
 [dispatchio.state]
-backend = "s3-sqlite"
-bucket  = "my-dispatchio-state"
-key     = "daily-etl/state.db"
+backend = "sqlalchemy"
+connection_string = "postgresql://user:password@my-aurora.rds.amazonaws.com:5432/dispatchio"
+pool_size = 10
+pool_recycle = 3600
 
 [dispatchio.receiver]
 backend   = "sqs"
@@ -453,9 +470,9 @@ def handler(event, context):
     orchestrator.tick()
 ```
 
-State is downloaded from S3, the tick runs, state is uploaded back. The whole
-invocation should complete in seconds. EventBridge fires this on a schedule
-(e.g. every 5 minutes).
+The orchestrator connects to RDS, runs the tick, and returns. State is persisted
+directly to the database (no download/upload needed). The whole invocation should
+complete in seconds. EventBridge fires this on a schedule (e.g. every 5 minutes).
 
 ---
 
@@ -464,9 +481,12 @@ invocation should complete in seconds. EventBridge fires this on a schedule
 ### Phase 1 — Foundation (unblock everything else)
 
 1. Create `dispatchio_aws/` package structure and `pyproject.toml`
-2. **SQS receiver** — implement `SQSReceiver.drain()` (already stubbed in core loader)
-3. **SQS reporter** — implement `SQSReporter.report()` for worker-side completion
-4. **S3+SQLite state store** — download/open/write/close/upload lifecycle
+2. **RDS configuration:** Add Pydantic settings extension for RDS connection strings
+3. **SQS receiver** — implement `SQSReceiver.drain()`
+4. **SQS reporter** — implement `SQSReporter.report()` for worker-side completion
+5. **Orchestrator factory** — `aws_orchestrator_from_config()` wiring RDS + SQS
+
+*(No S3+SQLite state store in `dispatchio_aws`: use core `SQLAlchemyStateStore` → RDS)*
 
 ### Phase 2 — Lambda executor (primary use case)
 
@@ -475,9 +495,12 @@ invocation should complete in seconds. EventBridge fires this on a schedule
 3. **AWS orchestrator factory** — `aws_orchestrator_from_config()` wiring all of the above
 4. **End-to-end example** — `examples/aws_lambda/` with a two-job pipeline
 
-### Phase 3 — Poke protocol (core change)
+### Phase 3 — Poke protocol (likely already done in core)
 
-This may have been done already.
+The `Pokeable` protocol is already in the core; orchestrators can check for it
+during Phase 2 (lost detection).
+
+If not yet implemented, add:
 
 1. **`Pokeable` protocol in core** — optional method on executors; orchestrator calls it during Phase 2 (lost detection) for RUNNING jobs
 2. **`PythonJobExecutor.poke()`** — check whether the spawned subprocess PID is still alive
@@ -496,9 +519,15 @@ This may have been done already.
 3. **Extend thin completion Lambda** — add Athena EventBridge rule; metadata lookup for ID resolution
 4. Evaluate Glue, EMR Serverless — same pattern; add rules + poke methods per service
 
-### Phase 6 — DynamoDB state store
+### Phase 6 — DynamoDB state store (optional, future)
 
-1. **DynamoDB state store** — implement `DynamoDBStateStore` (already stubbed); add GSI on metadata for efficient `QueryExecutionId` / `executionArn` lookups by the thin Lambda
+An alternative to RDS if DynamoDB is preferred for cost/scale reasons:
+
+1. **DynamoDB state store** — implement `DynamoDBStateStore` as alternative to RDS
+2. Add GSI on metadata for efficient `QueryExecutionId` / `executionArn` lookups by the thin completion Lambda
+3. Document trade-offs (cost, scale, query patterns) vs. RDS
+
+*(Lower priority: RDS covers most use cases; DynamoDB adds complexity.)*
 
 ---
 
@@ -506,11 +535,12 @@ This may have been done already.
 
 | Question | Notes |
 |---|---|
-| SQLite concurrency | Is one active tick at a time a safe assumption? If EventBridge fires while a previous tick is still running, the S3 upload could conflict. A DynamoDB conditional write (`If-Match` on ETag) would mitigate. |
-| `payload_fn` serialisability | A Python callable cannot be expressed in TOML. Accept both a callable and a dict template (`{"week": "{run_id}"}` with string substitution) so config-file users are not blocked. |
+| RDS connection pooling in Lambda | Lambda may recycle TCP connections between invocations. Use `pool_pre_ping=True` to validate connections. The core `SQLAlchemyStateStore` already supports this. |
+| RDS multi-tick concurrency | Ticks are designed to be non-overlapping (one EventBridge trigger = one Lambda), so RDS transactions are straightforward. If concurrent ticks are ever needed, versioning or row-level locks can guard updates. |
+| `payload_fn` serialisability | A Python callable cannot be expressed in TOML. Accept both a callable (in code) and a dict template (`{"week": "{run_id}"}` with string substitution) so config-file users are not blocked. |
 | Poke in core vs. AWS | `Pokeable` protocol belongs in core (PythonJob and SubprocessJob benefit immediately). AWS executor poke implementations stay in `dispatchio_aws`. The orchestrator only imports the protocol, not any concrete implementation. |
 | Execution name length | Step Functions execution names are capped at 80 characters. `{job_name}--{run_id}` must fit; enforce this at submit time with a clear error. |
-| Thin Lambda state access | For S3+SQLite, the completion Lambda downloads the whole file for a single ID lookup — wasteful for large state files. DynamoDB with a GSI is the right answer at scale; document the trade-off clearly. |
+| Completion Lambda state access | The thin Lambda needs to look up `(job_name, run_id)` from service-specific IDs. For RDS, a simple query suffices; add an index on metadata if lookups become slow. For DynamoDB, add a GSI. |
 | CDK vs. CloudFormation vs. Terraform | Ship a CDK construct for the EventBridge rules + thin Lambda wiring. Users without CDK can use the synthesised CloudFormation template directly. |
 | Versioning | Release `dispatchio` and `dispatchio-aws` at the same version. Simpler to reason about compatibility; accept that both are released even when only one changes. |
-| Testing | Unit tests use `moto` (already noted in repo structure). Integration tests require a real AWS environment or LocalStack; mark with `pytest -m integration` and keep them opt-in. |
+| Testing | Unit tests use `moto` (mocking AWS services). Integration tests require a real AWS environment (RDS + SQS) or LocalStack; mark with `pytest -m integration` and keep them opt-in. |

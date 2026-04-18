@@ -8,7 +8,6 @@ are fully interchangeable.
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from dispatchio.models import RunRecord, Status
