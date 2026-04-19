@@ -797,6 +797,79 @@ def context_remove(name: str):
 
 
 # ---------------------------------------------------------------------------
+# graph
+# ---------------------------------------------------------------------------
+
+
+@cli.group("graph")
+def graph_group():
+    """Graph artifact utilities (JSON graph mode)."""
+
+
+@graph_group.command("validate")
+@click.argument("path", type=click.Path(exists=True, path_type=Path))
+def graph_validate(path: Path):
+    """Validate a graph artifact file (Pydantic + graph-level checks).
+
+    Reports all errors at once so producers can fix everything in one pass.
+
+    \b
+    Example:
+      dispatchio graph validate graph.json
+    """
+    from dispatchio.graph import GraphValidationError, load_graph, validate_graph
+
+    try:
+        spec = load_graph(path)
+    except GraphValidationError as exc:
+        raise click.ClickException(str(exc))
+
+    try:
+        validate_graph(spec)
+    except GraphValidationError as exc:
+        raise click.ClickException(str(exc))
+
+    click.echo(click.style(f"Graph {path} is valid.", fg="green"))
+    click.echo(f"  orchestrator : {spec.orchestrator_name}")
+    click.echo(f"  graph_version: {spec.graph_version}")
+    click.echo(f"  jobs         : {len(spec.jobs)}")
+    if spec.external_dependencies:
+        click.echo(f"  external deps: {len(spec.external_dependencies)}")
+    if spec.producer:
+        click.echo(f"  producer     : {spec.producer.name} {spec.producer.version}")
+
+
+@graph_group.command("schema")
+@click.option(
+    "--output",
+    "-o",
+    default=None,
+    help="Write schema to FILE instead of stdout.",
+    metavar="FILE",
+)
+def graph_schema(output: str | None):
+    """Print the JSON Schema for GraphSpec.
+
+    Non-Python producers can use this schema to validate artifacts before
+    publishing them.
+
+    \b
+    Examples:
+      dispatchio graph schema
+      dispatchio graph schema --output graph-spec-v1.json
+    """
+    import json as _json
+    from dispatchio.graph import dump_schema
+
+    schema_str = _json.dumps(dump_schema(), indent=2)
+    if output:
+        Path(output).write_text(schema_str)
+        click.echo(f"Schema written to {output}")
+    else:
+        click.echo(schema_str)
+
+
+# ---------------------------------------------------------------------------
 # Formatting helpers
 # ---------------------------------------------------------------------------
 

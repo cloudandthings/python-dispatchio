@@ -1,0 +1,36 @@
+{
+  "graph_version": "1",
+  "orchestrator_name": "daily-etl",
+  "generated_at": "2026-04-19T10:00:00Z",
+  "producer": {
+    "name": "dispatchio-graph-builder",
+    "version": "0.1.0"
+  },
+  "jobs": [
+    {
+      "name": "ingest",
+      "cadence": {"type": "date", "frequency": "daily", "offset": 0},
+      "executor": {
+        "type": "subprocess",
+        "command": ["echo", "ingest: run_id={run_id}"]
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "retry_on": ["timeout", "throttle"]
+      }
+    },
+    {
+      "name": "transform",
+      "executor": {
+        "type": "subprocess",
+        "command": ["echo", "transform: run_id={run_id}"]
+      },
+      "depends_on": [
+        {
+          "job_name": "ingest",
+          "cadence": {"type": "date", "frequency": "daily", "offset": 0}
+        }
+      ]
+    }
+  ]
+}
