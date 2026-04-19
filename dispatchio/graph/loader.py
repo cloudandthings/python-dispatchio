@@ -176,9 +176,9 @@ def dump_schema() -> dict:
 
 def orchestrator_from_graph(
     spec: GraphSpec,
-    config: "str | Path | DispatchioSettings | None" = None,
+    config: str | Path | DispatchioSettings | None = None,
     **orchestrator_kwargs,
-) -> "Orchestrator":
+) -> Orchestrator:
     """Build a fully-wired Orchestrator from a GraphSpec.
 
     Calls validate_graph() before building. If the graph declares

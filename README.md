@@ -43,6 +43,40 @@ Requires Python 3.11+.
 core scheduling, SQLAlchemy state, filesystem receiver, and local executors.
 AWS receivers/executors are available only when `dispatchio[aws]` is installed.
 
+## Features
+
+### Tick-based orchestration
+
+Dispatchio runs as a short-lived process on a schedule (cron/EventBridge),
+evaluates job readiness, submits work, and exits. This keeps operations simple
+and avoids managing a long-running control plane.
+
+### Flexible execution backends
+
+Jobs can run as subprocesses, Python functions in subprocesses, or optional AWS
+executors (`LambdaJob`, `StepFunctionJob`, `AthenaJob`) when using
+`dispatchio[aws]`.
+
+### Backend-agnostic completion reporting
+
+Job code reports status through `get_reporter()`, while backend wiring is
+handled by config (`filesystem`, `sqs`, or `none`). The same job code works
+across local and cloud environments.
+
+### Inter-job DataStore
+
+Data produced by one job can be persisted and consumed by downstream jobs via
+`DataStore` (`MemoryDataStore` / `FilesystemDataStore`). For Python workers,
+`dispatchio_write_results` can auto-persist function return values with minimal
+boilerplate.
+
+### JSON Graph pipelines
+
+Pipelines can be defined as JSON graph artifacts and loaded/validated at
+runtime. This supports decoupled graph publishing and promotion flows where the
+orchestrator consumes a versioned graph artifact instead of in-code DAG wiring.
+See [JSON Graph Decoupling](docs/json_graph_decoupling.md).
+
 ## Quick start
 
 ### 1. Define your jobs

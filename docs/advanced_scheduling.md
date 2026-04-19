@@ -130,195 +130,138 @@ orchestrator = Orchestrator(jobs=job_factory, artifact_store=FilesystemArtifactS
 
 ---
 
-## Phase 4 — Artifact store
+## Phase 4 — DataStore
+
+### Status
+
+Implemented as `dispatchio.datastore`.
 
 ### Problem
 
-Dynamic job factories need to read structured data that was written by a
-previous job (e.g. a discovery job that determines which entities changed).
-Currently there is no Dispatchio-native place to put this data.
+Jobs in the same pipeline often need to pass structured data to each other —
+for example, a discovery job that writes a list of changed entities so a
+downstream job knows what to process.
 
-The name `MetadataStore` was considered and rejected — "metadata" in most
-systems means data *about* jobs (status, timestamps), which is already
-`StateStore`'s domain. What factories need is a store for named, structured
-outputs produced by one job and consumed by another — the standard term in
-data and CI/CD pipelines is *artifact*. `ArtifactStore` with `write`/`read`
-method names is the clearest expression of this without implying a specific
-value type or file-based storage.
+`StateStore` is the wrong place for this: it stores execution lifecycle records
+(attempts, statuses, timestamps), not job output data.
 
-### Namespacing
+`DataStore` is the answer: a simple key-value store for JSON-serialisable
+values, keyed by `(namespace, job, run_id, key)`.
 
-An `ArtifactStore` is constructed with a `namespace` (default `"default"`).
-Multiple top-level `Orchestrator` instances that share the same backing
-store can use distinct namespaces so that their artifact keys never collide:
+### Naming
 
-```python
-orchestrator_a = Orchestrator(jobs=..., artifact_store=FilesystemArtifactStore(
-    path=ARTIFACT_DIR, namespace="pipeline_a"
-))
-orchestrator_b = Orchestrator(jobs=..., artifact_store=FilesystemArtifactStore(
-    path=ARTIFACT_DIR, namespace="pipeline_b"
-))
+`MetadataStore` was rejected — "metadata" means data *about* jobs, which is
+already `StateStore`'s domain. `ArtifactStore` was considered but implies binary
+build artifacts. `DataStore` is neutral and accurate.
+
+### Key structure
+
+```text
+<namespace> / <producer_job> / <run_id> / <key>
 ```
 
-The full internal key structure is `<namespace>/<producer_job>/<run_id>/<key>`.
-A factory reading artifacts never needs to know the namespace — it comes
-from the store instance injected into the orchestrator.
-
-### Proposed interface
-
-```python
-class ArtifactStore(Protocol):
-    namespace: str  # set at construction; default "default"
-
-    # Opinionated API: identify values by producer job + logical key,
-    # scoped by run_id.
-    def write(
-        self,
-        value: Any,
-        *,
-        job: str | None = None,
-        run_id: str | None = None,
-        key: str = "return_value",
-    ) -> None: ...
-
-    def read(
-        self,
-        *,
-        job: str,
-        run_id: str | None = None,
-        key: str = "return_value",
-    ) -> Any | None: ...
-
-    # Escape hatch: direct key/value access for custom naming schemes.
-    # Keys are always interpreted within the store's namespace.
-    def get(self, key: str) -> Any | None: ...
-    def put(self, key: str, value: Any) -> None: ...
-    def delete(self, key: str) -> None: ...
-    def list_keys(self, prefix: str = "") -> list[str]: ...
-```
-
-Values are any JSON-serialisable Python object.
-Dispatchio's default key strategy (inspired by Airflow XCom lookup semantics)
-is:
-
-- `namespace` + `producer_job` + `run_id` + `key`
-- default `key` is `"return_value"`
-- default `run_id` in worker context comes from `DISPATCHIO_RUN_ID`
-- default `namespace` in worker context comes from `DISPATCHIO_ARTIFACT_NAMESPACE`
-
-By default this resolves to a full key like
-`"default/discover_entities/20260115/entities"`.
-
-Users who want a different convention can either:
-
-- pass explicit `key` to `get/put/delete` (it is still scoped to the namespace), or
-- configure a custom key strategy callable in artifact settings.
-
-### Tick-level I/O caching
-
-The artifact store is read at tick start (by the job factory) and written
-at tick end (by completion events received from workers). A naive
-implementation that issues a network or filesystem call for every individual
-`write`/`read` will become a bottleneck in fan-out scenarios with many
-dynamic child jobs.
-
-The preferred pattern is a **load/flush cycle** tied to the tick boundary:
+- `namespace` is set at construction (default `"default"`). Multiple
+  orchestrators sharing a backing store use distinct namespaces.
+- `key` defaults to `"return_value"`.
+- When `job` or `run_id` is `None` in a write/read call, the values are
+  resolved from `DISPATCHIO_JOB_NAME` and `DISPATCHIO_RUN_ID` env vars
+  injected by the executor. This makes the harness API ergonomic:
 
 ```python
-class ArtifactStoreCache(ArtifactStore):
-    """
-    Wraps any ArtifactStore. Loads the full namespace into memory at
-    construction (or on load()), buffers all writes, and flushes on flush()
-    or __exit__. Individual write/read calls touch only the in-memory dict.
-    """
-    def __init__(self, store: ArtifactStore) -> None: ...
-    def load(self) -> None: ...   # reads namespace from backing store once
-    def flush(self) -> None: ...  # writes buffered changes back in one batch
-    def __enter__(self) -> "ArtifactStoreCache": ...
-    def __exit__(self, *_: Any) -> None: ...  # calls flush()
+store = get_data_store()
+store.write(entities, key="entities")   # job and run_id from env
 ```
 
-`Orchestrator` accepts an optional `ArtifactStoreCache` and, when present,
-calls `load()` before the factory callable and `flush()` after phase 5
-(submissions). Implementations that do not use the cache can be passed
-directly; the load/flush hooks become no-ops.
-
-The factory callable receives the orchestrator's artifact store directly
-(as an injected argument), so user code never manages the cache lifecycle
-manually:
+### Protocol
 
 ```python
-def job_factory(reference_time: datetime, artifacts: ArtifactStore) -> list[Job]:
-    entities = artifacts.read(job="discover_entities", run_id=run_id, key="entities") or []
-    ...
+class DataStore(Protocol):
+    namespace: str
+
+    def write(self, value, *, job=None, run_id=None, key="return_value") -> None: ...
+    def read(self, *, job, run_id=None, key="return_value") -> Any | None: ...
+    def worker_env(self) -> dict[str, str]: ...
 ```
 
-The updated factory type alias is:
+`worker_env()` returns the env vars that worker subprocesses need to access
+this store instance. Executors call it at submit time to inject config without
+requiring isinstance checks in the factories:
 
-```python
-JobFactory = Callable[[datetime, ArtifactStore], list[Job]]
-```
-
-### Backend recommendations
-
-| Class | Use case |
-|---|---|
-| `MemoryArtifactStore` | Tests, in-process demos |
-| `FilesystemArtifactStore` | Local dev (JSON files, one file per key) |
-| `SQLiteArtifactStore` | Production single-node and S3-synced deployments |
-| `DynamoDBArtifactStore` | Distributed / multi-node deployments (future) |
-
-**SQLite is the preferred production backend** for the load/flush pattern.
-Loading an entire namespace is a single `SELECT WHERE namespace = ?`; flushing
-is a single `BEGIN … COMMIT` transaction. This compares very favourably to
-DynamoDB, where a full-namespace scan is expensive and each write is an
-individual `PutItem` call.
-
-For serverless / ephemeral orchestrators (Lambda, ECS task), the natural
-pattern is: copy the SQLite file from S3 at tick start, load into
-`ArtifactStoreCache`, run the tick, flush, upload back to S3. This keeps
-I/O outside the hot path and keeps latency predictable.
-
-DynamoDB remains appropriate when multiple orchestrator instances run
-concurrently and write payloads independently (true horizontal scaling);
-at that point the load/flush cycle is no longer safe without additional
-locking, and per-item access is the right model.
+- `MemoryDataStore.worker_env()` → `{}` (in-process only)
+- `FilesystemDataStore.worker_env()` → `{"DISPATCHIO_DATA_DIR": ..., "DISPATCHIO_DATA_NAMESPACE": ...}`
 
 ### Harness integration
 
-For a job to write payloads it needs a reference to the store.
-The cleanest approach is to inject the store path/config via env vars
-(`DISPATCHIO_ARTIFACT_DIR` and `DISPATCHIO_ARTIFACT_NAMESPACE` for filesystem),
-analogous to how `DISPATCHIO_DROP_DIR` is injected today. The worker then
-imports `get_artifact_store` from dispatchio and writes directly:
+Workers call `get_data_store()` — no manual configuration needed:
 
 ```python
-# Inside a discovery job worker function
-from dispatchio.artifact import get_artifact_store
+from dispatchio.datastore import get_data_store
 
-def discover(run_id: str) -> None:
-    store = get_artifact_store()   # reads DISPATCHIO_ARTIFACT_DIR / NAMESPACE from env
-    entities = query_database_for_changes(run_id)
-    # Full key: <namespace>/discover_entities/<run_id>/entities
-    store.write(entities, job="discover_entities", run_id=run_id, key="entities")
+def discover():
+    store = get_data_store()
+    entities = query_changed_entities()
+    store.write(entities, key="entities")   # job + run_id from env
 
-def build_jobs(run_id: str) -> list[str]:
-    store = get_artifact_store()
-    return store.read(job="discover_entities", run_id=run_id, key="entities") or []
+def process():
+    store = get_data_store()
+    entities = store.read(job="discover", key="entities") or []
+    for entity in entities:
+        ...
 ```
 
-### Scope of change
+The orchestrator injects `DISPATCHIO_JOB_NAME`, `DISPATCHIO_DATA_DIR`, and
+`DISPATCHIO_DATA_NAMESPACE` into every worker subprocess automatically.
 
-- `dispatchio/artifact/base.py` — `ArtifactStore` protocol + `ArtifactRecord` model + `ArtifactStoreCache`
-- `dispatchio/artifact/memory.py` — `MemoryArtifactStore`
-- `dispatchio/artifact/filesystem.py` — `FilesystemArtifactStore`
-- `dispatchio/artifact/sqlite_.py` — `SQLiteArtifactStore`
-- `dispatchio/artifact/__init__.py` — `get_artifact_store()` factory (reads env) + key strategy wiring
-- `dispatchio/orchestrator.py` — accept `artifact_store` arg; inject into `JobFactory`; call `load()`/`flush()` around tick when `ArtifactStoreCache` is provided
-- `dispatchio/executor/python_.py` + `subprocess_.py` — inject `DISPATCHIO_ARTIFACT_DIR` + `DISPATCHIO_ARTIFACT_NAMESPACE`
-- `dispatchio/config/settings.py` — optional `[dispatchio.artifact]` config section
-- `dispatchio/__init__.py` — re-export `ArtifactStore`, `ArtifactStoreCache`
+### Configuration (dispatchio.toml)
+
+```toml
+[dispatchio.data_store]
+backend   = "filesystem"
+base_dir  = ".dispatchio/data"
+namespace = "my-pipeline"
+```
+
+Or in Python:
+
+```python
+from dispatchio import local_orchestrator
+from dispatchio.datastore import FilesystemDataStore
+
+store = FilesystemDataStore(".dispatchio/data", namespace="my-pipeline")
+orchestrator = local_orchestrator(jobs, data_store=store)
+```
+
+### Backends (v1)
+
+| Class | Use case |
+|---|---|
+| `MemoryDataStore` | Tests, single-process simulations |
+| `FilesystemDataStore` | Local dev and simple single-node deployments |
+
+Deferred: `SQLiteDataStore` (batched writes, better for fan-out), DynamoDB
+backend (distributed deployments).
+
+### Deferred
+
+- `DataStoreCache` — load/flush optimisation for fan-out patterns with many
+  dynamic child jobs. Not needed for the primary use case.
+- Escape hatch (`get/put/delete/list_keys`) — direct key access for custom
+  naming schemes. Deferred until a concrete use case emerges.
+- Factory callable integration — `Orchestrator(job_factory=...)` receiving
+  the DataStore as an injected argument.
+
+### Scope of change (implemented)
+
+- `dispatchio/datastore/base.py` — `DataStore` protocol, `_resolve_job`, `_resolve_run_id`
+- `dispatchio/datastore/memory.py` — `MemoryDataStore`
+- `dispatchio/datastore/filesystem.py` — `FilesystemDataStore`
+- `dispatchio/datastore/__init__.py` — `get_data_store()` factory
+- `dispatchio/executor/python_.py` + `subprocess_.py` — `data_env` param; inject `DISPATCHIO_JOB_NAME`, `DISPATCHIO_DATA_DIR`, `DISPATCHIO_DATA_NAMESPACE`
+- `dispatchio/orchestrator.py` — `data_store` param (stored for future factory use)
+- `dispatchio/config/settings.py` — `DataStoreSettings` + `[dispatchio.data_store]` section
+- `dispatchio/config/loader.py` — `_build_data_store`, relative path resolution for `base_dir`
+- `dispatchio/__init__.py` — re-export `DataStore`, `FilesystemDataStore`, `MemoryDataStore`, `get_data_store`; `local_orchestrator` accepts `data_store`
+- `examples/data_store/` — discover → DataStore → process example
 
 ---
 

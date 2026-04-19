@@ -8,10 +8,8 @@ from pathlib import Path
 import pytest
 
 from dispatchio.graph import (
-    GraphExternalDependency,
     GraphSpec,
     GraphValidationError,
-    ProducerInfo,
     dump_schema,
     load_graph,
     orchestrator_from_graph,
@@ -75,7 +73,9 @@ class TestLoadGraph:
     def test_unknown_top_level_field_raises(self, tmp_path):
         data = _raw()
         data["unknown_field"] = "surprise"
-        with pytest.raises(GraphValidationError, match="Extra inputs are not permitted"):
+        with pytest.raises(
+            GraphValidationError, match="Extra inputs are not permitted"
+        ):
             load_graph(_graph_file(tmp_path, data))
 
     def test_invalid_json_raises(self, tmp_path):

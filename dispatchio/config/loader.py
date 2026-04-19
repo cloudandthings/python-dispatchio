@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from dispatchio.config.settings import (
+    DataStoreSettings,
     DispatchioSettings,
     ReceiverSettings,
     StateSettings,
@@ -103,7 +104,11 @@ def _resolve_relative_paths(data: dict[str, Any], base_dir: Path) -> dict[str, A
     import copy
 
     data = copy.deepcopy(data)
-    _PATH_FIELDS = {"state": ["root"], "receiver": ["drop_dir"]}
+    _PATH_FIELDS = {
+        "state": ["root"],
+        "receiver": ["drop_dir"],
+        "data_store": ["base_dir"],
+    }
     for section, keys in _PATH_FIELDS.items():
         if section not in data:
             continue
@@ -225,15 +230,19 @@ def orchestrator_from_config(
 
     # Allow callers (e.g. orchestrator_from_graph) to override the name from
     # settings by passing name= in orchestrator_kwargs.
-    effective_name = orchestrator_kwargs.pop("name", getattr(settings, "name", "default"))
+    effective_name = orchestrator_kwargs.pop(
+        "name", getattr(settings, "name", "default")
+    )
 
     reporter_env = _build_reporter_env(settings.receiver)
+    data_store = _build_data_store(getattr(settings, "data_store", None))
+    data_env = data_store.worker_env() if data_store is not None else {}
     return Orchestrator(
         jobs=jobs or [],
         state=_build_state(settings.state),
         executors={
-            "subprocess": SubprocessExecutor(),
-            "python": PythonJobExecutor(reporter_env=reporter_env),
+            "subprocess": SubprocessExecutor(data_env=data_env),
+            "python": PythonJobExecutor(reporter_env=reporter_env, data_env=data_env),
         },
         receiver=_build_receiver(settings.receiver),
         submit_concurrency=settings.submission.concurrency,
@@ -242,6 +251,7 @@ def orchestrator_from_config(
         default_cadence=settings.default_cadence,
         name=effective_name,
         tick_log=_build_tick_log(settings.state),
+        data_store=data_store,
         **orchestrator_kwargs,
     )
 
@@ -322,6 +332,16 @@ def _build_reporter_env(cfg: ReceiverSettings) -> dict[str, str]:
             env["DISPATCHIO_SQS_REGION"] = cfg.region
 
     return env
+
+
+def _build_data_store(cfg: DataStoreSettings | None):
+    if cfg is None or cfg.backend == "none":
+        return None
+    if cfg.backend == "filesystem":
+        from dispatchio.datastore import FilesystemDataStore
+
+        return FilesystemDataStore(cfg.base_dir, namespace=cfg.namespace)
+    raise ValueError(f"Unknown data_store backend: {cfg.backend!r}")
 
 
 def _build_receiver(cfg: ReceiverSettings):
