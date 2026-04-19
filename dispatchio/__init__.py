@@ -90,6 +90,16 @@ from dispatchio.completion import (
 from dispatchio.simulate import simulate
 from dispatchio.tick_log import FilesystemTickLogStore, TickLogRecord, TickLogStore
 from dispatchio.contexts import ContextEntry, ContextStore
+from dispatchio.graph import (
+    GraphExternalDependency,
+    GraphSpec,
+    GraphValidationError,
+    ProducerInfo,
+    dump_schema,
+    load_graph,
+    orchestrator_from_graph,
+    validate_graph,
+)
 
 
 def local_orchestrator(
@@ -210,4 +220,13 @@ __all__ = [
     # Contexts
     "ContextEntry",
     "ContextStore",
+    # Graph (JSON artifact loading)
+    "GraphExternalDependency",
+    "GraphSpec",
+    "GraphValidationError",
+    "ProducerInfo",
+    "dump_schema",
+    "load_graph",
+    "orchestrator_from_graph",
+    "validate_graph",
 ]

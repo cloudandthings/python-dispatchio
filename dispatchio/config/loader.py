@@ -223,6 +223,10 @@ def orchestrator_from_config(
 
     _configure_logging(settings.log_level)
 
+    # Allow callers (e.g. orchestrator_from_graph) to override the name from
+    # settings by passing name= in orchestrator_kwargs.
+    effective_name = orchestrator_kwargs.pop("name", getattr(settings, "name", "default"))
+
     reporter_env = _build_reporter_env(settings.receiver)
     return Orchestrator(
         jobs=jobs or [],
@@ -236,7 +240,7 @@ def orchestrator_from_config(
         max_submissions_per_tick=settings.submission.max_per_tick,
         submit_timeout=settings.submission.timeout,
         default_cadence=settings.default_cadence,
-        name=settings.name,
+        name=effective_name,
         tick_log=_build_tick_log(settings.state),
         **orchestrator_kwargs,
     )

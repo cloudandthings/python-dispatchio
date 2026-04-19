@@ -3,6 +3,8 @@
 
 # stuff
 
+decouple
+
 tick log in database ?
 
 metastore in database ?
