@@ -1,0 +1,61 @@
+"""Filesystem-backed DataStore — JSON files, one per key."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from dispatchio.datastore.base import _resolve_job, _resolve_run_id
+
+
+class FilesystemDataStore:
+    """DataStore backed by JSON files under a base directory.
+
+    Directory layout:
+        <base_dir>/<namespace>/<job>/<run_id>/<key>.json
+
+    Write is idempotent: writing the same (job, run_id, key) twice overwrites
+    the previous value.
+
+    worker_env() returns DISPATCHIO_DATA_DIR and DISPATCHIO_DATA_NAMESPACE so
+    worker subprocesses can reconstruct this store via get_data_store().
+    """
+
+    def __init__(self, base_dir: str | Path, namespace: str = "default") -> None:
+        self.namespace = namespace
+        self.base_dir = Path(base_dir)
+
+    def _path(self, job: str, run_id: str, key: str) -> Path:
+        safe_key = key.replace("/", "_").replace("\\", "_")
+        return self.base_dir / self.namespace / job / run_id / f"{safe_key}.json"
+
+    def write(
+        self,
+        value: Any,
+        *,
+        job: str | None = None,
+        run_id: str | None = None,
+        key: str = "return_value",
+    ) -> None:
+        p = self._path(_resolve_job(job), _resolve_run_id(run_id), key)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(value))
+
+    def read(
+        self,
+        *,
+        job: str,
+        run_id: str | None = None,
+        key: str = "return_value",
+    ) -> Any | None:
+        p = self._path(job, _resolve_run_id(run_id), key)
+        if not p.exists():
+            return None
+        return json.loads(p.read_text())
+
+    def worker_env(self) -> dict[str, str]:
+        return {
+            "DISPATCHIO_DATA_DIR": str(self.base_dir),
+            "DISPATCHIO_DATA_NAMESPACE": self.namespace,
+        }

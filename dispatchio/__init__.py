@@ -100,12 +100,21 @@ from dispatchio.graph import (
     orchestrator_from_graph,
     validate_graph,
 )
+from dispatchio.datastore import (
+    DataStore,
+    FilesystemDataStore,
+    MemoryDataStore,
+    dispatchio_read_results,
+    dispatchio_write_results,
+    get_data_store,
+)
 
 
 def local_orchestrator(
     jobs: list[Job],
     base_dir: str | Path = Path(".dispatchio"),
     name: str = "default",
+    data_store: "DataStore | None" = None,
     **orchestrator_kwargs,
 ) -> Orchestrator:
     """
@@ -122,6 +131,9 @@ def local_orchestrator(
         base_dir:           Root directory for state and completions.
                             Created if it doesn't exist. Defaults to .dispatchio/
         name:               Orchestrator name, used in tick log and context registry.
+        data_store:         Optional DataStore for inter-job data passing.
+                            If provided, workers can call get_data_store() to
+                            read and write structured values.
         **orchestrator_kwargs:
                             Forwarded to Orchestrator (e.g. alert_handler=...).
     """
@@ -130,18 +142,21 @@ def local_orchestrator(
     base = Path(base_dir)
     completions = base / "completions"
     db_path = base / "dispatchio.db"
+    data_env = data_store.worker_env() if data_store is not None else {}
     return Orchestrator(
         jobs=jobs,
         name=name,
         state=SQLAlchemyStateStore(f"sqlite:///{db_path}"),
         executors={
-            "subprocess": SubprocessExecutor(),
+            "subprocess": SubprocessExecutor(data_env=data_env),
             "python": PythonJobExecutor(
-                reporter_env={"DISPATCHIO_DROP_DIR": str(completions)}
+                reporter_env={"DISPATCHIO_DROP_DIR": str(completions)},
+                data_env=data_env,
             ),
         },
         receiver=FilesystemReceiver(completions),
         tick_log=FilesystemTickLogStore(base / "tick_log.jsonl"),
+        data_store=data_store,
         **orchestrator_kwargs,
     )
 
@@ -229,4 +244,11 @@ __all__ = [
     "load_graph",
     "orchestrator_from_graph",
     "validate_graph",
+    # DataStore (inter-job data passing)
+    "DataStore",
+    "FilesystemDataStore",
+    "MemoryDataStore",
+    "dispatchio_read_results",
+    "dispatchio_write_results",
+    "get_data_store",
 ]

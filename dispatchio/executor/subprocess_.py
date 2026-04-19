@@ -39,9 +39,15 @@ class SubprocessExecutor:
 
     Implements Pokeable: poke() checks subprocess liveness via poll() so the
     orchestrator can detect crashed jobs via active polling.
+
+    Args:
+        data_env: Env vars that configure the DataStore inside spawned
+                  subprocesses. Built from DataStore.worker_env() by the
+                  orchestrator factory when a data_store is configured.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, data_env: dict[str, str] | None = None) -> None:
+        self._data_env: dict[str, str] = data_env or {}
         self._processes: dict[
             str, subprocess.Popen
         ] = {}  # keyed by str(dispatchio_attempt_id)
@@ -70,10 +76,11 @@ class SubprocessExecutor:
 
         command = [part.format(**ctx) for part in cfg.command]
 
-        env = {**os.environ}
+        env = {**os.environ, **self._data_env}
         for k, v in cfg.env.items():
             env[k] = v.format(**ctx)
         # Inject attempt identity for Phase 2 completion correlation
+        env["DISPATCHIO_JOB_NAME"] = job.name
         env["DISPATCHIO_RUN_ID"] = attempt.logical_run_id
         env["DISPATCHIO_ATTEMPT"] = str(attempt.attempt)
         env["DISPATCHIO_ATTEMPT_ID"] = str(attempt.dispatchio_attempt_id)

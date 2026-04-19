@@ -30,7 +30,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from collections.abc import Iterable
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
+
+if TYPE_CHECKING:
+    from dispatchio.datastore.base import DataStore
 
 from dispatchio.alerts.base import AlertEvent, AlertHandler, LogAlertHandler
 from dispatchio.cadence import DAILY, Cadence
@@ -119,6 +123,7 @@ class Orchestrator:
         allow_runtime_mutation: bool = False,
         name: str = "default",
         tick_log: TickLogStore | None = None,
+        data_store: DataStore | None = None,
     ) -> None:
         self.name = name
         self.tick_log = tick_log
@@ -133,6 +138,7 @@ class Orchestrator:
         self.default_cadence = default_cadence
         self.strict_dependencies = strict_dependencies
         self.allow_runtime_mutation = allow_runtime_mutation
+        self.data_store = data_store
 
         self._job_index: dict[str, Job] = {}
         self._jobs_dirty = False

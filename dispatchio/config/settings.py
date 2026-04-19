@@ -97,6 +97,25 @@ class ReceiverSettings(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class DataStoreSettings(BaseModel):
+    """
+    Inter-job DataStore configuration.
+
+    backend="filesystem"  — JSON files under base_dir; suitable for local dev
+                           and simple single-node deployments.
+    backend="none"        — DataStore disabled (default).
+
+    Environment variable reference:
+      DISPATCHIO_DATA_STORE__BACKEND=filesystem
+      DISPATCHIO_DATA_STORE__BASE_DIR=.dispatchio/data
+      DISPATCHIO_DATA_STORE__NAMESPACE=my-pipeline
+    """
+
+    backend: Literal["filesystem", "none"] = "none"
+    base_dir: str = ".dispatchio/data"
+    namespace: str = "default"
+
+
 class SubmissionSettings(BaseModel):
     """
     Controls how jobs are submitted each tick.
@@ -147,6 +166,7 @@ class DispatchioSettings(BaseSettings):
     state: StateSettings = Field(default_factory=StateSettings)
     receiver: ReceiverSettings = Field(default_factory=ReceiverSettings)
     submission: SubmissionSettings = Field(default_factory=SubmissionSettings)
+    data_store: DataStoreSettings = Field(default_factory=DataStoreSettings)
     default_cadence: Any = "daily"
     # Accepts a frequency string ("daily", "monthly", etc.) or a full
     # Cadence dict.  Coerced to a DateCadence by _coerce_cadence below.

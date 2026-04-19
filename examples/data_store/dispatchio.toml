@@ -1,0 +1,19 @@
+# Dispatchio configuration — data_store example (local dev)
+
+[dispatchio]
+log_level = "INFO"
+default_cadence = "daily"
+
+[dispatchio.state]
+backend = "sqlalchemy"
+connection_string = "sqlite:///dispatchio.db"
+
+[dispatchio.receiver]
+backend  = "filesystem"
+drop_dir = ".dispatchio/completions"
+
+# Enable the DataStore so workers can call get_data_store().
+[dispatchio.data_store]
+backend  = "filesystem"
+base_dir = ".dispatchio/data"
+namespace = "data-store-example"

@@ -51,8 +51,13 @@ class PythonJobExecutor:
                       for FilesystemReceiver, SQS vars for SQSReceiver).
     """
 
-    def __init__(self, reporter_env: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        reporter_env: dict[str, str] | None = None,
+        data_env: dict[str, str] | None = None,
+    ) -> None:
         self._reporter_env: dict[str, str] = reporter_env or {}
+        self._data_env: dict[str, str] = data_env or {}
         self._processes: dict[
             str, subprocess.Popen
         ] = {}  # keyed by str(dispatchio_attempt_id)
@@ -88,6 +93,8 @@ class PythonJobExecutor:
         env = {
             **os.environ,
             **self._reporter_env,
+            **self._data_env,
+            "DISPATCHIO_JOB_NAME": job.name,
             "DISPATCHIO_RUN_ID": attempt.logical_run_id,
             "DISPATCHIO_ATTEMPT": str(attempt.attempt),
             "DISPATCHIO_ATTEMPT_ID": str(attempt.dispatchio_attempt_id),
