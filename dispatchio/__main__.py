@@ -1,6 +1,7 @@
 if __name__ == "__main__":
     try:
-        from dispatchio.cli.main import app
+        from dispatchio.cli.app import app
+
         app()
     except ImportError as e:
         raise ImportError(

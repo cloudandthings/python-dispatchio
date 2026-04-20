@@ -3,7 +3,7 @@ PythonJob executor.
 
 Submits a PythonJob by spawning:
     {sys.executable} -m dispatchio run {entry_point}
-    {sys.executable} -m dispatchio run --script {path} --function {name}
+    {sys.executable} -m dispatchio run-script {path} {name}
 
 Run ID and reporter configuration are injected as environment variables so
 the job harness (run_job) picks them up without any Dispatchio-specific argument
@@ -37,9 +37,9 @@ class PythonJobExecutor:
     """
     Executor for PythonJob configs.
 
-    Spawns `python -m dispatchio run` as a detached subprocess. Run ID and
-    reporter env vars are injected automatically; the job function itself
-    stays free of Dispatchio imports.
+    Spawns `python -m dispatchio run` or `python -m dispatchio run-script`
+    as a detached subprocess. Run ID and reporter env vars are injected
+    automatically; the job function itself stays free of Dispatchio imports.
 
     Implements Pokeable: poke() checks subprocess liveness via poll() so the
     orchestrator can detect crashed jobs via active polling.
@@ -83,10 +83,8 @@ class PythonJobExecutor:
                 sys.executable,
                 "-m",
                 "dispatchio",
-                "run",
-                "--script",
+                "run-script",
                 cfg.script,
-                "--function",
                 cfg.function,
             ]
 
