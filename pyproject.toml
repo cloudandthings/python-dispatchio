@@ -42,6 +42,7 @@ Issues = "https://github.com/cloudandthings/dispatchio/issues"
 [project.optional-dependencies]
 cli = [
     "typer>=0.24",
+    "rich>=13",
 ]
 aws = ["boto3>=1.26"]
 dev = [
@@ -50,10 +51,11 @@ dev = [
     "pytest-cov>=4.0",
     "moto[sqs,awslambda,stepfunctions,athena]>=5.0",
     "typer>=0.24",
+    "rich>=13",
 ]
 
 [project.scripts]
-dispatchio = "dispatchio.cli.main:app"
+dispatchio = "dispatchio.cli.app:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["dispatchio", "dispatchio_aws"]

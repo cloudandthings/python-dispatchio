@@ -317,11 +317,11 @@ class HttpJob(BaseModel):
 
 class PythonJob(BaseModel):
     """
-    Run the job by calling a Python callable via `dispatchio run`.
+        Run the job by calling a Python callable via the Dispatchio CLI.
 
     Two forms:
-      entry_point="mypackage.jobs:run_ingest"  — module must be importable
-      script="/abs/path/worker.py", function="run_ingest"  — file loaded directly
+            entry_point="mypackage.jobs:run_ingest"  — runs via `dispatchio run`
+            script="/abs/path/worker.py", function="run_ingest"  — runs via `dispatchio run-script`
 
     Run ID and reporter are injected as env vars (DISPATCHIO_RUN_ID, DISPATCHIO_DROP_DIR)
     by the executor — job functions need no Dispatchio imports.

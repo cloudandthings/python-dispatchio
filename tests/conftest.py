@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import pytest
 from datetime import datetime, timezone
+from unittest.mock import patch
 from uuid import uuid4
+
+from rich.console import Console
 
 from dispatchio.state.sqlalchemy_ import SQLAlchemyStateStore
 from dispatchio.models import Job, SubprocessJob, AttemptRecord, Status
@@ -43,3 +46,19 @@ def make_attempt(
         status=status,
         **kw,
     )
+
+
+@pytest.fixture
+def rich_output():
+    """Patch dispatchio.cli.output.console with a recording console."""
+    captured = Console(record=True, no_color=True, width=200)
+    with patch("dispatchio.cli.output.console", captured):
+        yield captured
+
+
+@pytest.fixture
+def rich_error_output():
+    """Patch dispatchio.cli.output.error_console with a recording console."""
+    captured = Console(record=True, no_color=True, width=200)
+    with patch("dispatchio.cli.output.error_console", captured):
+        yield captured

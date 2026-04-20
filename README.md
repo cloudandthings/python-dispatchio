@@ -270,6 +270,8 @@ Job(
 ```
 
 Use `PythonJob` with the `run_job()` harness (see [Signal completion](#3-signal-completion-from-your-job)).
+Entry-point workers use `dispatchio run MODULE:FUNCTION`; script-backed workers use
+`dispatchio run-script FILE FUNCTION`.
 
 ### AWS executors (`dispatchio[aws]` only)
 
