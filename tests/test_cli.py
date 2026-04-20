@@ -15,7 +15,14 @@ from dispatchio.cli.app import app
 from dispatchio.cli.app import callback as cli_callback
 from dispatchio.cli.errors import CliUserError
 from dispatchio.graph import GraphValidationError
-from dispatchio.models import AttemptRecord, RetryRequest, Status
+from dispatchio.models import (
+    AttemptRecord,
+    JobAction,
+    JobTickResult,
+    RetryRequest,
+    Status,
+    TickResult,
+)
 from dispatchio.state.sqlalchemy_ import SQLAlchemyStateStore
 
 
@@ -179,6 +186,35 @@ def test_handle_cli_errors_prints_user_error(rich_error_output) -> None:
 
     assert result.exit_code == 1
     assert "boom" in rich_error_output.export_text()
+
+
+def test_tick_dry_run_plans_without_submission(rich_output) -> None:
+    called_kwargs: dict[str, object] = {}
+
+    fake_orch = type("FakeOrchestrator", (), {})()
+
+    def _tick(**kwargs):
+        called_kwargs.update(kwargs)
+        return TickResult(
+            reference_time=datetime(2025, 1, 15, tzinfo=timezone.utc),
+            results=[
+                JobTickResult(
+                    job_name="job_a",
+                    run_id="20250115",
+                    action=JobAction.WOULD_SUBMIT,
+                )
+            ],
+        )
+
+    fake_orch.tick = _tick
+
+    with patch("dispatchio.cli.root.load_orchestrator", return_value=fake_orch):
+        result = runner.invoke(app, ["tick", "--orchestrator", "a:b", "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert called_kwargs.get("dry_run") is True
+    out = rich_output.export_text()
+    assert "would_submit" in out
 
 
 def test_status_renders_rich_table(

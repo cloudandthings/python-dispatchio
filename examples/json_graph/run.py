@@ -10,7 +10,7 @@ graph.json with no Python job definitions. The runner only wires infrastructure
     # Run:
     python examples/json_graph/run.py
 
-In production, replace simulate() with a single tick() call driven by your
+In production, replace run_loop() with a single tick() call driven by your
 scheduler (EventBridge, cron, etc.):
     orchestrator.tick()
 """
@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
-from dispatchio import simulate
+from dispatchio import run_loop
 from dispatchio.graph import load_graph, orchestrator_from_graph
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -31,4 +31,4 @@ BASE = Path(__file__).parent
 spec = load_graph(BASE / "graph.json")
 orchestrator = orchestrator_from_graph(spec, config=BASE / "dispatchio.toml")
 
-simulate(orchestrator)
+run_loop(orchestrator)

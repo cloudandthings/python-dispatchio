@@ -238,13 +238,20 @@ class Orchestrator:
     # Public API
     # ------------------------------------------------------------------
 
-    def tick(self, reference_time: datetime | None = None) -> TickResult:
+    def tick(
+        self, reference_time: datetime | None = None, *, dry_run: bool = False
+    ) -> TickResult:
         """
         Run one evaluation cycle.
 
         reference_time: the logical "now" for this tick. Defaults to
         datetime.now(tz=timezone.utc). Pass an explicit value to replay
         a specific point in time (useful for testing and backfill).
+
+        dry_run: when True, only the planning phase (phase 3) runs — no
+        completion events are drained, no lost-job detection, and nothing
+        is submitted. Returns a TickResult with WOULD_SUBMIT actions so
+        you can see what would have been submitted without touching state.
         """
         if reference_time is None:
             reference_time = datetime.now(tz=timezone.utc)
@@ -254,11 +261,13 @@ class Orchestrator:
         tick_start = time.monotonic()
         result = TickResult(reference_time=reference_time)
 
-        # Phase 1 — apply inbound completion events
-        self._drain_receiver(reference_time)
+        # Phase 1 — apply inbound completion events (skipped in dry-run)
+        if not dry_run:
+            self._drain_receiver(reference_time)
 
-        # Phase 2 — detect lost jobs
-        result.results.extend(self._check_lost_jobs(reference_time))
+        # Phase 2 — detect lost jobs (skipped in dry-run: would write state)
+        if not dry_run:
+            result.results.extend(self._check_lost_jobs(reference_time))
 
         # Phase 3 — evaluate each job (planning only; no state writes)
         # outcomes preserves job-list order so results are reported in order.
@@ -279,12 +288,23 @@ class Orchestrator:
         if self.max_submissions_per_tick is not None:
             pending_indices = pending_indices[: self.max_submissions_per_tick]
 
-        # Phase 5 — execute submissions concurrently; slot results back
-        #            into their original positions to preserve job-list order.
-        pending = [outcomes[i] for i in pending_indices]  # all _PendingSubmission
-        submit_results = self._execute_submissions(pending, reference_time)
-        for idx, tick_result in zip(pending_indices, submit_results):
-            outcomes[idx] = tick_result
+        if dry_run:
+            # Convert pending submissions to WOULD_SUBMIT results; don't execute
+            for i in pending_indices:
+                ps = outcomes[i]
+                assert isinstance(ps, _PendingSubmission)
+                outcomes[i] = JobTickResult(
+                    job_name=ps.job.name,
+                    run_id=ps.logical_run_id,
+                    action=JobAction.WOULD_SUBMIT,
+                )
+        else:
+            # Phase 5 — execute submissions concurrently; slot results back
+            #            into their original positions to preserve job-list order.
+            pending = [outcomes[i] for i in pending_indices]  # all _PendingSubmission
+            submit_results = self._execute_submissions(pending, reference_time)
+            for idx, tick_result in zip(pending_indices, submit_results):
+                outcomes[idx] = tick_result
 
         for outcome in outcomes:
             if isinstance(outcome, JobTickResult):

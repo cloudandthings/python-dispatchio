@@ -45,6 +45,7 @@ cli = [
     "rich>=13",
 ]
 aws = ["boto3>=1.26"]
+all = ["dispatchio[cli,aws]"]
 dev = [
     "pytest>=7.0",
     "freezegun>=1.2",

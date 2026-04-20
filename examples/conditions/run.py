@@ -19,12 +19,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
-from dispatchio import simulate
+from dispatchio import run_loop
 from examples.conditions.jobs import orchestrator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-simulate(
+run_loop(
     orchestrator,
     reference_time=datetime(2025, 1, 15, 18, 30, tzinfo=timezone.utc),
 )

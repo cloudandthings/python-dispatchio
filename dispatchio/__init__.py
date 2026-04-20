@@ -87,7 +87,7 @@ from dispatchio.completion import (
     report_external_done,
     report_external_event,
 )
-from dispatchio.simulate import simulate
+from dispatchio.run_loop import run_loop
 from dispatchio.tick_log import FilesystemTickLogStore, TickLogRecord, TickLogStore
 from dispatchio.contexts import ContextEntry, ContextStore
 from dispatchio.graph import (
@@ -227,7 +227,7 @@ __all__ = [
     # Utilities
     "resolve_run_id",
     # Development / demos
-    "simulate",
+    "run_loop",
     # Tick log
     "FilesystemTickLogStore",
     "TickLogRecord",

@@ -6,7 +6,7 @@ Seeds the state store to simulate a partial success scenario:
   entity_b = DONE   (succeeded)
   entity_c = ERROR  (failed)
 
-Then calls simulate() with reference_time=2025-01-15 09:00 UTC.
+Then calls run_loop() with reference_time=2025-01-15 09:00 UTC.
 
 Expected outcome:
   majority_collector   — SUBMITTED  (threshold=2 met: 2/3 succeeded)
@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from uuid import uuid4
 from dispatchio.models import AttemptRecord, TriggerType
-from dispatchio import Status, simulate
+from dispatchio import Status, run_loop
 from examples.dependency_modes.jobs import orchestrator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -54,7 +54,7 @@ _seed("entity_a", Status.DONE)
 _seed("entity_b", Status.DONE)
 _seed("entity_c", Status.ERROR, reason="simulated failure")
 
-simulate(
+run_loop(
     orchestrator,
     reference_time=REF,
 )

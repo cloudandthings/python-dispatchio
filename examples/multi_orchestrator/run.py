@@ -33,7 +33,7 @@ from dispatchio import (
     Job,
     PythonJob,
     WEEKLY,
-    simulate,
+    run_loop,
     orchestrator_from_config,
     resolve_run_id,
 )
@@ -84,21 +84,21 @@ weekly = orchestrator_from_config(
 )
 
 # ---------------------------------------------------------------------------
-# Simulate both orchestrators
+# Run both orchestrators
 # ---------------------------------------------------------------------------
 
 print(f"\n{'─' * 60}")
 print(f"  Orchestrator: {daily.name}  (reference: {REFERENCE_TIME.date()})")
 print(f"{'─' * 60}\n")
-simulate(daily, reference_time=REFERENCE_TIME, tick_interval=0.5)
+run_loop(daily, reference_time=REFERENCE_TIME, tick_interval=0.5)
 
 print(f"\n{'─' * 60}")
 print(f"  Orchestrator: {weekly.name}  (reference: {REFERENCE_TIME.date()})")
 print(f"{'─' * 60}\n")
-# simulate() uses a daily run_id by default; supply the correct weekly stop condition
+# run_loop() uses a daily run_id by default; supply the correct weekly stop condition
 # so it exits once both weekly jobs are done.
 weekly_run_id = resolve_run_id(WEEKLY, REFERENCE_TIME)
-simulate(
+run_loop(
     weekly,
     reference_time=REFERENCE_TIME,
     tick_interval=0.5,

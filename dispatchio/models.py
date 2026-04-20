@@ -474,6 +474,7 @@ class Job(BaseModel):
 
 class JobAction(str, Enum):
     SUBMITTED = "submitted"
+    WOULD_SUBMIT = "would_submit"  # dry-run: would have been submitted
     SKIPPED_CONDITION = "skipped_condition"
     SKIPPED_DEPENDENCIES = "skipped_dependencies"
     SKIPPED_THRESHOLD_UNREACHABLE = (

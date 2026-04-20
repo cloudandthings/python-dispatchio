@@ -36,7 +36,7 @@ cron (every 5 min)
 pip install dispatchio           # core package only
 pip install "dispatchio[cli]"    # core + optional Typer CLI
 pip install "dispatchio[aws]"    # core + optional AWS extension (dispatchio_aws)
-pip install "dispatchio[cli,aws]"
+pip install "dispatchio[all]"    # cli + aws (shorthand for [cli,aws])
 ```
 
 Requires Python 3.11+.
@@ -140,9 +140,14 @@ orchestrator.tick()
 "
 ```
 
-**Or run a tick manually:**
+**Or run a live tick manually** (reads state, submits ready jobs, drains completion events):
 ```bash
 DISPATCHIO_ORCHESTRATOR=jobs:orchestrator dispatchio tick
+```
+
+**Preview what a tick would do without touching anything:**
+```bash
+DISPATCHIO_ORCHESTRATOR=jobs:orchestrator dispatchio tick --dry-run
 ```
 
 ### 3. Signal completion from your job
@@ -172,6 +177,7 @@ if __name__ == "__main__":
 ```
 
 Then submit it as a `PythonJob`:
+
 ```python
 Job(
     name="ingest",
@@ -179,7 +185,7 @@ Job(
 )
 ```
 
-The orchestrator **automatically injects the correct backend configuration** — your job code doesn't change whether you're running locally (filesystem) or on AWS (SQS).
+The orchestrator **automatically injects the correct backend configuration**. Your job code doesn't change whether you're running locally (filesystem) or on AWS.
 
 **For subprocess jobs**, you can also use `get_reporter()`:
 
@@ -197,41 +203,27 @@ except Exception as exc:
     reporter.report_error(run_id, str(exc))
 ```
 
----
+See [Completion Reporting](docs/completion_reporting.md) for detailed patterns, configuration, and
+low-level manual event writing.
 
-**Manual completion events** (if you need custom control):
+### 3a. Local development loop with `run_loop()`
 
-```python
-# At the end of your job script
-import json, pathlib, sys, os
-
-run_id  = sys.argv[1]
-drop    = pathlib.Path(os.getenv("DISPATCHIO_RECEIVER__DROP_DIR", ".dispatchio/completions"))
-drop.mkdir(exist_ok=True)
-
-(drop / f"ingest__{run_id}__done.json").write_text(json.dumps({
-    "job_name": "ingest",
-    "run_id":   run_id,
-    "status":   "done",
-}))
-```
-
-See [Completion Reporting](docs/completion_reporting.md) for detailed patterns and configuration.
-
-### 3a. Local testing with `simulate()`
-
-For local development, use `simulate()` to run multiple ticks without setting up a scheduler:
+For local development, use `run_loop()` to drive real ticks in a loop without
+wiring up a scheduler. **This runs the actual orchestrator** — jobs are
+submitted, completion events consumed, and state written. It is not a dry-run
+or sandbox:
 
 ```python
-from dispatchio import simulate
+from dispatchio import run_loop
 from jobs import orchestrator
 
-# Run ticks every 0.5 seconds until all jobs are done
-simulate(orchestrator, tick_interval=0.5)
+# Drives real ticks every 0.5 seconds until all jobs finish
+run_loop(orchestrator, tick_interval=0.5)
 ```
 
-`simulate()` advances time by one day per tick (configurable), submits jobs, drains completion
-events, and exits when all jobs reach a terminal state. Perfect for testing and demos.
+`run_loop()` exits when all jobs reach a terminal state (or `max_ticks` is
+hit). It fixes the `reference_time` at the moment of the call so all ticks
+operate on the same logical day.
 
 ---
 
@@ -659,12 +651,13 @@ export DISPATCHIO_STATE_DIR=/var/dispatchio/state
 
 ### `dispatchio tick`
 
-Run one orchestrator tick.
+Run one live orchestrator tick (drains completion events, detects lost jobs, submits ready jobs).
 
 ```bash
 dispatchio tick
 dispatchio tick --reference-time "2025-01-15T02:00:00"   # replay a specific time
 dispatchio tick --orchestrator myproject.jobs:orchestrator
+dispatchio tick --dry-run                                 # plan only, no state changes
 ```
 
 ### `dispatchio status`
@@ -733,7 +726,7 @@ pip install -e ".[dev]"
 python examples/hello_world/run.py
 ```
 
-Each example uses `simulate()` for local testing and includes a `dispatchio.toml` config file.
+Each example uses `run_loop()` for local development and includes a `dispatchio.toml` config file.
 
 ---
 

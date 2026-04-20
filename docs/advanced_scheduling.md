@@ -333,14 +333,14 @@ This has been implemented.
 
 ### Problem
 
-`simulate()` supports a fixed `reference_time`, making one-off historical
+`run_loop()` supports a fixed `reference_time`, making one-off historical
 runs possible. But reprocessing a range of historical dates (e.g. re-running
 six months of monthly jobs after a pipeline fix) requires a loop that the
 user has to write every time.
 
 ### Proposed change
 
-Add a `backfill()` function to `dispatchio/simulate.py`:
+Add a `backfill()` function to `dispatchio/run_loop.py`:
 
 ```python
 def backfill(
@@ -356,7 +356,7 @@ def backfill(
 ```
 
 `backfill` iterates from `start` to `end` inclusive, stepping by `granularity`,
-and calls `simulate()` for each step with the appropriate `reference_time`.
+and calls `run_loop()` for each step with the appropriate `reference_time`.
 
 The `tick_interval=0` default is intentional: historical runs should not
 sleep between ticks. The caller can pass a non-zero value if the jobs
@@ -378,7 +378,7 @@ backfill(orchestrator, start=date(2025, 1, 1), end=date(2025, 6, 1),
 
 ### Scope of change
 
-- `dispatchio/simulate.py` — add `backfill()`, add date-stepping helper
+- `dispatchio/run_loop.py` — add `backfill()`, add date-stepping helper
 - `dispatchio/__init__.py` — re-export `backfill`
 - `tests/test_simulate.py` (new) — date iteration, idempotency, granularity steps
 - `mise-tasks/backfill` — optional task wrapper (same pattern as `build-cookbook`)
