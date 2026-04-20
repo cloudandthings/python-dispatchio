@@ -52,6 +52,14 @@ def tick(
             help="Plan only — show what would be submitted without touching state.",
         ),
     ] = False,
+    pool: Annotated[
+        str | None,
+        typer.Option(
+            "--pool",
+            help="Only evaluate jobs in this pool.",
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
     """Run one orchestrator tick and print results.
 
@@ -66,13 +74,20 @@ def tick(
     with output.console.status("Loading orchestrator..."):
         orch = load_orchestrator(orchestrator)
 
+    if pool is not None:
+        declared_pools = sorted(orch.admission_policy.pools.keys())
+        if pool not in orch.admission_policy.pools:
+            raise CliUserError(
+                f"Unknown pool {pool!r}. Declared pools: {declared_pools}"
+            )
+
     ref = None
     if reference_time:
         ref = datetime.fromisoformat(reference_time)
         if ref.tzinfo is None:
             ref = ref.replace(tzinfo=timezone.utc)
 
-    result: TickResult = orch.tick(reference_time=ref, dry_run=dry_run)
+    result: TickResult = orch.tick(reference_time=ref, dry_run=dry_run, pool=pool)
     output.print_tick_result(result)
 
 

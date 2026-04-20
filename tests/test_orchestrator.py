@@ -16,6 +16,7 @@ from dispatchio.alerts.base import AlertEvent
 from dispatchio.cadence import DAILY, MONTHLY, YESTERDAY, DateCadence, Frequency
 from dispatchio.conditions import DayOfWeekCondition, TimeOfDayCondition
 from dispatchio.models import (
+    AdmissionPolicy,
     AlertCondition,
     AlertOn,
     AttemptRecord,
@@ -23,6 +24,7 @@ from dispatchio.models import (
     DependencyMode,
     JobAction,
     Job,
+    PoolPolicy,
     RetryPolicy,
     Status,
     SubprocessJob,
@@ -679,7 +681,7 @@ class TestAlerts:
 # ---------------------------------------------------------------------------
 
 
-class TestSubmissionLimit:
+class TestAdmissionLimits:
     def test_limits_submissions_per_tick(self):
         jobs = [_job(f"j{i}") for i in range(5)]
         store = SQLAlchemyStateStore("sqlite:///:memory:")
@@ -688,11 +690,15 @@ class TestSubmissionLimit:
             jobs=jobs,
             state=store,
             executors={"subprocess": executor},
-            max_submissions_per_tick=2,
+            admission_policy=AdmissionPolicy(max_submit_jobs_per_tick=2),
         )
         result = orch.tick(REF)
         assert len(executor.calls) == 2
         assert len(result.submitted()) == 2
+        deferred = [
+            r for r in result.results if r.action == JobAction.DEFERRED_SUBMIT_LIMIT
+        ]
+        assert len(deferred) == 3
 
     def test_deferred_jobs_submitted_on_subsequent_ticks(self):
         jobs = [_job(f"j{i}") for i in range(3)]
@@ -702,7 +708,7 @@ class TestSubmissionLimit:
             jobs=jobs,
             state=store,
             executors={"subprocess": executor},
-            max_submissions_per_tick=2,
+            admission_policy=AdmissionPolicy(max_submit_jobs_per_tick=2),
         )
         orch.tick(REF)
         assert len(executor.calls) == 2
@@ -725,6 +731,178 @@ class TestSubmissionLimit:
         assert result.results[0].action == JobAction.SUBMITTED
         assert result.results[1].job_name == "down"
         assert result.results[1].action == JobAction.SKIPPED_DEPENDENCIES
+
+
+class TestAdmissionPoolsAndPriority:
+    def test_mixed_pools_apply_active_and_submit_limits_together(self):
+        jobs = [
+            _job("replay_seed", pool="replay"),
+            _job("replay_high", pool="replay", priority=100),
+            _job("replay_low", pool="replay", priority=90),
+            _job("bulk_high", pool="bulk", priority=80),
+            _job("bulk_low", pool="bulk", priority=70),
+            _job("default_job", pool="default", priority=60),
+        ]
+        orch, store, executor = _make_orch(
+            jobs,
+            admission_policy=AdmissionPolicy(
+                max_submit_jobs_per_tick=3,
+                pools={
+                    "default": PoolPolicy(),
+                    "replay": PoolPolicy(max_active_jobs=2),
+                    "bulk": PoolPolicy(),
+                },
+            ),
+        )
+        # Seed one active replay attempt so only one replay candidate can be admitted.
+        store.append_attempt(_attempt("replay_seed", "20250115", Status.RUNNING))
+
+        result = orch.tick(REF)
+        by_job = {r.job_name: r for r in result.results}
+
+        assert by_job["replay_seed"].action == JobAction.SKIPPED_ALREADY_ACTIVE
+        assert by_job["replay_high"].action == JobAction.SUBMITTED
+        assert by_job["replay_low"].action == JobAction.DEFERRED_POOL_ACTIVE_LIMIT
+        assert by_job["bulk_high"].action == JobAction.SUBMITTED
+        assert by_job["bulk_low"].action == JobAction.SUBMITTED
+        assert by_job["default_job"].action == JobAction.DEFERRED_SUBMIT_LIMIT
+        assert len(executor.calls) == 3
+
+    def test_global_active_limit_defers_submission(self):
+        jobs = [_job("j1")]
+        orch, store, executor = _make_orch(
+            jobs,
+            admission_policy=AdmissionPolicy(max_active_jobs=1),
+        )
+        store.append_attempt(_attempt("orphan", "20250115", Status.RUNNING))
+
+        result = orch.tick(REF)
+        assert len(executor.calls) == 0
+        assert any(r.action == JobAction.DEFERRED_ACTIVE_LIMIT for r in result.results)
+
+    def test_pool_active_limit_defers_submission(self):
+        jobs = [
+            _job("a", pool="replay"),
+            _job("b", pool="replay"),
+        ]
+        orch, store, executor = _make_orch(
+            jobs,
+            admission_policy=AdmissionPolicy(
+                pools={"default": PoolPolicy(), "replay": PoolPolicy(max_active_jobs=1)}
+            ),
+        )
+        store.append_attempt(_attempt("b", "20250115", Status.RUNNING))
+
+        result = orch.tick(REF)
+        assert len(executor.calls) == 0
+        assert any(
+            r.job_name == "a" and r.action == JobAction.DEFERRED_POOL_ACTIVE_LIMIT
+            for r in result.results
+        )
+
+    def test_pool_submit_limit_honors_priority(self):
+        jobs = [
+            _job("low", pool="bulk", priority=0),
+            _job("high", pool="bulk", priority=10),
+        ]
+        orch, store, executor = _make_orch(
+            jobs,
+            admission_policy=AdmissionPolicy(
+                pools={
+                    "default": PoolPolicy(),
+                    "bulk": PoolPolicy(max_submit_jobs_per_tick=1),
+                }
+            ),
+        )
+
+        result = orch.tick(REF)
+        assert len(executor.calls) == 1
+        assert executor.calls[0]["job"] == "high"
+        assert any(
+            r.job_name == "high" and r.action == JobAction.SUBMITTED
+            for r in result.results
+        )
+        assert any(
+            r.job_name == "low" and r.action == JobAction.DEFERRED_POOL_SUBMIT_LIMIT
+            for r in result.results
+        )
+
+    def test_equal_priority_uses_definition_order(self):
+        jobs = [_job("first", priority=1), _job("second", priority=1)]
+        orch, store, executor = _make_orch(
+            jobs,
+            admission_policy=AdmissionPolicy(max_submit_jobs_per_tick=1),
+        )
+
+        result = orch.tick(REF)
+        assert len(executor.calls) == 1
+        assert executor.calls[0]["job"] == "first"
+        assert any(
+            r.job_name == "second" and r.action == JobAction.DEFERRED_SUBMIT_LIMIT
+            for r in result.results
+        )
+
+    def test_tick_result_pool_populated_for_skips_and_defers(self):
+        jobs = [
+            _job("done", pool="bulk"),
+            _job("pending", pool="bulk"),
+        ]
+        orch, store, executor = _make_orch(
+            jobs,
+            admission_policy=AdmissionPolicy(
+                max_active_jobs=1,
+                pools={"default": PoolPolicy(), "bulk": PoolPolicy()},
+            ),
+        )
+        store.append_attempt(_attempt("done", "20250115", Status.DONE))
+        store.append_attempt(_attempt("orphan", "20250115", Status.RUNNING))
+
+        result = orch.tick(REF)
+        done_result = next(r for r in result.results if r.job_name == "done")
+        pending_result = next(r for r in result.results if r.job_name == "pending")
+        assert done_result.pool == "bulk"
+        assert pending_result.pool == "bulk"
+
+    def test_dry_run_reports_would_defer_with_reason_prefix(self):
+        jobs = [_job("only")]
+        orch, store, executor = _make_orch(
+            jobs,
+            admission_policy=AdmissionPolicy(max_active_jobs=1),
+        )
+        store.append_attempt(_attempt("orphan", "20250115", Status.RUNNING))
+
+        result = orch.tick(REF, dry_run=True)
+        item = result.results[0]
+        assert item.action == JobAction.WOULD_DEFER
+        assert item.detail is not None
+        assert item.detail.startswith("deferred_active_limit")
+
+    def test_unknown_pool_rejected_at_init(self):
+        with pytest.raises(ValueError, match="Unknown pool"):
+            _make_orch([_job("x", pool="missing")])
+
+    def test_unknown_pool_rejected_on_add(self):
+        orch, store, executor = _make_orch(
+            [_job("x")],
+            allow_runtime_mutation=True,
+        )
+        with pytest.raises(ValueError, match="Unknown pool"):
+            orch.add_job(_job("y", pool="missing"))
+
+    def test_orphan_active_counts_only_toward_global_limit(self):
+        jobs = [_job("known", pool="bulk")]
+        orch, store, executor = _make_orch(
+            jobs,
+            admission_policy=AdmissionPolicy(
+                max_active_jobs=1,
+                pools={"default": PoolPolicy(), "bulk": PoolPolicy(max_active_jobs=1)},
+            ),
+        )
+        store.append_attempt(_attempt("removed_job", "20250115", Status.RUNNING))
+
+        result = orch.tick(REF)
+        deferred = next(r for r in result.results if r.job_name == "known")
+        assert deferred.action == JobAction.DEFERRED_ACTIVE_LIMIT
 
 
 # ---------------------------------------------------------------------------

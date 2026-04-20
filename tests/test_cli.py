@@ -192,6 +192,9 @@ def test_tick_dry_run_plans_without_submission(rich_output) -> None:
     called_kwargs: dict[str, object] = {}
 
     fake_orch = type("FakeOrchestrator", (), {})()
+    fake_orch.admission_policy = type(
+        "AdmissionPolicyStub", (), {"pools": {"default": object()}}
+    )()
 
     def _tick(**kwargs):
         called_kwargs.update(kwargs)
@@ -215,6 +218,72 @@ def test_tick_dry_run_plans_without_submission(rich_output) -> None:
     assert called_kwargs.get("dry_run") is True
     out = rich_output.export_text()
     assert "would_submit" in out
+
+
+def test_tick_pool_forwards_to_orchestrator(rich_output) -> None:
+    called_kwargs: dict[str, object] = {}
+
+    fake_orch = type("FakeOrchestrator", (), {})()
+    fake_orch.admission_policy = type(
+        "AdmissionPolicyStub", (), {"pools": {"default": object(), "bulk": object()}}
+    )()
+
+    def _tick(**kwargs):
+        called_kwargs.update(kwargs)
+        return TickResult(
+            reference_time=datetime(2025, 1, 15, tzinfo=timezone.utc),
+            results=[],
+        )
+
+    fake_orch.tick = _tick
+
+    with patch("dispatchio.cli.root.load_orchestrator", return_value=fake_orch):
+        result = runner.invoke(app, ["tick", "--orchestrator", "a:b", "--pool", "bulk"])
+
+    assert result.exit_code == 0, result.output
+    assert called_kwargs.get("pool") == "bulk"
+
+
+def test_tick_pool_rejects_unknown_pool(rich_error_output) -> None:
+    fake_orch = type("FakeOrchestrator", (), {})()
+    fake_orch.admission_policy = type(
+        "AdmissionPolicyStub", (), {"pools": {"default": object()}}
+    )()
+    fake_orch.tick = lambda **kwargs: TickResult(
+        reference_time=datetime(2025, 1, 15, tzinfo=timezone.utc),
+        results=[],
+    )
+
+    with patch("dispatchio.cli.root.load_orchestrator", return_value=fake_orch):
+        result = runner.invoke(app, ["tick", "--orchestrator", "a:b", "--pool", "bulk"])
+
+    assert result.exit_code == 1, result.output
+    assert "Unknown pool" in rich_error_output.export_text()
+
+
+def test_tick_dry_run_renders_would_defer(rich_output) -> None:
+    fake_orch = type("FakeOrchestrator", (), {})()
+    fake_orch.admission_policy = type(
+        "AdmissionPolicyStub", (), {"pools": {"default": object()}}
+    )()
+
+    fake_orch.tick = lambda **kwargs: TickResult(
+        reference_time=datetime(2025, 1, 15, tzinfo=timezone.utc),
+        results=[
+            JobTickResult(
+                job_name="job_a",
+                run_id="20250115",
+                action=JobAction.WOULD_DEFER,
+                detail="deferred_submit_limit submit_jobs_this_tick=1/1",
+            )
+        ],
+    )
+
+    with patch("dispatchio.cli.root.load_orchestrator", return_value=fake_orch):
+        result = runner.invoke(app, ["tick", "--orchestrator", "a:b", "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert "would_defer" in rich_output.export_text()
 
 
 def test_status_renders_rich_table(

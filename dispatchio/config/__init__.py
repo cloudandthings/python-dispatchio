@@ -2,15 +2,16 @@ from dispatchio.config.settings import (
     DispatchioSettings,
     ReceiverSettings,
     StateSettings,
-    SubmissionSettings,
 )
 from dispatchio.config.loader import load_config, orchestrator_from_config
+from dispatchio.models import AdmissionPolicy, PoolPolicy
 
 __all__ = [
     "DispatchioSettings",
     "StateSettings",
     "ReceiverSettings",
-    "SubmissionSettings",
+    "AdmissionPolicy",
+    "PoolPolicy",
     "load_config",
     "orchestrator_from_config",
     # name field is on DispatchioSettings — no separate export needed

@@ -11,11 +11,11 @@ The Orchestrator is stateless between runs. Each tick() call has five phases:
        c. Skip if any dependency is not satisfied.
        d. If ERROR/LOST, apply retry logic.
        e. Otherwise, return a pending-submission intent.
-  4. Apply the per-tick submission cap (if configured).
-  5. Execute pending submissions concurrently via a thread pool.
+    4. Run admission control (active and per-tick limits, global and per-pool).
+    5. Execute admitted submissions concurrently via a thread pool.
 
 Separating evaluation (phase 3) from execution (phase 5) means the
-planning phase reads a consistent state snapshot, and the per-tick cap
+planning phase reads a consistent state snapshot, and admission control
 can be applied cleanly before any side effects occur.
 
 The caller is responsible for scheduling tick() (e.g. EventBridge cron,
@@ -36,6 +36,7 @@ from uuid import UUID, uuid4
 if TYPE_CHECKING:
     from dispatchio.datastore.base import DataStore
 
+from dispatchio.admission import AdmissionCandidate, build_admission_plan
 from dispatchio.alerts.base import AlertEvent, AlertHandler, LogAlertHandler
 from dispatchio.cadence import DAILY, Cadence
 from dispatchio.conditions import TimeOfDayCondition
@@ -44,6 +45,7 @@ from dispatchio.models import (
     AlertOn,
     Dependency,
     DependencyMode,
+    AdmissionPolicy,
     JobAction,
     Job,
     JobTickResult,
@@ -96,9 +98,8 @@ class Orchestrator:
         executors:              Map of executor-type → Executor.
         receiver:               CompletionReceiver polled at the start of each tick.
         alert_handler:          AlertHandler for ERROR/LOST/NOT_STARTED_BY conditions.
-        submit_concurrency:     Max threads used to submit jobs in parallel within a tick.
-        max_submissions_per_tick: Cap on submissions per tick; excess jobs are deferred
-                                  to the next tick naturally (no state written for them).
+        submit_workers:         Max threads used to submit jobs in parallel within a tick.
+        admission_policy:       Admission limits for active jobs and per-tick submissions.
         submit_timeout:         Per-submission deadline (seconds) forwarded to
                                 executor.submit(). Not yet enforced by local executors;
                                 reserved for cloud executors where the API call can block.
@@ -115,8 +116,8 @@ class Orchestrator:
         executors: dict[str, Executor],
         receiver: CompletionReceiver | None = None,
         alert_handler: AlertHandler | None = None,
-        submit_concurrency: int = 8,
-        max_submissions_per_tick: int | None = None,
+        submit_workers: int = 8,
+        admission_policy: AdmissionPolicy | None = None,
         submit_timeout: float | None = None,
         default_cadence: Cadence = DAILY,
         strict_dependencies: bool = True,
@@ -132,8 +133,8 @@ class Orchestrator:
         self.executors = executors
         self.receiver = receiver
         self.alert_handler = alert_handler or LogAlertHandler()
-        self.submit_concurrency = submit_concurrency
-        self.max_submissions_per_tick = max_submissions_per_tick
+        self.submit_workers = submit_workers
+        self.admission_policy = admission_policy or AdmissionPolicy()
         self.submit_timeout = submit_timeout
         self.default_cadence = default_cadence
         self.strict_dependencies = strict_dependencies
@@ -145,6 +146,7 @@ class Orchestrator:
         self._has_ticked = False
 
         self._rebuild_job_index()
+        self._validate_job_pools(self.jobs)
         self._validate_dependencies()
 
     def add_job(self, job: Job) -> None:
@@ -160,6 +162,7 @@ class Orchestrator:
         self._ensure_mutation_allowed()
         new_jobs = list(jobs)
         self._validate_duplicate_job_names(self.jobs + new_jobs)
+        self._validate_job_pools(new_jobs)
         self.jobs.extend(new_jobs)
         self._jobs_dirty = True
 
@@ -207,6 +210,32 @@ class Orchestrator:
                     unresolved.append((job.name, dep.job_name))
         return unresolved
 
+    def _validate_job_pools(self, jobs: Iterable[Job]) -> None:
+        declared = set(self.admission_policy.pools.keys())
+        for job in jobs:
+            if job.pool not in declared:
+                raise ValueError(
+                    f"Unknown pool {job.pool!r} on job {job.name!r}. "
+                    f"Declare it in admission_policy.pools first."
+                )
+
+    def _result(
+        self,
+        *,
+        job_name: str,
+        run_id: str,
+        action: JobAction,
+        detail: str | None = None,
+        pool: str,
+    ) -> JobTickResult:
+        return JobTickResult(
+            job_name=job_name,
+            run_id=run_id,
+            pool=pool,
+            action=action,
+            detail=detail,
+        )
+
     def _validate_dependencies(self) -> None:
         unresolved = self._unresolved_dependencies()
         if not unresolved:
@@ -239,7 +268,11 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     def tick(
-        self, reference_time: datetime | None = None, *, dry_run: bool = False
+        self,
+        reference_time: datetime | None = None,
+        *,
+        dry_run: bool = False,
+        pool: str | None = None,
     ) -> TickResult:
         """
         Run one evaluation cycle.
@@ -257,6 +290,10 @@ class Orchestrator:
             reference_time = datetime.now(tz=timezone.utc)
 
         self._refresh_job_graph_if_dirty()
+        if pool is not None and pool not in self.admission_policy.pools:
+            raise ValueError(
+                f"Unknown pool {pool!r}. Declared pools: {sorted(self.admission_policy.pools.keys())}"
+            )
 
         tick_start = time.monotonic()
         result = TickResult(reference_time=reference_time)
@@ -273,6 +310,8 @@ class Orchestrator:
         # outcomes preserves job-list order so results are reported in order.
         outcomes: list[JobTickResult | _PendingSubmission | None] = []
         for job in self.jobs:
+            if pool is not None and job.pool != pool:
+                continue
             effective_cadence = job.cadence or self.default_cadence
             logical_run_id = resolve_run_id(effective_cadence, reference_time)
             outcomes.append(
@@ -281,36 +320,81 @@ class Orchestrator:
                 )
             )
 
-        # Phase 4 — apply per-tick submission cap
+        # Phase 4 — admission planning (active and per-tick limits)
         pending_indices = [
             i for i, o in enumerate(outcomes) if isinstance(o, _PendingSubmission)
         ]
-        if self.max_submissions_per_tick is not None:
-            pending_indices = pending_indices[: self.max_submissions_per_tick]
+        candidates: list[AdmissionCandidate] = []
+        for idx in pending_indices:
+            pending_item = outcomes[idx]
+            assert isinstance(pending_item, _PendingSubmission)
+            candidates.append(
+                AdmissionCandidate(
+                    index=idx,
+                    job_name=pending_item.job.name,
+                    pool=pending_item.job.pool,
+                    priority=pending_item.job.priority,
+                    definition_order=idx,
+                )
+            )
+
+        active_attempts = self.state.list_attempts()
+        job_pool_by_name = {job.name: job.pool for job in self.jobs}
+        admission_plan = build_admission_plan(
+            candidates=candidates,
+            active_attempts=active_attempts,
+            job_pool_by_name=job_pool_by_name,
+            policy=self.admission_policy,
+        )
 
         if dry_run:
             # Convert pending submissions to WOULD_SUBMIT results; don't execute
-            for i in pending_indices:
+            for i in admission_plan.admitted_indices:
                 ps = outcomes[i]
                 assert isinstance(ps, _PendingSubmission)
-                outcomes[i] = JobTickResult(
+                outcomes[i] = self._result(
                     job_name=ps.job.name,
                     run_id=ps.logical_run_id,
+                    pool=ps.job.pool,
                     action=JobAction.WOULD_SUBMIT,
+                )
+            for idx, deferred in admission_plan.deferred_by_index.items():
+                ps = outcomes[idx]
+                assert isinstance(ps, _PendingSubmission)
+                outcomes[idx] = self._result(
+                    job_name=ps.job.name,
+                    run_id=ps.logical_run_id,
+                    pool=ps.job.pool,
+                    action=JobAction.WOULD_DEFER,
+                    detail=f"{deferred.action.value} {deferred.detail}",
                 )
         else:
             # Phase 5 — execute submissions concurrently; slot results back
             #            into their original positions to preserve job-list order.
-            pending = [outcomes[i] for i in pending_indices]  # all _PendingSubmission
+            pending = [
+                outcomes[i] for i in admission_plan.admitted_indices
+            ]  # all _PendingSubmission
             submit_results = self._execute_submissions(pending, reference_time)
-            for idx, tick_result in zip(pending_indices, submit_results):
+            for idx, tick_result in zip(
+                admission_plan.admitted_indices, submit_results
+            ):
                 outcomes[idx] = tick_result
+            for idx, deferred in admission_plan.deferred_by_index.items():
+                ps = outcomes[idx]
+                assert isinstance(ps, _PendingSubmission)
+                outcomes[idx] = self._result(
+                    job_name=ps.job.name,
+                    run_id=ps.logical_run_id,
+                    pool=ps.job.pool,
+                    action=deferred.action,
+                    detail=deferred.detail,
+                )
 
         for outcome in outcomes:
             if isinstance(outcome, JobTickResult):
                 result.results.append(outcome)
             # None  → silently skipped (e.g. SKIPPED status)
-            # _PendingSubmission still in outcomes → was beyond the cap; deferred
+            # _PendingSubmission still in outcomes → should not happen
 
         self._has_ticked = True
 
@@ -599,9 +683,10 @@ class Orchestrator:
                             AlertOn.ERROR, job, logical_run_id, detail, updated
                         )
                         results.append(
-                            JobTickResult(
+                            self._result(
                                 job_name=job.name,
                                 run_id=logical_run_id,
+                                pool=job.pool,
                                 action=JobAction.MARKED_ERROR,
                                 detail=detail,
                             )
@@ -625,16 +710,18 @@ class Orchestrator:
         existing = self.state.get_latest_attempt(job.name, logical_run_id)
 
         if existing and existing.is_active():
-            return JobTickResult(
+            return self._result(
                 job_name=job.name,
                 run_id=logical_run_id,
+                pool=job.pool,
                 action=JobAction.SKIPPED_ALREADY_ACTIVE,
             )
 
         if existing and existing.status == Status.DONE:
-            return JobTickResult(
+            return self._result(
                 job_name=job.name,
                 run_id=logical_run_id,
+                pool=job.pool,
                 action=JobAction.SKIPPED_ALREADY_DONE,
             )
 
@@ -646,9 +733,10 @@ class Orchestrator:
         # Condition gate
         if job.condition is not None:
             if not job.condition.is_met(reference_time, cadence):
-                return JobTickResult(
+                return self._result(
                     job_name=job.name,
                     run_id=logical_run_id,
+                    pool=job.pool,
                     action=JobAction.SKIPPED_CONDITION,
                     detail=f"condition not met: {type(job.condition).__name__}",
                 )
@@ -691,9 +779,10 @@ class Orchestrator:
                 f"Last error: {record.reason}"
             )
             self._emit_alert(AlertOn.ERROR, job, logical_run_id, detail, record)
-            return JobTickResult(
+            return self._result(
                 job_name=job.name,
                 run_id=logical_run_id,
+                pool=job.pool,
                 action=JobAction.MARKED_ERROR,
                 detail=detail,
             )
@@ -702,17 +791,19 @@ class Orchestrator:
             if not any(pat in record.reason for pat in policy.retry_on):
                 detail = f"reason does not match retry_on patterns: {policy.retry_on}"
                 self._emit_alert(AlertOn.ERROR, job, logical_run_id, detail, record)
-                return JobTickResult(
+                return self._result(
                     job_name=job.name,
                     run_id=logical_run_id,
+                    pool=job.pool,
                     action=JobAction.MARKED_ERROR,
                     detail=detail,
                 )
 
         if job.condition and not job.condition.is_met(reference_time, cadence):
-            return JobTickResult(
+            return self._result(
                 job_name=job.name,
                 run_id=logical_run_id,
+                pool=job.pool,
                 action=JobAction.SKIPPED_CONDITION,
                 detail=f"retry: condition not met: {type(job.condition).__name__}",
             )
@@ -746,7 +837,7 @@ class Orchestrator:
         results: list[JobTickResult | None] = [None] * len(pending)
 
         with ThreadPoolExecutor(
-            max_workers=min(self.submit_concurrency, len(pending))
+            max_workers=min(self.submit_workers, len(pending))
         ) as pool:
             future_to_idx = {
                 pool.submit(
@@ -776,6 +867,7 @@ class Orchestrator:
                     results[idx] = JobTickResult(
                         job_name=ps.job.name,
                         run_id=ps.logical_run_id,
+                        pool=ps.job.pool,
                         action=JobAction.SUBMISSION_FAILED,
                         detail=str(exc),
                     )
@@ -801,9 +893,10 @@ class Orchestrator:
         if executor is None:
             msg = f"No executor registered for type '{executor_type}'"
             logger.error(msg)
-            return JobTickResult(
+            return self._result(
                 job_name=job.name,
                 run_id=logical_run_id,
+                pool=job.pool,
                 action=JobAction.SUBMISSION_FAILED,
                 detail=msg,
             )
@@ -838,9 +931,10 @@ class Orchestrator:
                 "Submitted %s/%s (attempt %d)", job.name, logical_run_id, attempt
             )
             action = JobAction.RETRYING if attempt > 0 else JobAction.SUBMITTED
-            return JobTickResult(
+            return self._result(
                 job_name=job.name,
                 run_id=logical_run_id,
+                pool=job.pool,
                 action=action,
                 detail=f"attempt={attempt}",
             )
@@ -857,9 +951,10 @@ class Orchestrator:
                 }
             )
             self.state.update_attempt(failed_record)
-            return JobTickResult(
+            return self._result(
                 job_name=job.name,
                 run_id=logical_run_id,
+                pool=job.pool,
                 action=JobAction.SUBMISSION_FAILED,
                 detail=error_msg,
             )
@@ -916,9 +1011,10 @@ class Orchestrator:
                 f"!={d.required_status.value}"
                 for d in unmet
             )
-            return JobTickResult(
+            return self._result(
                 job_name=job.name,
                 run_id=logical_run_id,
+                pool=job.pool,
                 action=JobAction.SKIPPED_DEPENDENCIES,
                 detail=detail,
             )
@@ -935,9 +1031,10 @@ class Orchestrator:
                 f"{d.job_name}[{resolve_run_id(d.cadence or job.cadence or self.default_cadence, reference_time)}] not finished"
                 for d in unfinished
             )
-            return JobTickResult(
+            return self._result(
                 job_name=job.name,
                 run_id=logical_run_id,
+                pool=job.pool,
                 action=JobAction.SKIPPED_DEPENDENCIES,
                 detail=detail,
             )
@@ -960,17 +1057,19 @@ class Orchestrator:
                 f"threshold={threshold} unreachable: "
                 f"{len(met)}/{len(deps)} succeeded, {len(not_yet_finished)} still running"
             )
-            return JobTickResult(
+            return self._result(
                 job_name=job.name,
                 run_id=logical_run_id,
+                pool=job.pool,
                 action=JobAction.SKIPPED_THRESHOLD_UNREACHABLE,
                 detail=detail,
             )
 
         detail = f"threshold={threshold}: {len(met)}/{len(deps)} succeeded"
-        return JobTickResult(
+        return self._result(
             job_name=job.name,
             run_id=logical_run_id,
+            pool=job.pool,
             action=JobAction.SKIPPED_DEPENDENCIES,
             detail=detail,
         )
