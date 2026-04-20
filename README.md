@@ -34,7 +34,9 @@ cron (every 5 min)
 
 ```bash
 pip install dispatchio           # core package only
+pip install "dispatchio[cli]"    # core + optional Typer CLI
 pip install "dispatchio[aws]"    # core + optional AWS extension (dispatchio_aws)
+pip install "dispatchio[cli,aws]"
 ```
 
 Requires Python 3.11+.
@@ -42,6 +44,10 @@ Requires Python 3.11+.
 `dispatchio_aws` is optional. If you install only `dispatchio`, you still get
 core scheduling, SQLAlchemy state, filesystem receiver, and local executors.
 AWS receivers/executors are available only when `dispatchio[aws]` is installed.
+
+The command-line interface is also optional. Install `dispatchio[cli]` if you
+want the `dispatchio` command, shell completion, and the Typer-powered operator
+workflow shown later in this README.
 
 ## Features
 
@@ -634,8 +640,15 @@ For operator runbooks, see [Retries, Attempts, and Audit Workflows](docs/retries
 
 ## CLI reference
 
-The CLI connects to a Dispatchio instance by importing an `Orchestrator` object
-from a Python module. Configure it via flag or environment variable.
+Install the optional CLI first if you want to use the `dispatchio` command:
+
+```bash
+pip install "dispatchio[cli]"
+```
+
+The CLI is built with Typer and connects to a Dispatchio instance by importing
+an `Orchestrator` object from a Python module. Configure it via flag or
+environment variable.
 
 ```bash
 export DISPATCHIO_ORCHESTRATOR=myproject.jobs:orchestrator
