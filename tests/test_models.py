@@ -5,12 +5,14 @@ import pytest
 from dispatchio.cadence import DAILY, MONTHLY
 from dispatchio.conditions import TimeOfDayCondition
 from dispatchio.models import (
+    AdmissionPolicy,
     Dependency,
     HttpJob,
     JobAction,
     Job,
     JobTickResult,
     PythonJob,
+    PoolPolicy,
     AttemptRecord,
     Status,
     SubprocessJob,
@@ -158,6 +160,8 @@ class TestJob:
         assert j.cadence is None  # inherits orchestrator default
         assert j.depends_on == []
         assert j.condition is None
+        assert j.pool == "default"
+        assert j.priority == 0
 
     def test_dependency_list(self):
         j = Job(
@@ -257,3 +261,20 @@ class TestTickResult:
         )
         assert len(result.submitted()) == 1
         assert len(result.skipped()) == 1
+
+
+class TestAdmissionPolicy:
+    def test_default_pool_is_present(self):
+        policy = AdmissionPolicy()
+        assert "default" in policy.pools
+
+    def test_adds_default_pool_when_missing(self):
+        policy = AdmissionPolicy(pools={"bulk": PoolPolicy()})
+        assert "default" in policy.pools
+        assert "bulk" in policy.pools
+
+    def test_rejects_non_positive_limits(self):
+        with pytest.raises(ValueError, match="positive integer"):
+            AdmissionPolicy(max_active_jobs=0)
+        with pytest.raises(ValueError, match="positive integer"):
+            PoolPolicy(max_submit_jobs_per_tick=-1)

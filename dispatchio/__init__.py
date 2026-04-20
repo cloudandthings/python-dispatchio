@@ -59,6 +59,7 @@ from dispatchio.external import (
     validate_external_dependencies,
 )
 from dispatchio.models import (
+    AdmissionPolicy,
     AthenaJob,
     AlertCondition,
     AlertOn,
@@ -69,6 +70,7 @@ from dispatchio.models import (
     LambdaJob,
     PythonJob,
     RetryPolicy,
+    PoolPolicy,
     Status,
     StepFunctionJob,
     SubprocessJob,
@@ -193,6 +195,7 @@ __all__ = [
     "validate_external_dependencies",
     # Models
     "AthenaJob",
+    "AdmissionPolicy",
     "AlertCondition",
     "AlertOn",
     "Dependency",
@@ -202,6 +205,7 @@ __all__ = [
     "LambdaJob",
     "PythonJob",
     "RetryPolicy",
+    "PoolPolicy",
     "Status",
     "StepFunctionJob",
     "SubprocessJob",

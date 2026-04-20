@@ -66,6 +66,12 @@ class TestDefaultSettings:
         assert s.receiver.backend == "filesystem"
         assert s.receiver.drop_dir == ".dispatchio/completions"
 
+    def test_admission_defaults(self):
+        s = DispatchioSettings()
+        assert s.admission.max_active_jobs is None
+        assert s.admission.max_submit_jobs_per_tick is None
+        assert "default" in s.admission.pools
+
 
 # ---------------------------------------------------------------------------
 # Environment variable overrides
@@ -104,6 +110,11 @@ class TestEnvVarOverrides:
         assert (
             s.log_level == "warning"
         )  # stored as-is; logging.getLevelName handles case
+
+    def test_admission_env_override(self, monkeypatch):
+        monkeypatch.setenv("DISPATCHIO_ADMISSION__MAX_SUBMIT_JOBS_PER_TICK", "7")
+        s = DispatchioSettings()
+        assert s.admission.max_submit_jobs_per_tick == 7
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +158,27 @@ class TestTomlLoading:
         s = load_config(f)
         assert s.log_level == "WARNING"
         assert s.state.backend == "sqlalchemy"
+
+    def test_admission_section_in_toml(self, tmp_path):
+        f = _toml(
+            """
+            [dispatchio.admission]
+            max_active_jobs = 200
+            max_submit_jobs_per_tick = 50
+
+            [dispatchio.admission.pools.default]
+            max_active_jobs = 100
+
+            [dispatchio.admission.pools.bulk]
+            max_submit_jobs_per_tick = 25
+        """,
+            tmp_path / "dispatchio.toml",
+        )
+        s = load_config(f)
+        assert s.admission.max_active_jobs == 200
+        assert s.admission.max_submit_jobs_per_tick == 50
+        assert s.admission.pools["default"].max_active_jobs == 100
+        assert s.admission.pools["bulk"].max_submit_jobs_per_tick == 25
 
     def test_missing_keys_use_defaults(self, tmp_path):
         f = _toml(

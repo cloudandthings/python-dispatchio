@@ -3,7 +3,7 @@
 A collection of runnable examples, each in its own directory under
 [`examples/`](examples/). To run any example:
 
-```
+```bash
 python examples/<name>/run.py
 ```
 
@@ -904,9 +904,8 @@ connection_string = "sqlite:///dispatchio.db"
 backend = "filesystem"
 drop_dir = ".dispatchio/completions"
 
-[submission]
-concurrency = 4
-max_per_tick = 10
+[admission]
+max_submit_jobs_per_tick = 10
 ```
 
 ---

@@ -272,6 +272,46 @@ class RetryPolicy(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Admission policy
+# ---------------------------------------------------------------------------
+
+
+class PoolPolicy(BaseModel):
+    """Admission limits for a single pool."""
+
+    max_active_jobs: int | None = None
+    max_submit_jobs_per_tick: int | None = None
+
+    @model_validator(mode="after")
+    def _validate_positive_limits(self) -> PoolPolicy:
+        for field_name in ("max_active_jobs", "max_submit_jobs_per_tick"):
+            value = getattr(self, field_name)
+            if value is not None and value <= 0:
+                raise ValueError(f"{field_name} must be a positive integer when set")
+        return self
+
+
+class AdmissionPolicy(BaseModel):
+    """Global and per-pool admission limits."""
+
+    max_active_jobs: int | None = None
+    max_submit_jobs_per_tick: int | None = None
+    pools: dict[str, PoolPolicy] = Field(
+        default_factory=lambda: {"default": PoolPolicy()}
+    )
+
+    @model_validator(mode="after")
+    def _validate_positive_limits(self) -> AdmissionPolicy:
+        if "default" not in self.pools:
+            self.pools["default"] = PoolPolicy()
+        for field_name in ("max_active_jobs", "max_submit_jobs_per_tick"):
+            value = getattr(self, field_name)
+            if value is not None and value <= 0:
+                raise ValueError(f"{field_name} must be a positive integer when set")
+        return self
+
+
+# ---------------------------------------------------------------------------
 
 # Alert conditions
 # ---------------------------------------------------------------------------
@@ -414,6 +454,8 @@ class Job(BaseModel):
     dependency_threshold: int | None = None
     retry_policy: RetryPolicy = Field(default_factory=RetryPolicy)
     alerts: list[AlertCondition] = Field(default_factory=list)
+    pool: str = "default"
+    priority: int = 0
 
     @model_validator(mode="after")
     def _check_dependency_threshold(self) -> Job:
@@ -475,6 +517,7 @@ class Job(BaseModel):
 class JobAction(str, Enum):
     SUBMITTED = "submitted"
     WOULD_SUBMIT = "would_submit"  # dry-run: would have been submitted
+    WOULD_DEFER = "would_defer"  # dry-run: would have been deferred by admission
     SKIPPED_CONDITION = "skipped_condition"
     SKIPPED_DEPENDENCIES = "skipped_dependencies"
     SKIPPED_THRESHOLD_UNREACHABLE = (
@@ -486,6 +529,10 @@ class JobAction(str, Enum):
     MARKED_ERROR = "marked_error"  # retry exhausted → ERROR
     RETRYING = "retrying"
     SUBMISSION_FAILED = "submission_failed"
+    DEFERRED_ACTIVE_LIMIT = "deferred_active_limit"
+    DEFERRED_POOL_ACTIVE_LIMIT = "deferred_pool_active_limit"
+    DEFERRED_SUBMIT_LIMIT = "deferred_submit_limit"
+    DEFERRED_POOL_SUBMIT_LIMIT = "deferred_pool_submit_limit"
     ALERT_SENT = "alert_sent"
 
 
@@ -503,6 +550,7 @@ _SKIPPED_ACTIONS: frozenset[JobAction] = frozenset(
 class JobTickResult(BaseModel):
     job_name: str
     run_id: str
+    pool: str = "default"
     action: JobAction
     detail: str | None = None
 

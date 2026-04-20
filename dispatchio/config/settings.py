@@ -37,6 +37,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from dispatchio.models import AdmissionPolicy
+
 
 # ---------------------------------------------------------------------------
 # Sub-models (plain BaseModel — not BaseSettings themselves)
@@ -116,24 +118,6 @@ class DataStoreSettings(BaseModel):
     namespace: str = "default"
 
 
-class SubmissionSettings(BaseModel):
-    """
-    Controls how jobs are submitted each tick.
-
-    concurrency: max threads used to submit jobs in parallel within a tick.
-    max_per_tick: cap on the number of jobs submitted per tick (None = unlimited).
-                  Jobs beyond the limit are left in their current state and
-                  re-evaluated on the next tick.
-    timeout:      per-submission deadline in seconds passed to executor.submit().
-                  Not yet enforced by local executors; reserved for cloud
-                  executors (e.g. ECS) where the API call can be slow.
-    """
-
-    concurrency: int = 8
-    max_per_tick: int | None = None
-    timeout: float | None = None
-
-
 class DispatchioSettings(BaseSettings):
     """
     Top-level Dispatchio runtime configuration.
@@ -165,7 +149,7 @@ class DispatchioSettings(BaseSettings):
     log_level: str = "INFO"
     state: StateSettings = Field(default_factory=StateSettings)
     receiver: ReceiverSettings = Field(default_factory=ReceiverSettings)
-    submission: SubmissionSettings = Field(default_factory=SubmissionSettings)
+    admission: AdmissionPolicy = Field(default_factory=AdmissionPolicy)
     data_store: DataStoreSettings = Field(default_factory=DataStoreSettings)
     default_cadence: Any = "daily"
     # Accepts a frequency string ("daily", "monthly", etc.) or a full

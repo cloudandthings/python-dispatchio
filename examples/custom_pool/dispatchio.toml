@@ -10,4 +10,13 @@ backend = "filesystem"
 drop_dir = ".dispatchio/completions"
 
 [admission]
-max_submit_jobs_per_tick = 10
+max_submit_jobs_per_tick = 2
+
+[admission.pools.default]
+# uncapped pool
+
+[admission.pools.replay]
+max_submit_jobs_per_tick = 1
+
+[admission.pools.bulk]
+# uncapped pool

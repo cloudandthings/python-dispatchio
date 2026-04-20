@@ -44,6 +44,10 @@ EXAMPLES: tuple[ExampleCase, ...] = (
         "multi_orchestrator",
         REPO_ROOT / "examples" / "multi_orchestrator" / "run.py",
     ),
+    ExampleCase(
+        "custom_pool",
+        REPO_ROOT / "examples" / "custom_pool" / "run.py",
+    ),
 )
 
 
