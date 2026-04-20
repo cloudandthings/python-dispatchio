@@ -16,7 +16,7 @@ Jobs in this example:
     Useful when partial success is sufficient to proceed.
 
 The run.py script seeds the state store so that entity_a=DONE, entity_b=DONE,
-entity_c=ERROR (simulating a partial success scenario), then calls simulate():
+entity_c=ERROR (simulating a partial success scenario), then calls run_loop():
   - majority_collector: threshold=2 met (2/3 succeeded) → SUBMITTED
   - best_effort_collector: all entities are in a finished state → SUBMITTED
 

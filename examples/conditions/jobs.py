@@ -13,7 +13,7 @@ Jobs in this example:
   weekday_digest   — DayOfWeekCondition: Mon–Fri only
   after_hours_batch — AllOf: after 18:00 UTC AND Mon–Fri
 
-The simulate() call uses reference_time=2025-01-15 18:30 UTC (a Wednesday),
+The run_loop() call uses reference_time=2025-01-15 18:30 UTC (a Wednesday),
 so all conditions are satisfied and every job completes. Try changing the
 reference time to explore blocking:
   07:00 UTC       — morning_report and after_hours_batch stay blocked

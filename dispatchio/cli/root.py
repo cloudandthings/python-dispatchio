@@ -45,8 +45,19 @@ def tick(
     *,
     orchestrator: OrchestratorOption = None,
     reference_time: ReferenceTimeOption = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Plan only — show what would be submitted without touching state.",
+        ),
+    ] = False,
 ) -> None:
-    """Run one orchestrator tick and print results."""
+    """Run one orchestrator tick and print results.
+
+    With --dry-run, no completion events are drained, no lost-job detection
+    runs, and nothing is submitted. Use it to preview what a real tick would do.
+    """
     if not orchestrator:
         raise CliUserError(
             "Specify an orchestrator with --orchestrator or DISPATCHIO_ORCHESTRATOR"
@@ -61,7 +72,7 @@ def tick(
         if ref.tzinfo is None:
             ref = ref.replace(tzinfo=timezone.utc)
 
-    result: TickResult = orch.tick(reference_time=ref)
+    result: TickResult = orch.tick(reference_time=ref, dry_run=dry_run)
     output.print_tick_result(result)
 
 
@@ -190,6 +201,7 @@ def ticks(
         output.print_tick_summary(record, detail=detail)
 
 
+@app.command()
 @handle_cli_errors
 def cancel(
     *,

@@ -1,6 +1,11 @@
 """
-Local development simulator — drives an Orchestrator through multiple ticks
+Local development loop driver — drives an Orchestrator through multiple ticks
 in a loop with a real sleep between them.
+
+run_loop() runs the REAL orchestrator — jobs are actually submitted, completion
+events are really consumed, and state is written. This is NOT a dry-run or
+sandbox. Its only purpose is to avoid wiring up a real scheduler (cron,
+EventBridge) during local development and demos.
 
 This is NOT how Dispatchio runs in production. A production deployment calls
 exactly one tick per scheduler invocation — an EventBridge rule triggering
@@ -8,7 +13,7 @@ a Lambda, a cron job on EC2, a Kubernetes CronJob, etc.:
 
     orchestrator.tick()
 
-The simulator exists only for local development and demos, where you want
+The loop driver exists only for local development and demos, where you want
 to watch a full run play out without wiring up a real scheduler.
 """
 
@@ -29,7 +34,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-def simulate(
+def run_loop(
     orchestrator: Orchestrator,
     *,
     tick_interval: float = 2.0,
@@ -54,7 +59,7 @@ def simulate(
                         Defaults to stopping once every job is in a finished
                         state (DONE, ERROR, LOST, or SKIPPED).
         reference_time: Logical "now" used for every tick. Defaults to the
-                        moment simulate() is called.
+                        moment run_loop() is called.
     """
     if reference_time is None:
         reference_time = datetime.now(tz=timezone.utc)

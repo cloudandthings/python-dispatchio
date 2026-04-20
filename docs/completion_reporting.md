@@ -61,6 +61,7 @@ if __name__ == "__main__":
 ```
 
 Submit as a PythonJob:
+
 ```python
 Job(
     name="my_job",
@@ -198,6 +199,29 @@ backend = "none"
 ```
 
 Jobs can still call `get_reporter()` — it returns a no-op reporter that logs warnings.
+
+## Manual completion events
+
+If you need direct control over the completion event (e.g. from a shell script or a language
+other than Python), you can write the JSON drop file yourself:
+
+```python
+# At the end of your job script
+import json, os, pathlib, sys
+
+run_id = sys.argv[1]
+drop   = pathlib.Path(os.getenv("DISPATCHIO_RECEIVER__DROP_DIR", ".dispatchio/completions"))
+drop.mkdir(exist_ok=True)
+
+(drop / f"ingest__{run_id}__done.json").write_text(json.dumps({
+    "job_name": "ingest",
+    "run_id":   run_id,
+    "status":   "done",
+}))
+```
+
+The filename convention is `{job_name}__{run_id}__{status}.json`. This only works with the
+`filesystem` receiver backend. Prefer `get_reporter()` for all other backends.
 
 ## Migration Guide
 

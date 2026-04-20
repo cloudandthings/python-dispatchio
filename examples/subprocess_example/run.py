@@ -6,7 +6,7 @@ that succeeds and one that fails with retries.
 
     python examples/subprocess_example/run.py
 
-In production, replace simulate() with a single tick() call triggered by
+In production, replace run_loop() with a single tick() call triggered by
 your scheduler (EventBridge, cron, etc.):
 
     orchestrator.tick()
@@ -18,9 +18,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
-from dispatchio import simulate
+from dispatchio import run_loop
 from examples.subprocess_example.jobs import orchestrator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-simulate(orchestrator)
+run_loop(orchestrator)

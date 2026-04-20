@@ -17,6 +17,7 @@ error_console = Console(stderr=True, highlight=False)
 _STATUS_COLOURS: dict[str, str] = {
     "done": "green",
     "submitted": "cyan",
+    "would_submit": "cyan",
     "queued": "cyan",
     "running": "blue",
     "error": "red",
@@ -26,6 +27,7 @@ _STATUS_COLOURS: dict[str, str] = {
 
 _ACTION_ICONS: dict[str, str] = {
     "submitted": "✓",
+    "would_submit": "→",
     "retrying": "↺",
     "marked_lost": "✗",
     "marked_error": "✗",

@@ -44,7 +44,7 @@ A collection of runnable examples, each in its own directory under
 python examples/<name>/run.py
 ```
 
-> **Production note:** `run.py` uses `simulate()` to drive multiple ticks
+> **Production note:** `run.py` uses `run_loop()` to drive multiple ticks
 > locally. In production, replace it with a single `orchestrator.tick()`
 > call triggered by your scheduler (EventBridge, cron, Kubernetes CronJob, …).
 

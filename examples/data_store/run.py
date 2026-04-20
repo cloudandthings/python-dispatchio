@@ -7,7 +7,7 @@ Shows how the DataStore enables one job to pass structured data to another:
 
     python examples/data_store/run.py
 
-In production, replace simulate() with a single tick() call:
+In production, replace run_loop() with a single tick() call:
     orchestrator.tick()
 """
 
@@ -17,9 +17,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
-from dispatchio import simulate
+from dispatchio import run_loop
 from examples.data_store.jobs import orchestrator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-simulate(orchestrator)
+run_loop(orchestrator)

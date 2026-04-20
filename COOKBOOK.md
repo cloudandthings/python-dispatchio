@@ -7,7 +7,7 @@ A collection of runnable examples, each in its own directory under
 python examples/<name>/run.py
 ```
 
-> **Production note:** `run.py` uses `simulate()` to drive multiple ticks
+> **Production note:** `run.py` uses `run_loop()` to drive multiple ticks
 > locally. In production, replace it with a single `orchestrator.tick()`
 > call triggered by your scheduler (EventBridge, cron, Kubernetes CronJob, …).
 
@@ -252,7 +252,7 @@ Jobs in this example:
   weekday_digest   — DayOfWeekCondition: Mon–Fri only
   after_hours_batch — AllOf: after 18:00 UTC AND Mon–Fri
 
-The simulate() call uses reference_time=2025-01-15 18:30 UTC (a Wednesday),
+The run_loop() call uses reference_time=2025-01-15 18:30 UTC (a Wednesday),
 so all conditions are satisfied and every job completes. Try changing the
 reference time to explore blocking:
   07:00 UTC       — morning_report and after_hours_batch stay blocked
@@ -541,7 +541,7 @@ Jobs in this example:
     Useful when partial success is sufficient to proceed.
 
 The run.py script seeds the state store so that entity_a=DONE, entity_b=DONE,
-entity_c=ERROR (simulating a partial success scenario), then calls simulate():
+entity_c=ERROR (simulating a partial success scenario), then calls run_loop():
   - majority_collector: threshold=2 met (2/3 succeeded) → SUBMITTED
   - best_effort_collector: all entities are in a finished state → SUBMITTED
 
@@ -662,7 +662,7 @@ Seeds the state store to simulate a partial success scenario:
   entity_b = DONE   (succeeded)
   entity_c = ERROR  (failed)
 
-Then calls simulate() with reference_time=2025-01-15 09:00 UTC.
+Then calls run_loop() with reference_time=2025-01-15 09:00 UTC.
 
 Expected outcome:
   majority_collector   — SUBMITTED  (threshold=2 met: 2/3 succeeded)
@@ -679,7 +679,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
-from dispatchio import RunRecord, Status, simulate
+from dispatchio import RunRecord, Status, run_loop
 from examples.dependency_modes.jobs import orchestrator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -703,7 +703,7 @@ orchestrator.state.put(
     )
 )
 
-simulate(
+run_loop(
     orchestrator,
     reference_time=REF,
 )
@@ -1200,7 +1200,7 @@ from dispatchio import (
     Job,
     PythonJob,
     WEEKLY,
-    simulate,
+    run_loop,
     orchestrator_from_config,
     resolve_run_id,
 )
@@ -1251,21 +1251,21 @@ weekly = orchestrator_from_config(
 )
 
 # ---------------------------------------------------------------------------
-# Simulate both orchestrators
+# Run both orchestrators
 # ---------------------------------------------------------------------------
 
 print(f"\n{'─' * 60}")
 print(f"  Orchestrator: {daily.name}  (reference: {REFERENCE_TIME.date()})")
 print(f"{'─' * 60}\n")
-simulate(daily, reference_time=REFERENCE_TIME, tick_interval=0.5)
+run_loop(daily, reference_time=REFERENCE_TIME, tick_interval=0.5)
 
 print(f"\n{'─' * 60}")
 print(f"  Orchestrator: {weekly.name}  (reference: {REFERENCE_TIME.date()})")
 print(f"{'─' * 60}\n")
-# simulate() uses a daily run_id by default; supply the correct weekly stop condition
+# run_loop() uses a daily run_id by default; supply the correct weekly stop condition
 # so it exits once both weekly jobs are done.
 weekly_run_id = resolve_run_id(WEEKLY, REFERENCE_TIME)
-simulate(
+run_loop(
     weekly,
     reference_time=REFERENCE_TIME,
     tick_interval=0.5,
