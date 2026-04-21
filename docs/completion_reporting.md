@@ -118,7 +118,7 @@ receiver_cfg = ReceiverSettings(
 reporter = build_reporter(receiver_cfg)
 
 if reporter:
-    reporter.report("my_job", "20250115", Status.DONE)
+    reporter.report("my_job", "D20250115", Status.DONE)
 ```
 
 ## CompletionReporter Interface

@@ -3,16 +3,16 @@ Orchestrator — the tick engine.
 
 The Orchestrator is stateless between runs. Each tick() call has five phases:
 
-  1. Drain completion events from the receiver and update state.
+  1. Drain status events from the receiver and update state.
   2. Detect lost jobs (via poke or timeout) and mark them LOST.
   3. Evaluate every Job — pure planning, no side effects:
-       a. Skip if already active (SUBMITTED/RUNNING) or finished (DONE/ERROR/LOST/SKIPPED).
-       b. Skip if time condition is not met.
-       c. Skip if any dependency is not satisfied.
-       d. If ERROR/LOST, apply retry logic.
-       e. Otherwise, return a pending-submission intent.
-    4. Run admission control (active and per-tick limits, global and per-pool).
-    5. Execute admitted submissions concurrently via a thread pool.
+    a. Skip if already active (SUBMITTED/RUNNING) or finished (DONE/ERROR/LOST/SKIPPED).
+    b. Skip if time condition is not met.
+    c. Skip if any dependency is not satisfied.
+    d. If ERROR/LOST, apply retry logic.
+    e. Otherwise, return a pending-submission intent.
+  4. Run admission control (active and per-tick limits, global and per-pool).
+  5. Execute admitted submissions concurrently via a thread pool.
 
 Separating evaluation (phase 3) from execution (phase 5) means the
 planning phase reads a consistent state snapshot, and admission control
@@ -24,11 +24,12 @@ a local cron job, or a simple while loop).
 
 from __future__ import annotations
 
+import calendar
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
@@ -38,7 +39,7 @@ if TYPE_CHECKING:
 
 from dispatchio.admission import AdmissionCandidate, build_admission_plan
 from dispatchio.alerts.base import AlertEvent, AlertHandler, LogAlertHandler
-from dispatchio.cadence import DAILY, Cadence
+from dispatchio.cadence import DAILY, Cadence, DateCadence
 from dispatchio.conditions import TimeOfDayCondition
 from dispatchio.executor.base import Executor, Pokeable
 from dispatchio.models import (
@@ -46,6 +47,7 @@ from dispatchio.models import (
     Dependency,
     DependencyMode,
     AdmissionPolicy,
+    EventDependency,
     JobAction,
     Job,
     JobTickResult,
@@ -58,9 +60,15 @@ from dispatchio.models import (
     DeadLetterRecord,
     DeadLetterSourceBackend,
     DeadLetterStatus,
+    OrchestratorRunMode,
+    OrchestratorRunRecord,
+    OrchestratorRunStatus,
 )
-from dispatchio.receiver.base import CompletionEvent, CompletionReceiver
-from dispatchio.run_id import resolve_run_id
+from dispatchio.receiver.base import StatusEvent, StatusReceiver
+from dispatchio.run_key_resolution import (
+    resolve_run_key_from_orchestrator,
+    resolve_orchestrator_run_key,
+)
 from dispatchio.state.base import StateStore
 from dispatchio.tick_log import TickLogRecord, TickLogStore
 
@@ -81,7 +89,7 @@ class _PendingSubmission:
     """Carries submission intent out of the planning phase."""
 
     job: Job
-    logical_run_id: str
+    run_key: str
     attempt: int
     trigger_type: TriggerType = TriggerType.SCHEDULED
     trigger_reason: str | None = None
@@ -96,13 +104,17 @@ class Orchestrator:
         jobs:                   List of Job objects to evaluate each tick.
         state:                  StateStore implementation (memory, filesystem, DynamoDB …).
         executors:              Map of executor-type → Executor.
-        receiver:               CompletionReceiver polled at the start of each tick.
+        receiver:               StatusReceiver polled at the start of each tick.
         alert_handler:          AlertHandler for ERROR/LOST/NOT_STARTED_BY conditions.
         submit_workers:         Max threads used to submit jobs in parallel within a tick.
         admission_policy:       Admission limits for active jobs and per-tick submissions.
         submit_timeout:         Per-submission deadline (seconds) forwarded to
                                 executor.submit(). Not yet enforced by local executors;
                                 reserved for cloud executors where the API call can block.
+        orchestrator_cadence:   Cadence defining the scheduling unit for this orchestrator
+                                (distinct from job cadences). Defaults to DAILY.
+        default_cadence:        Fallback cadence for jobs that don't specify one.
+                                If not provided, defaults to orchestrator_cadence.
         strict_dependencies:    If True, unresolved dependencies raise ValueError
                     If False, unresolved deps warn so cross-orchestrator dependencies stay possible.
         allow_runtime_mutation: If True, jobs can be added/removed after tick() has run.
@@ -114,12 +126,13 @@ class Orchestrator:
         jobs: list[Job],
         state: StateStore,
         executors: dict[str, Executor],
-        receiver: CompletionReceiver | None = None,
+        receiver: StatusReceiver | None = None,
         alert_handler: AlertHandler | None = None,
         submit_workers: int = 8,
         admission_policy: AdmissionPolicy | None = None,
         submit_timeout: float | None = None,
-        default_cadence: Cadence = DAILY,
+        orchestrator_cadence: Cadence = DAILY,
+        default_cadence: Cadence | None = None,
         strict_dependencies: bool = True,
         allow_runtime_mutation: bool = False,
         name: str = "default",
@@ -136,6 +149,11 @@ class Orchestrator:
         self.submit_workers = submit_workers
         self.admission_policy = admission_policy or AdmissionPolicy()
         self.submit_timeout = submit_timeout
+        # orchestrator_cadence defines the scheduling unit for this orchestrator.
+        self.orchestrator_cadence = orchestrator_cadence
+        # default_cadence is the fallback for jobs without an explicit cadence.
+        if default_cadence is None:
+            default_cadence = orchestrator_cadence
         self.default_cadence = default_cadence
         self.strict_dependencies = strict_dependencies
         self.allow_runtime_mutation = allow_runtime_mutation
@@ -206,7 +224,7 @@ class Orchestrator:
         unresolved: list[tuple[str, str]] = []
         for job in self.jobs:
             for dep in job.depends_on:
-                if dep.job_name not in self._job_index:
+                if dep.kind == "job" and dep.job_name not in self._job_index:
                     unresolved.append((job.name, dep.job_name))
         return unresolved
 
@@ -223,14 +241,14 @@ class Orchestrator:
         self,
         *,
         job_name: str,
-        run_id: str,
+        run_key: str,
         action: JobAction,
         detail: str | None = None,
         pool: str,
     ) -> JobTickResult:
         return JobTickResult(
             job_name=job_name,
-            run_id=run_id,
+            run_key=run_key,
             pool=pool,
             action=action,
             detail=detail,
@@ -267,6 +285,203 @@ class Orchestrator:
     # Public API
     # ------------------------------------------------------------------
 
+    def plan_backfill(self, start: datetime, end: datetime) -> list[str]:
+        """Return orchestrator run keys for an inclusive backfill range."""
+        if end < start:
+            raise ValueError("end must be >= start")
+
+        if not isinstance(self.orchestrator_cadence, DateCadence):
+            raise ValueError(
+                "Backfill planning requires a date-based orchestrator cadence"
+            )
+
+        keys: list[str] = []
+        for ref in self._iter_backfill_reference_times(start, end):
+            keys.append(resolve_orchestrator_run_key(self.orchestrator_cadence, ref))
+        return sorted(set(keys))
+
+    def enqueue_backfill(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        priority: int = 0,
+        submitted_by: str | None = None,
+        reason: str | None = None,
+        force: bool = False,
+    ) -> list[OrchestratorRunRecord]:
+        """Create pending backfill runs for an inclusive range."""
+        run_keys = self.plan_backfill(start=start, end=end)
+        return self._enqueue_run_keys(
+            run_keys=run_keys,
+            mode=OrchestratorRunMode.BACKFILL,
+            priority=priority,
+            submitted_by=submitted_by,
+            reason=reason,
+            force=force,
+        )
+
+    def enqueue_replay(
+        self,
+        *,
+        run_keys: list[str],
+        priority: int = 0,
+        submitted_by: str | None = None,
+        reason: str | None = None,
+        force: bool = False,
+    ) -> list[OrchestratorRunRecord]:
+        """Create pending replay runs for explicit orchestrator run keys."""
+        if not run_keys:
+            raise ValueError("run_keys cannot be empty")
+        return self._enqueue_run_keys(
+            run_keys=run_keys,
+            mode=OrchestratorRunMode.REPLAY,
+            priority=priority,
+            submitted_by=submitted_by,
+            reason=reason,
+            force=force,
+        )
+
+    def list_runs(
+        self,
+        *,
+        status: OrchestratorRunStatus | None = None,
+        mode: OrchestratorRunMode | None = None,
+    ) -> list[OrchestratorRunRecord]:
+        """List orchestrator runs for this orchestrator."""
+        return self.state.list_orchestrator_runs(
+            orchestrator_name=self.name,
+            status=status,
+            mode=mode,
+        )
+
+    def show_run(self, orchestrator_run_id: UUID) -> OrchestratorRunRecord:
+        """Get a single run by ID, scoped to this orchestrator."""
+        record = self.state.get_orchestrator_run(orchestrator_run_id)
+        if record is None or record.orchestrator_name != self.name:
+            raise ValueError(
+                f"Run {orchestrator_run_id} not found for orchestrator {self.name!r}"
+            )
+        return record
+
+    def resume_run(
+        self, orchestrator_run_id: UUID, *, reason: str | None = None
+    ) -> OrchestratorRunRecord:
+        """Resume a blocked/pending/failed run by moving it back to ACTIVE."""
+        record = self.show_run(orchestrator_run_id)
+        if record.status == OrchestratorRunStatus.CANCELLED:
+            raise ValueError("Cancelled runs cannot be resumed")
+        updated = record.model_copy(
+            update={
+                "status": OrchestratorRunStatus.ACTIVE,
+                "activated_at": datetime.now(tz=timezone.utc),
+                "reason": reason or record.reason,
+                "closed_at": None,
+            }
+        )
+        self.state.update_orchestrator_run(updated)
+        return updated
+
+    def cancel_run(
+        self, orchestrator_run_id: UUID, *, reason: str | None = None
+    ) -> OrchestratorRunRecord:
+        """Cancel a run and mark it terminal."""
+        record = self.show_run(orchestrator_run_id)
+        updated = record.model_copy(
+            update={
+                "status": OrchestratorRunStatus.CANCELLED,
+                "closed_at": datetime.now(tz=timezone.utc),
+                "reason": reason or record.reason,
+            }
+        )
+        self.state.update_orchestrator_run(updated)
+        return updated
+
+    def _enqueue_run_keys(
+        self,
+        *,
+        run_keys: list[str],
+        mode: OrchestratorRunMode,
+        priority: int,
+        submitted_by: str | None,
+        reason: str | None,
+        force: bool,
+    ) -> list[OrchestratorRunRecord]:
+        created_or_updated: list[OrchestratorRunRecord] = []
+        now = datetime.now(tz=timezone.utc)
+
+        for run_key in run_keys:
+            existing = self.state.get_orchestrator_run_by_key(self.name, run_key)
+            if existing is not None:
+                if not force:
+                    raise ValueError(
+                        f"Run already exists for ({self.name}, {run_key}). Use force=True to requeue."
+                    )
+                updated = existing.model_copy(
+                    update={
+                        "status": OrchestratorRunStatus.PENDING,
+                        "mode": mode,
+                        "priority": priority,
+                        "submitted_by": submitted_by,
+                        "reason": reason or existing.reason,
+                        "force": True,
+                        "closed_at": None,
+                    }
+                )
+                self.state.update_orchestrator_run(updated)
+                created_or_updated.append(updated)
+                continue
+
+            record = OrchestratorRunRecord(
+                orchestrator_name=self.name,
+                run_key=run_key,
+                status=OrchestratorRunStatus.PENDING,
+                mode=mode,
+                priority=priority,
+                submitted_by=submitted_by,
+                reason=reason,
+                force=force,
+                opened_at=now,
+            )
+            self.state.append_orchestrator_run(record)
+            created_or_updated.append(record)
+
+        return created_or_updated
+
+    def _iter_backfill_reference_times(
+        self, start: datetime, end: datetime
+    ) -> list[datetime]:
+        """Iterate inclusive reference times by orchestrator cadence frequency."""
+        from dispatchio.cadence import DateCadence, Frequency
+
+        cadence = self.orchestrator_cadence
+        if not isinstance(cadence, DateCadence):
+            raise ValueError(
+                "Backfill planning requires a date-based orchestrator cadence"
+            )
+
+        current = start
+        points: list[datetime] = []
+        while current <= end:
+            points.append(current)
+            if cadence.frequency == Frequency.HOURLY:
+                current = current + timedelta(hours=1)
+            elif cadence.frequency == Frequency.DAILY:
+                current = current + timedelta(days=1)
+            elif cadence.frequency == Frequency.WEEKLY:
+                current = current + timedelta(weeks=1)
+            elif cadence.frequency == Frequency.MONTHLY:
+                month = current.month + 1
+                year = current.year + (month - 1) // 12
+                month = ((month - 1) % 12) + 1
+                max_day = calendar.monthrange(year, month)[1]
+                current = current.replace(
+                    year=year, month=month, day=min(current.day, max_day)
+                )
+            else:  # pragma: no cover
+                raise ValueError(f"Unsupported orchestrator cadence: {cadence!r}")
+        return points
+
     def tick(
         self,
         reference_time: datetime | None = None,
@@ -282,7 +497,7 @@ class Orchestrator:
         a specific point in time (useful for testing and backfill).
 
         dry_run: when True, only the planning phase (phase 3) runs — no
-        completion events are drained, no lost-job detection, and nothing
+        status events are drained, no lost-job detection, and nothing
         is submitted. Returns a TickResult with WOULD_SUBMIT actions so
         you can see what would have been submitted without touching state.
         """
@@ -295,16 +510,25 @@ class Orchestrator:
                 f"Unknown pool {pool!r}. Declared pools: {sorted(self.admission_policy.pools.keys())}"
             )
 
+        orchestrator_run_key = self._resolve_tick_orchestrator_run_key(
+            reference_time=reference_time,
+            dry_run=dry_run,
+        )
+
         tick_start = time.monotonic()
         result = TickResult(reference_time=reference_time)
 
-        # Phase 1 — apply inbound completion events (skipped in dry-run)
+        # Phase 1 — apply inbound status events (skipped in dry-run)
         if not dry_run:
             self._drain_receiver(reference_time)
 
         # Phase 2 — detect lost jobs (skipped in dry-run: would write state)
         if not dry_run:
-            result.results.extend(self._check_lost_jobs(reference_time))
+            result.results.extend(
+                self._check_lost_jobs(
+                    reference_time, orchestrator_run_key=orchestrator_run_key
+                )
+            )
 
         # Phase 3 — evaluate each job (planning only; no state writes)
         # outcomes preserves job-list order so results are reported in order.
@@ -313,10 +537,18 @@ class Orchestrator:
             if pool is not None and job.pool != pool:
                 continue
             effective_cadence = job.cadence or self.default_cadence
-            logical_run_id = resolve_run_id(effective_cadence, reference_time)
+            run_key = self._resolve_run_key_for_tick(
+                effective_cadence=effective_cadence,
+                reference_time=reference_time,
+                orchestrator_run_key=orchestrator_run_key,
+            )
             outcomes.append(
                 self._evaluate_job(
-                    job, logical_run_id, effective_cadence, reference_time
+                    job,
+                    run_key,
+                    effective_cadence,
+                    reference_time,
+                    orchestrator_run_key=orchestrator_run_key,
                 )
             )
 
@@ -354,7 +586,7 @@ class Orchestrator:
                 assert isinstance(ps, _PendingSubmission)
                 outcomes[i] = self._result(
                     job_name=ps.job.name,
-                    run_id=ps.logical_run_id,
+                    run_key=ps.run_key,
                     pool=ps.job.pool,
                     action=JobAction.WOULD_SUBMIT,
                 )
@@ -363,7 +595,7 @@ class Orchestrator:
                 assert isinstance(ps, _PendingSubmission)
                 outcomes[idx] = self._result(
                     job_name=ps.job.name,
-                    run_id=ps.logical_run_id,
+                    run_key=ps.run_key,
                     pool=ps.job.pool,
                     action=JobAction.WOULD_DEFER,
                     detail=f"{deferred.action.value} {deferred.detail}",
@@ -384,7 +616,7 @@ class Orchestrator:
                 assert isinstance(ps, _PendingSubmission)
                 outcomes[idx] = self._result(
                     job_name=ps.job.name,
-                    run_id=ps.logical_run_id,
+                    run_key=ps.run_key,
                     pool=ps.job.pool,
                     action=deferred.action,
                     detail=deferred.detail,
@@ -408,7 +640,7 @@ class Orchestrator:
                         actions=[
                             {
                                 "job_name": r.job_name,
-                                "run_id": r.run_id,
+                                "run_key": r.run_key,
                                 "action": r.action.value,
                                 "detail": r.detail,
                             }
@@ -421,36 +653,119 @@ class Orchestrator:
 
         return result
 
+    def _resolve_tick_orchestrator_run_key(
+        self,
+        *,
+        reference_time: datetime,
+        dry_run: bool,
+    ) -> str:
+        """
+        Select the orchestrator run key for this tick.
+
+        Selection order:
+          1. Existing ACTIVE run
+          2. Highest-priority PENDING run (promoted to ACTIVE unless dry_run)
+          3. Derived scheduled run key from orchestrator_cadence
+             (persisted as ACTIVE scheduled run unless dry_run)
+        """
+        active_runs = self.state.list_orchestrator_runs(
+            orchestrator_name=self.name,
+            status=OrchestratorRunStatus.ACTIVE,
+        )
+        if active_runs:
+            selected = sorted(
+                active_runs,
+                key=lambda r: (-r.priority, r.activated_at or r.opened_at),
+            )[0]
+            return selected.run_key
+
+        pending_runs = self.state.list_orchestrator_runs(
+            orchestrator_name=self.name,
+            status=OrchestratorRunStatus.PENDING,
+        )
+        if pending_runs:
+            selected = sorted(
+                pending_runs,
+                key=lambda r: (-r.priority, r.opened_at),
+            )[0]
+            if not dry_run:
+                activated = selected.model_copy(
+                    update={
+                        "status": OrchestratorRunStatus.ACTIVE,
+                        "activated_at": reference_time,
+                    }
+                )
+                self.state.update_orchestrator_run(activated)
+            return selected.run_key
+
+        scheduled_run_key = resolve_orchestrator_run_key(
+            orchestrator_cadence=self.orchestrator_cadence,
+            reference_time=reference_time,
+        )
+
+        existing = self.state.get_orchestrator_run_by_key(self.name, scheduled_run_key)
+        if existing is not None:
+            if existing.status == OrchestratorRunStatus.PENDING and not dry_run:
+                activated = existing.model_copy(
+                    update={
+                        "status": OrchestratorRunStatus.ACTIVE,
+                        "activated_at": reference_time,
+                    }
+                )
+                self.state.update_orchestrator_run(activated)
+            return existing.run_key
+
+        if not dry_run:
+            self.state.append_orchestrator_run(
+                OrchestratorRunRecord(
+                    orchestrator_name=self.name,
+                    run_key=scheduled_run_key,
+                    status=OrchestratorRunStatus.ACTIVE,
+                    mode=OrchestratorRunMode.SCHEDULED,
+                    opened_at=reference_time,
+                    activated_at=reference_time,
+                )
+            )
+        return scheduled_run_key
+
+    def _resolve_run_key_for_tick(
+        self,
+        *,
+        effective_cadence: Cadence,
+        reference_time: datetime,
+        orchestrator_run_key: str,
+    ) -> str:
+        """Resolve a run key from the selected orchestrator run key."""
+        return resolve_run_key_from_orchestrator(
+            orchestrator_run_key=orchestrator_run_key,
+            job_cadence=effective_cadence,
+        )
+
     # ------------------------------------------------------------------
-    # Phase 1 — drain completion events
+    # Phase 1 — drain status events
     # ------------------------------------------------------------------
 
     def _drain_receiver(self, reference_time: datetime) -> None:
         if self.receiver is None:
             return
-        events: list[CompletionEvent] = []
+        events: list[StatusEvent] = []
         try:
             events = self.receiver.drain()
         except Exception as exc:
             logger.error("Error draining receiver: %s", exc)
             return
+        logger.info("Drained %d status events from receiver", len(events))
 
         for event in events:
-            self._apply_completion_event(event, reference_time)
+            self._apply_status_event(event, reference_time)
 
-    def _apply_completion_event(
-        self, event: CompletionEvent, reference_time: datetime
-    ) -> None:
+    def _apply_status_event(self, event: StatusEvent, reference_time: datetime) -> None:
         """
-        Apply a completion event, routing through strict or legacy correlation.
+        Apply a status event, routing through strict or legacy correlation.
 
-        Strict mode (Phase 2): when dispatchio_attempt_id is present, validates
-        full identity (job_name, logical_run_id, attempt) before applying update.
+        When correlation_id is present, validates
+        full identity (job_name, run_key, attempt) before applying update.
         Mismatches are dead-lettered.
-
-        Legacy mode: when dispatchio_attempt_id is absent, falls back to latest
-        attempt by (job_name, logical_run_id). Used for external events and
-        backward compatibility with pre-Phase-2 reporters.
         """
         now = event.occurred_at or reference_time
 
@@ -458,184 +773,102 @@ class Orchestrator:
         if event.status == Status.RUNNING:
             return
 
-        # Require logical_run_id
+        # Require run_key
         try:
-            logical_run_id = event.get_logical_run_id()
+            correlation_id = event.correlation_id
         except ValueError as exc:
-            self._dead_letter_completion(
+            self._dead_letter_status(
                 event,
                 now,
                 DeadLetterReasonCode.VALIDATION_FAILURE,
-                f"Missing logical_run_id: {exc}",
+                f"Missing correlation_id: {exc}",
             )
             return
 
-        attempt_id = event.dispatchio_attempt_id
-
-        if attempt_id is not None:
-            # ---- Phase 2 strict path ----------------------------------------
-            attempt = event.attempt
-
-            # Look up attempt by dispatchio_attempt_id (authoritative)
-            existing = self.state.get_attempt(attempt_id)
-
-            if existing is None:
-                self._dead_letter_completion(
-                    event,
-                    now,
-                    DeadLetterReasonCode.CORRELATION_FAILURE,
-                    f"Unknown dispatchio_attempt_id {attempt_id}",
-                )
-                return
-
-            # Validate identity match (job_name, logical_run_id, attempt)
-            if not (
-                existing.job_name == event.job_name
-                and existing.logical_run_id == logical_run_id
-                and (attempt is None or existing.attempt == attempt)
-            ):
-                self._dead_letter_completion(
-                    event,
-                    now,
-                    DeadLetterReasonCode.CORRELATION_FAILURE,
-                    f"Identity mismatch: event=({event.job_name}, {logical_run_id}, {attempt}), "
-                    f"stored=({existing.job_name}, {existing.logical_run_id}, {existing.attempt})",
-                )
-                return
-
-            # Check for duplicate terminal status
-            if existing.is_finished():
-                if existing.status == event.status:
-                    logger.debug(
-                        "Idempotent completion event: %s/%s/%d already %s",
-                        event.job_name,
-                        logical_run_id,
-                        existing.attempt,
-                        existing.status.value,
-                    )
-                    return
-                self._dead_letter_completion(
-                    event,
-                    now,
-                    DeadLetterReasonCode.CONFLICT_FAILURE,
-                    f"Conflicting terminal status: stored={existing.status.value}, "
-                    f"event={event.status.value}",
-                )
-                return
-
-            # All validations passed — apply update
-            record = existing.model_copy(
-                update={
-                    "status": event.status,
-                    "completed_at": now,
-                    "reason": event.reason or existing.reason,
-                    "completion_event_trace": event.trace or None,
-                }
+        if correlation_id is None:
+            self._dead_letter_status(
+                event,
+                now,
+                DeadLetterReasonCode.VALIDATION_FAILURE,
+                "Missing correlation_id",
             )
-            self.state.update_attempt(record)
+            return
 
-            logger.info(
-                "Applied completion event (strict): %s/%s/%d → %s (attempt_id=%s)",
-                event.job_name,
-                logical_run_id,
-                existing.attempt,
-                event.status.value,
-                attempt_id,
+        # Validate correlation_id matches an existing attempt record
+        existing = self.state.get_attempt(correlation_id)
+        if existing is None:
+            self._dead_letter_status(
+                event,
+                now,
+                DeadLetterReasonCode.CORRELATION_FAILURE,
+                f"Unknown correlation_id {correlation_id}",
             )
+            return
 
-        else:
-            # ---- Legacy / external-event path --------------------------------
-            logger.debug(
-                "Completion event without dispatchio_attempt_id for %s/%s — using legacy path",
-                event.job_name,
-                logical_run_id,
-            )
-            existing = self.state.get_latest_attempt(event.job_name, logical_run_id)
+        # Validations passed — apply update
+        record = existing.model_copy(
+            update={
+                "status": event.status,
+                "completed_at": now,
+                "reason": event.reason or existing.reason,
+                "status_event_trace": event.trace or None,
+            }
+        )
+        self.state.update_attempt(record)
 
-            if existing is None:
-                # Auto-create a record for this external/legacy event
-                record = AttemptRecord(
-                    job_name=event.job_name,
-                    logical_run_id=logical_run_id,
-                    attempt=0,
-                    dispatchio_attempt_id=uuid4(),
-                    status=event.status,
-                    completed_at=now,
-                    reason=event.reason,
-                    trace={},
-                    completion_event_trace=event.trace or None,
-                )
-                self.state.append_attempt(record)
-            elif existing.is_finished():
-                logger.debug(
-                    "Ignoring completion for already-finished %s/%s (%s)",
-                    event.job_name,
-                    logical_run_id,
-                    existing.status.value,
-                )
-                return
-            else:
-                record = existing.model_copy(
-                    update={
-                        "status": event.status,
-                        "completed_at": now,
-                        "reason": event.reason or existing.reason,
-                        "completion_event_trace": event.trace or None,
-                    }
-                )
-                self.state.update_attempt(record)
+        logger.info(
+            "Applied status event (strict): %s/%s/%d → %s (correlation_id=%s)",
+            existing.job_name,
+            existing.run_key,
+            existing.attempt,
+            event.status.value,
+            correlation_id,
+        )
 
-            logger.info(
-                "Applied completion event (legacy): %s/%s → %s",
-                event.job_name,
-                logical_run_id,
-                event.status.value,
-            )
-
-        job = self._job_index.get(event.job_name)
+        job = self._job_index.get(existing.job_name)
         if job:
             self._check_terminal_alerts(job, record)
 
-    def _dead_letter_completion(
+    def _dead_letter_status(
         self,
-        event: CompletionEvent,
+        event: StatusEvent,
         now: datetime,
         reason_code: DeadLetterReasonCode,
         reason_detail: str,
     ) -> None:
         """
-        Route a completion event to dead-letter.
+        Route a status event to dead-letter.
 
         Stores dead-letter record with full audit trail, logs warning,
         and triggers alert for operator visibility.
         """
-        job = self._job_index.get(event.job_name)
-        source_backend = (
-            _EXECUTOR_TYPE_TO_SOURCE_BACKEND.get(
-                job.executor.type, DeadLetterSourceBackend.OTHER
-            )
-            if job is not None
-            else DeadLetterSourceBackend.OTHER
-        )
+
+        # TODO: Maybe we want to also send in the JOB_NAME for context.
+        # job = self._job_index.get(event.job_name)
+        # source_backend = (
+        #     _EXECUTOR_TYPE_TO_SOURCE_BACKEND.get(
+        #        job.executor.type, DeadLetterSourceBackend.OTHER
+        #     )
+        #     if job is not None
+        #     else DeadLetterSourceBackend.OTHER
+        # )
 
         dead_letter = DeadLetterRecord(
             dead_letter_id=uuid4(),
             occurred_at=now,
-            source_backend=source_backend,
+            source_backend=DeadLetterSourceBackend.OTHER,
             reason_code=reason_code,
             reason_detail=reason_detail,
             status=DeadLetterStatus.OPEN,
-            job_name=event.job_name,
-            logical_run_id=event.logical_run_id,
-            attempt=event.attempt,
-            dispatchio_attempt_id=event.dispatchio_attempt_id,
+            correlation_id=event.correlation_id,
             raw_payload=event.model_dump(mode="json"),
         )
         self.state.append_dead_letter(dead_letter)
 
         logger.warning(
-            "Dead-lettered completion event: %s reason=%s detail=%s (id=%s)",
-            f"{event.job_name}/{event.logical_run_id}/{event.attempt}",
+            "Dead-lettered status event: %s reason=%s detail=%s (id=%s)",
+            # f"{event.correlation_id}/{event.run_key}/{event.attempt}",
+            f"{event.correlation_id}",
             reason_code.value,
             reason_detail,
             dead_letter.dead_letter_id,
@@ -645,12 +878,18 @@ class Orchestrator:
     # Phase 2 — detect lost jobs
     # ------------------------------------------------------------------
 
-    def _check_lost_jobs(self, reference_time: datetime) -> list[JobTickResult]:
+    def _check_lost_jobs(
+        self, reference_time: datetime, *, orchestrator_run_key: str
+    ) -> list[JobTickResult]:
         results = []
         for job in self.jobs:
             effective_cadence = job.cadence or self.default_cadence
-            logical_run_id = resolve_run_id(effective_cadence, reference_time)
-            record = self.state.get_latest_attempt(job.name, logical_run_id)
+            run_key = self._resolve_run_key_for_tick(
+                effective_cadence=effective_cadence,
+                reference_time=reference_time,
+                orchestrator_run_key=orchestrator_run_key,
+            )
+            record = self.state.get_latest_attempt(job.name, run_key)
             if record is None or not record.is_active():
                 continue
 
@@ -675,17 +914,15 @@ class Orchestrator:
                     logger.warning(
                         "Job %s/%s %s via poke.",
                         job.name,
-                        logical_run_id,
+                        run_key,
                         poke_status.value,
                     )
                     if poke_status == Status.ERROR:
-                        self._emit_alert(
-                            AlertOn.ERROR, job, logical_run_id, detail, updated
-                        )
+                        self._emit_alert(AlertOn.ERROR, job, run_key, detail, updated)
                         results.append(
                             self._result(
                                 job_name=job.name,
-                                run_id=logical_run_id,
+                                run_key=run_key,
                                 pool=job.pool,
                                 action=JobAction.MARKED_ERROR,
                                 detail=detail,
@@ -703,16 +940,18 @@ class Orchestrator:
     def _evaluate_job(
         self,
         job: Job,
-        logical_run_id: str,
+        run_key: str,
         cadence: Cadence,
         reference_time: datetime,
+        *,
+        orchestrator_run_key: str,
     ) -> JobTickResult | _PendingSubmission | None:
-        existing = self.state.get_latest_attempt(job.name, logical_run_id)
+        existing = self.state.get_latest_attempt(job.name, run_key)
 
         if existing and existing.is_active():
             return self._result(
                 job_name=job.name,
-                run_id=logical_run_id,
+                run_key=run_key,
                 pool=job.pool,
                 action=JobAction.SKIPPED_ALREADY_ACTIVE,
             )
@@ -720,14 +959,19 @@ class Orchestrator:
         if existing and existing.status == Status.DONE:
             return self._result(
                 job_name=job.name,
-                run_id=logical_run_id,
+                run_key=run_key,
                 pool=job.pool,
                 action=JobAction.SKIPPED_ALREADY_DONE,
             )
 
         if existing and existing.status in (Status.ERROR, Status.LOST):
             return self._plan_retry(
-                job, existing, logical_run_id, cadence, reference_time
+                job,
+                existing,
+                run_key,
+                cadence,
+                reference_time,
+                orchestrator_run_key=orchestrator_run_key,
             )
 
         # Condition gate
@@ -735,25 +979,30 @@ class Orchestrator:
             if not job.condition.is_met(reference_time, cadence):
                 return self._result(
                     job_name=job.name,
-                    run_id=logical_run_id,
+                    run_key=run_key,
                     pool=job.pool,
                     action=JobAction.SKIPPED_CONDITION,
                     detail=f"condition not met: {type(job.condition).__name__}",
                 )
 
         # Dependency check
-        dep_result = self._check_dependencies(job, logical_run_id, reference_time)
+        dep_result = self._check_dependencies(
+            job,
+            run_key,
+            reference_time,
+            orchestrator_run_key=orchestrator_run_key,
+        )
         if dep_result is not None:
             return dep_result
 
         # NOT_STARTED_BY alert check (before submitting)
         self._check_not_started_by_alert(
-            job, logical_run_id, reference_time, existing, cadence
+            job, run_key, reference_time, existing, cadence
         )
 
         return _PendingSubmission(
             job=job,
-            logical_run_id=logical_run_id,
+            run_key=run_key,
             attempt=0,
             trigger_type=TriggerType.SCHEDULED,
         )
@@ -766,9 +1015,11 @@ class Orchestrator:
         self,
         job: Job,
         record: AttemptRecord,
-        logical_run_id: str,
+        run_key: str,
         cadence: Cadence,
         reference_time: datetime,
+        *,
+        orchestrator_run_key: str,
     ) -> JobTickResult | _PendingSubmission:
         policy = job.retry_policy
         next_attempt = record.attempt + 1
@@ -776,12 +1027,12 @@ class Orchestrator:
         if next_attempt >= policy.max_attempts:
             detail = (
                 f"max_attempts={policy.max_attempts} reached. "
-                f"Last error: {record.reason}"
+                f"Last reason: {record.reason}"
             )
-            self._emit_alert(AlertOn.ERROR, job, logical_run_id, detail, record)
+            self._emit_alert(AlertOn.ERROR, job, run_key, detail, record)
             return self._result(
                 job_name=job.name,
-                run_id=logical_run_id,
+                run_key=run_key,
                 pool=job.pool,
                 action=JobAction.MARKED_ERROR,
                 detail=detail,
@@ -790,10 +1041,10 @@ class Orchestrator:
         if policy.retry_on and record.reason:
             if not any(pat in record.reason for pat in policy.retry_on):
                 detail = f"reason does not match retry_on patterns: {policy.retry_on}"
-                self._emit_alert(AlertOn.ERROR, job, logical_run_id, detail, record)
+                self._emit_alert(AlertOn.ERROR, job, run_key, detail, record)
                 return self._result(
                     job_name=job.name,
-                    run_id=logical_run_id,
+                    run_key=run_key,
                     pool=job.pool,
                     action=JobAction.MARKED_ERROR,
                     detail=detail,
@@ -802,19 +1053,24 @@ class Orchestrator:
         if job.condition and not job.condition.is_met(reference_time, cadence):
             return self._result(
                 job_name=job.name,
-                run_id=logical_run_id,
+                run_key=run_key,
                 pool=job.pool,
                 action=JobAction.SKIPPED_CONDITION,
                 detail=f"retry: condition not met: {type(job.condition).__name__}",
             )
 
-        dep_result = self._check_dependencies(job, logical_run_id, reference_time)
+        dep_result = self._check_dependencies(
+            job,
+            run_key,
+            reference_time,
+            orchestrator_run_key=orchestrator_run_key,
+        )
         if dep_result is not None:
             return dep_result
 
         return _PendingSubmission(
             job=job,
-            logical_run_id=logical_run_id,
+            run_key=run_key,
             attempt=next_attempt,
             trigger_type=TriggerType.AUTO_RETRY,
             trigger_reason="auto_retry_policy",
@@ -843,7 +1099,7 @@ class Orchestrator:
                 pool.submit(
                     self._submit,
                     ps.job,
-                    ps.logical_run_id,
+                    ps.run_key,
                     reference_time,
                     ps.attempt,
                     ps.trigger_type,
@@ -861,12 +1117,12 @@ class Orchestrator:
                     logger.error(
                         "Unexpected error in submission thread for %s/%s: %s",
                         ps.job.name,
-                        ps.logical_run_id,
+                        ps.run_key,
                         exc,
                     )
                     results[idx] = JobTickResult(
                         job_name=ps.job.name,
-                        run_id=ps.logical_run_id,
+                        run_key=ps.run_key,
                         pool=ps.job.pool,
                         action=JobAction.SUBMISSION_FAILED,
                         detail=str(exc),
@@ -881,12 +1137,12 @@ class Orchestrator:
     def _submit(
         self,
         job: Job,
-        logical_run_id: str,
+        run_key: str,
         reference_time: datetime,
         attempt: int,
         trigger_type: TriggerType = TriggerType.SCHEDULED,
         trigger_reason: str | None = None,
-        operator_name: str | None = None,
+        requested_by: str | None = None,
     ) -> JobTickResult:
         executor_type = job.executor.type
         executor = self.executors.get(executor_type)
@@ -895,24 +1151,24 @@ class Orchestrator:
             logger.error(msg)
             return self._result(
                 job_name=job.name,
-                run_id=logical_run_id,
+                run_key=run_key,
                 pool=job.pool,
                 action=JobAction.SUBMISSION_FAILED,
                 detail=msg,
             )
 
         now = reference_time
-        dispatchio_attempt_id = uuid4()
+        correlation_id = uuid4()
         record = AttemptRecord(
             job_name=job.name,
-            logical_run_id=logical_run_id,
+            run_key=run_key,
             attempt=attempt,
-            dispatchio_attempt_id=dispatchio_attempt_id,
+            correlation_id=correlation_id,
             status=Status.SUBMITTED,
             submitted_at=now,
             trigger_type=trigger_type,
             trigger_reason=trigger_reason,
-            operator_name=operator_name,
+            requested_by=requested_by,
             trace={},
         )
         self.state.append_attempt(record)
@@ -922,18 +1178,16 @@ class Orchestrator:
 
             # Optionally retrieve executor reference if executor implements it
             if hasattr(executor, "get_executor_reference"):
-                ref = executor.get_executor_reference(record.dispatchio_attempt_id)
+                ref = executor.get_executor_reference(record.correlation_id)
                 if ref is not None:
                     record = record.model_copy(update={"trace": {"executor": ref}})
                     self.state.update_attempt(record)
 
-            logger.info(
-                "Submitted %s/%s (attempt %d)", job.name, logical_run_id, attempt
-            )
+            logger.info("Submitted %s/%s (attempt %d)", job.name, run_key, attempt)
             action = JobAction.RETRYING if attempt > 0 else JobAction.SUBMITTED
             return self._result(
                 job_name=job.name,
-                run_id=logical_run_id,
+                run_key=run_key,
                 pool=job.pool,
                 action=action,
                 detail=f"attempt={attempt}",
@@ -941,7 +1195,7 @@ class Orchestrator:
         except Exception as exc:
             error_msg = str(exc)
             logger.error(
-                "Submission failed for %s/%s: %s", job.name, logical_run_id, error_msg
+                "Submission failed for %s/%s: %s", job.name, run_key, error_msg
             )
             failed_record = record.model_copy(
                 update={
@@ -953,7 +1207,7 @@ class Orchestrator:
             self.state.update_attempt(failed_record)
             return self._result(
                 job_name=job.name,
-                run_id=logical_run_id,
+                run_key=run_key,
                 pool=job.pool,
                 action=JobAction.SUBMISSION_FAILED,
                 detail=error_msg,
@@ -963,36 +1217,82 @@ class Orchestrator:
     # Dependency resolution
     # ------------------------------------------------------------------
 
+    def _dep_record(
+        self,
+        dep: Dependency,
+        job: Job,
+        reference_time: datetime,
+        orchestrator_run_key: str,
+    ):
+        """Fetch the relevant record for a dependency, based on its type and cadence."""
+        cadence = dep.cadence or job.cadence or self.default_cadence
+        run_key = self._resolve_run_key_for_tick(
+            effective_cadence=cadence,
+            reference_time=reference_time,
+            orchestrator_run_key=orchestrator_run_key,
+        )
+        if isinstance(dep, EventDependency):
+            record = self.state.get_event(dep.event_name, run_key)
+        else:
+            record = self.state.get_latest_attempt(dep.job_name, run_key)
+        return record
+
     def _unmet_dependencies(
-        self, job: Job, reference_time: datetime
+        self, job: Job, reference_time: datetime, *, orchestrator_run_key: str
     ) -> list[Dependency]:
         unmet = []
         for dep in job.depends_on:
-            cadence = dep.cadence or job.cadence or self.default_cadence
-            dep_logical_run_id = resolve_run_id(cadence, reference_time)
-            record = self.state.get_latest_attempt(dep.job_name, dep_logical_run_id)
+            record = self._dep_record(dep, job, reference_time, orchestrator_run_key)
             if record is None or record.status != dep.required_status:
                 unmet.append(dep)
         return unmet
 
     def _dep_is_finished(
-        self, dep: Dependency, job: Job, reference_time: datetime
+        self,
+        dep: Dependency,
+        job: Job,
+        reference_time: datetime,
+        *,
+        orchestrator_run_key: str,
     ) -> bool:
-        cadence = dep.cadence or job.cadence or self.default_cadence
-        dep_logical_run_id = resolve_run_id(cadence, reference_time)
-        record = self.state.get_latest_attempt(dep.job_name, dep_logical_run_id)
+        record = self._dep_record(dep, job, reference_time, orchestrator_run_key)
         return record is not None and record.is_finished()
 
     def _dep_status_matches(
-        self, dep: Dependency, job: Job, reference_time: datetime
+        self,
+        dep: Dependency,
+        job: Job,
+        reference_time: datetime,
+        *,
+        orchestrator_run_key: str,
     ) -> bool:
-        cadence = dep.cadence or job.cadence or self.default_cadence
-        dep_logical_run_id = resolve_run_id(cadence, reference_time)
-        record = self.state.get_latest_attempt(dep.job_name, dep_logical_run_id)
+        record = self._dep_record(dep, job, reference_time, orchestrator_run_key)
         return record is not None and record.status == dep.required_status
 
+    def _format_dependency_run_ref(
+        self,
+        dep: Dependency,
+        job: Job,
+        reference_time: datetime,
+        *,
+        orchestrator_run_key: str,
+    ) -> str:
+        cadence = dep.cadence or job.cadence or self.default_cadence
+        run_key = self._resolve_run_key_for_tick(
+            effective_cadence=cadence,
+            reference_time=reference_time,
+            orchestrator_run_key=orchestrator_run_key,
+        )
+        dep_name = dep.event_name if isinstance(dep, EventDependency) else dep.job_name
+        return f"{dep_name}[{run_key}]"
+
     def _check_dependencies(
-        self, job: Job, logical_run_id: str, reference_time: datetime
+        self,
+        job: Job,
+        run_key: str,
+        reference_time: datetime,
+        *,
+        orchestrator_run_key: str,
     ) -> JobTickResult | None:
         """
         Returns a blocking JobTickResult if deps are not satisfied, or None if clear to proceed.
@@ -1003,17 +1303,26 @@ class Orchestrator:
         mode = job.dependency_mode
 
         if mode == DependencyMode.ALL_SUCCESS:
-            unmet = self._unmet_dependencies(job, reference_time)
+            unmet = self._unmet_dependencies(
+                job,
+                reference_time,
+                orchestrator_run_key=orchestrator_run_key,
+            )
             if not unmet:
                 return None
             detail = ", ".join(
-                f"{d.job_name}[{resolve_run_id(d.cadence or job.cadence or self.default_cadence, reference_time)}]"
-                f"!={d.required_status.value}"
+                self._format_dependency_run_ref(
+                    d,
+                    job,
+                    reference_time,
+                    orchestrator_run_key=orchestrator_run_key,
+                )
+                + f"!={d.required_status.value}"
                 for d in unmet
             )
             return self._result(
                 job_name=job.name,
-                run_id=logical_run_id,
+                run_key=run_key,
                 pool=job.pool,
                 action=JobAction.SKIPPED_DEPENDENCIES,
                 detail=detail,
@@ -1023,17 +1332,22 @@ class Orchestrator:
             unfinished = [
                 dep
                 for dep in job.depends_on
-                if not self._dep_is_finished(dep, job, reference_time)
+                if not self._dep_is_finished(
+                    dep,
+                    job,
+                    reference_time,
+                    orchestrator_run_key=orchestrator_run_key,
+                )
             ]
             if not unfinished:
                 return None
             detail = ", ".join(
-                f"{d.job_name}[{resolve_run_id(d.cadence or job.cadence or self.default_cadence, reference_time)}] not finished"
+                f"{self._format_dependency_run_ref(d, job, reference_time, orchestrator_run_key=orchestrator_run_key)} not finished"
                 for d in unfinished
             )
             return self._result(
                 job_name=job.name,
-                run_id=logical_run_id,
+                run_key=run_key,
                 pool=job.pool,
                 action=JobAction.SKIPPED_DEPENDENCIES,
                 detail=detail,
@@ -1043,14 +1357,28 @@ class Orchestrator:
         threshold = job.dependency_threshold  # validated non-None by Job validator
         deps = job.depends_on
         met = [
-            dep for dep in deps if self._dep_status_matches(dep, job, reference_time)
+            dep
+            for dep in deps
+            if self._dep_status_matches(
+                dep,
+                job,
+                reference_time,
+                orchestrator_run_key=orchestrator_run_key,
+            )
         ]
 
         if len(met) >= threshold:
             return None  # satisfied
 
         not_yet_finished = [
-            dep for dep in deps if not self._dep_is_finished(dep, job, reference_time)
+            dep
+            for dep in deps
+            if not self._dep_is_finished(
+                dep,
+                job,
+                reference_time,
+                orchestrator_run_key=orchestrator_run_key,
+            )
         ]
         if len(met) + len(not_yet_finished) < threshold:
             detail = (
@@ -1059,7 +1387,7 @@ class Orchestrator:
             )
             return self._result(
                 job_name=job.name,
-                run_id=logical_run_id,
+                run_key=run_key,
                 pool=job.pool,
                 action=JobAction.SKIPPED_THRESHOLD_UNREACHABLE,
                 detail=detail,
@@ -1068,7 +1396,7 @@ class Orchestrator:
         detail = f"threshold={threshold}: {len(met)}/{len(deps)} succeeded"
         return self._result(
             job_name=job.name,
-            run_id=logical_run_id,
+            run_key=run_key,
             pool=job.pool,
             action=JobAction.SKIPPED_DEPENDENCIES,
             detail=detail,
@@ -1084,7 +1412,7 @@ class Orchestrator:
                 self._emit_alert(
                     AlertOn.ERROR,
                     job,
-                    record.logical_run_id,
+                    record.run_key,
                     record.reason,
                     record,
                     cond.channels,
@@ -1093,7 +1421,7 @@ class Orchestrator:
                 self._emit_alert(
                     AlertOn.SUCCESS,
                     job,
-                    record.logical_run_id,
+                    record.run_key,
                     "Job completed successfully",
                     record,
                     cond.channels,
@@ -1102,7 +1430,7 @@ class Orchestrator:
     def _check_not_started_by_alert(
         self,
         job: Job,
-        logical_run_id: str,
+        run_key: str,
         reference_time: datetime,
         existing: AttemptRecord | None,
         cadence: Cadence,
@@ -1117,7 +1445,7 @@ class Orchestrator:
                 self._emit_alert(
                     AlertOn.NOT_STARTED_BY,
                     job,
-                    logical_run_id,
+                    run_key,
                     f"Job not started by {cond.not_by}",
                     None,
                     cond.channels,
@@ -1127,7 +1455,7 @@ class Orchestrator:
         self,
         alert_on: AlertOn,
         job: Job,
-        logical_run_id: str,
+        run_key: str,
         detail: str | None,
         record: AttemptRecord | None,
         channels: list[str] | None = None,
@@ -1137,7 +1465,7 @@ class Orchestrator:
         event = AlertEvent(
             alert_on=alert_on,
             job_name=job.name,
-            run_id=logical_run_id,
+            run_key=run_key,
             channels=channels or [],
             detail=detail,
             occurred_at=datetime.now(tz=timezone.utc),
@@ -1148,16 +1476,12 @@ class Orchestrator:
         except Exception as exc:
             logger.error("Alert handler raised: %s", exc)
 
-    # ------------------------------------------------------------------
-    # Phase 3 — Manual retry/cancel operations
-    # ------------------------------------------------------------------
-
     def manual_retry(
         self,
         job_name: str,
-        logical_run_id: str,
-        operator_name: str,
-        operator_reason: str,
+        run_key: str,
+        requested_by: str,
+        request_reason: str,
     ) -> AttemptRecord:
         """
         Create a new manual retry attempt for a job.
@@ -1168,9 +1492,9 @@ class Orchestrator:
 
         Args:
             job_name: Job name (must be registered in this orchestrator)
-            logical_run_id: The logical run identifier
-            operator_name: Name/ID of operator requesting retry
-            operator_reason: Explanation for manual retry
+            run_key: The logical run identifier
+            requested_by: Name/ID of operator(eg user) requesting retry
+            request_reason: Explanation for manual retry
 
         Returns:
             The newly created AttemptRecord (SUBMITTED status)
@@ -1184,17 +1508,17 @@ class Orchestrator:
             raise ValueError(f"Job '{job_name}' not found in orchestrator")
 
         # Get latest attempt
-        latest = self.state.get_latest_attempt(job_name, logical_run_id)
+        latest = self.state.get_latest_attempt(job_name, run_key)
         if latest is None:
             raise ValueError(
-                f"No existing attempt for {job_name}/{logical_run_id}; "
+                f"No existing attempt for {job_name}/{run_key}; "
                 "cannot retry non-existent job"
             )
 
         # Ensure latest is terminal
         if not latest.is_finished():
             raise ValueError(
-                f"Cannot retry {job_name}/{logical_run_id} while attempt {latest.attempt} "
+                f"Cannot retry {job_name}/{run_key} while attempt {latest.attempt} "
                 f"is still {latest.status.value} (not terminal)"
             )
 
@@ -1205,23 +1529,29 @@ class Orchestrator:
         # _submit writes the AttemptRecord (SUBMITTED) then calls executor.submit().
         self._submit(
             job=job,
-            logical_run_id=logical_run_id,
+            run_key=run_key,
             reference_time=now,
             attempt=new_attempt_num,
             trigger_type=TriggerType.MANUAL_RETRY,
-            trigger_reason=operator_reason,
-            operator_name=operator_name,
+            trigger_reason=request_reason,
+            requested_by=requested_by,
         )
 
-        new_record = self.state.get_latest_attempt(job_name, logical_run_id)
+        new_record = self.state.get_latest_attempt(job_name, run_key)
+        if new_record is None or new_record.attempt != new_attempt_num:
+            # This should never happen, but sanity check that the new attempt was created.
+            raise RuntimeError(
+                f"Failed to create new attempt for {job_name}/{run_key} "
+                f"during manual retry"
+            )
 
         retry_request = RetryRequest(
             requested_at=now,
-            requested_by=operator_name,
-            logical_run_id=logical_run_id,
+            requested_by=requested_by,
+            run_key=run_key,
             requested_jobs=[job_name],
             cascade=False,
-            reason=operator_reason,
+            reason=request_reason,
             selected_jobs=[job_name],
             assigned_attempt_by_job={job_name: new_attempt_num},
         )
@@ -1230,16 +1560,16 @@ class Orchestrator:
         logger.info(
             "Manual retry submitted: %s/%s attempt %d (operator=%s reason=%s)",
             job_name,
-            logical_run_id,
+            run_key,
             new_attempt_num,
-            operator_name,
-            operator_reason,
+            requested_by,
+            request_reason,
         )
 
         return new_record
 
     def manual_cancel(
-        self, dispatchio_attempt_id: UUID, operator_name: str, operator_reason: str
+        self, correlation_id: str, requested_by: str, request_reason: str
     ) -> AttemptRecord:
         """
         Manually cancel a running or queued attempt.
@@ -1248,9 +1578,9 @@ class Orchestrator:
         Updates status to CANCELLED with operator context.
 
         Args:
-            dispatchio_attempt_id: UUID of the attempt to cancel
-            operator_name: Name/ID of operator requesting cancellation
-            operator_reason: Explanation for cancellation
+            correlation_id: UUID of the attempt to cancel
+            requested_by: Name/ID of operator requesting cancellation
+            request_reason: Explanation for cancellation
 
         Returns:
             The updated AttemptRecord (CANCELLED status)
@@ -1259,16 +1589,14 @@ class Orchestrator:
             ValueError: If attempt not found or already terminal
         """
         # Look up attempt by ID
-        attempt = self.state.get_attempt(dispatchio_attempt_id)
+        attempt = self.state.get_attempt(correlation_id)
         if attempt is None:
-            raise ValueError(
-                f"Attempt {dispatchio_attempt_id} not found; cannot cancel"
-            )
+            raise ValueError(f"Attempt {correlation_id} not found; cannot cancel")
 
         # Ensure not already finished
         if attempt.is_finished():
             raise ValueError(
-                f"Cannot cancel {attempt.job_name}/{attempt.logical_run_id}/{attempt.attempt}; "
+                f"Cannot cancel {attempt.job_name}/{attempt.run_key}/{attempt.attempt}; "
                 f"already {attempt.status.value}"
             )
 
@@ -1277,19 +1605,19 @@ class Orchestrator:
             update={
                 "status": Status.CANCELLED,
                 "completed_at": datetime.now(tz=timezone.utc),
-                "reason": operator_reason,
-                "operator_name": operator_name,
+                "reason": request_reason,
+                "requested_by": requested_by,
             }
         )
         self.state.update_attempt(cancelled_record)
 
         logger.info(
-            "Manual cancel: %s/%s/%d (operator=%s reason=%s)",
+            "Manual cancel: %s/%s/%d (requested_by=%s reason=%s)",
             attempt.job_name,
-            attempt.logical_run_id,
+            attempt.run_key,
             attempt.attempt,
-            operator_name,
-            operator_reason,
+            requested_by,
+            request_reason,
         )
 
         return cancelled_record

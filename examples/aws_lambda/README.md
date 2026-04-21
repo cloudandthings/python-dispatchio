@@ -34,7 +34,7 @@ python examples/aws_lambda/run.py
 Publish external dependency events (single command sends two events):
 
 ```bash
-python examples/aws_lambda/external_event_producer.py 20250115
+python examples/aws_lambda/external_event_producer.py D20250115
 ```
 
 This emits:

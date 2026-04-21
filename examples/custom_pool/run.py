@@ -30,7 +30,7 @@ if __name__ == "__main__":
             "  pool=%s  %s[%s] -> %s%s",
             event.pool,
             event.job_name,
-            event.run_id,
+            event.run_key,
             event.action.value,
             suffix,
         )

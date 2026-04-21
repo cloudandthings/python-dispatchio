@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
-from dispatchio.completion import (
+from dispatchio.reporter import (
     get_reporter,
     build_reporter,
-    _CompletionReporterAdapter,
-    report_external_done,
-    report_external_event,
+    Reporter,
 )
 from dispatchio.config.settings import ReceiverSettings
 from dispatchio.models import Status
@@ -27,7 +26,7 @@ class TestBuildReporter:
         reporter = build_reporter(cfg)
         assert reporter is not None
         # Verify it's a FilesystemReporter by calling report
-        reporter.report("job", "id", Status.DONE)
+        reporter.report(uuid4(), Status.DONE)
         assert len(list(tmp_path.glob("*.json"))) == 1
 
     def test_returns_none_for_none_backend(self):
@@ -52,10 +51,11 @@ class TestGetReporter:
         monkeypatch.setenv("DISPATCHIO_RECEIVER__BACKEND", "filesystem")
         monkeypatch.setenv("DISPATCHIO_RECEIVER__DROP_DIR", drop_dir)
 
-        reporter = get_reporter("test_job")
-        reporter.report_success("20250115", metadata={"test": True})
+        correlation_id = uuid4()
+        reporter = get_reporter(str(correlation_id))
+        reporter.report_success(metadata={"test": True})
 
-        # Verify completion event was written
+        # Verify status event was written
         files = list(tmp_path.glob("*.json"))
         assert len(files) == 1
 
@@ -64,10 +64,11 @@ class TestGetReporter:
         monkeypatch.setenv("DISPATCHIO_RECEIVER__DROP_DIR", str(tmp_path))
         # Don't set DISPATCHIO_RECEIVER__BACKEND
 
-        reporter = get_reporter("test_job")
-        reporter.report_success("20250115")
+        correlation_id = uuid4()
+        reporter = get_reporter(str(correlation_id))
+        reporter.report_success()
 
-        # Verify completion event was written
+        # Verify status event was written
         files = list(tmp_path.glob("*.json"))
         assert len(files) == 1
 
@@ -75,22 +76,24 @@ class TestGetReporter:
         """get_reporter should return no-op adapter for backend=none."""
         monkeypatch.setenv("DISPATCHIO_RECEIVER__BACKEND", "none")
 
-        reporter = get_reporter("test_job")
+        correlation_id = uuid4()
+        reporter = get_reporter(str(correlation_id))
         # Should not raise — should return no-op adapter
-        reporter.report_success("20250115")
-        reporter.report_error("20250116", "test error")
-        reporter.report_running("20250117")
+        reporter.report_success()
+        reporter.report_error("test error")
+        reporter.report_running()
 
     def test_report_success_writes_done_event(self, tmp_path: Path):
         """Adapter should write DONE completion event."""
         fs_reporter = FilesystemReporter(tmp_path)
-        reporter = _CompletionReporterAdapter("my_job", fs_reporter)
+        correlation_id = uuid4()
+        reporter = Reporter(correlation_id, fs_reporter)
 
-        reporter.report_success("20250115", metadata={"rows": 100})
+        reporter.report_success(metadata={"rows": 100})
 
         files = list(tmp_path.glob("*.json"))
         assert len(files) == 1
-        assert "my_job__20250115__done.json" in files[0].name
+        assert f"{correlation_id}__done.json" in files[0].name
         # Verify metadata was written
         content = files[0].read_text()
         assert '"rows":100' in content or '"rows": 100' in content
@@ -98,13 +101,14 @@ class TestGetReporter:
     def test_report_error_writes_error_event(self, tmp_path: Path):
         """Adapter should write ERROR completion event."""
         fs_reporter = FilesystemReporter(tmp_path)
-        reporter = _CompletionReporterAdapter("my_job", fs_reporter)
+        correlation_id = uuid4()
+        reporter = Reporter(correlation_id, fs_reporter)
 
-        reporter.report_error("20250115", "Database connection failed")
+        reporter.report_error("Database connection failed")
 
         files = list(tmp_path.glob("*.json"))
         assert len(files) == 1
-        assert "my_job__20250115__error.json" in files[0].name
+        assert f"{correlation_id}__error.json" in files[0].name
         # Verify error_reason was written
         content = files[0].read_text()
         assert "Database connection failed" in content
@@ -112,26 +116,27 @@ class TestGetReporter:
     def test_report_running_writes_running_event(self, tmp_path: Path):
         """Adapter should write RUNNING event."""
         fs_reporter = FilesystemReporter(tmp_path)
-        reporter = _CompletionReporterAdapter("my_job", fs_reporter)
+        correlation_id = uuid4()
+        reporter = Reporter(correlation_id, fs_reporter)
 
-        reporter.report_running("20250115")
+        reporter.report_running()
 
         files = list(tmp_path.glob("*.json"))
         assert len(files) == 1
-        assert "my_job__20250115__running.json" in files[0].name
+        assert f"{correlation_id}__running.json" in files[0].name
 
     def test_handles_none_reporter_gracefully(self):
         """Adapter should not raise when reporter is None."""
-        reporter = _CompletionReporterAdapter("my_job", None)
+        reporter = Reporter("my_job", None)
 
         # Should not raise
-        reporter.report_success("20250115")
-        reporter.report_error("20250116", "error")
-        reporter.report_running("20250117")
+        reporter.report_success()
+        reporter.report_error("error")
+        reporter.report_running()
 
 
-class TestCompletionReporterIntegration:
-    """Integration tests for the completion reporter abstraction."""
+class TestReporterIntegration:
+    """Integration tests for the reporter abstraction."""
 
     def test_orchestrator_injects_receiver_config(self):
         """orchestrator_from_config should inject receiver settings as env vars."""
@@ -150,60 +155,3 @@ class TestCompletionReporterIntegration:
 
             # The orchestrator's executor should have injected the config
             assert orch.executors is not None
-
-
-class TestExternalEventHelpers:
-    """Tests for external event publishing helper functions."""
-
-    def test_report_external_done_filesystem_from_env(
-        self, tmp_path: Path, monkeypatch
-    ) -> None:
-        monkeypatch.setenv("DISPATCHIO_RECEIVER__BACKEND", "filesystem")
-        monkeypatch.setenv("DISPATCHIO_RECEIVER__DROP_DIR", str(tmp_path))
-
-        sent = report_external_done(
-            event_name="event.user_registered",
-            run_id="20250115",
-            metadata={"source": "test"},
-        )
-
-        assert sent is True
-        files = list(tmp_path.glob("*.json"))
-        assert len(files) == 1
-        assert "event.user_registered__20250115__done.json" in files[0].name
-
-    def test_report_external_event_with_explicit_settings(self, tmp_path: Path) -> None:
-        sent = report_external_event(
-            event_name="event.kyc_passed",
-            run_id="20250115",
-            status=Status.DONE,
-            receiver_settings=ReceiverSettings(
-                backend="filesystem",
-                drop_dir=str(tmp_path),
-            ),
-        )
-
-        assert sent is True
-        files = list(tmp_path.glob("*.json"))
-        assert len(files) == 1
-        assert "event.kyc_passed__20250115__done.json" in files[0].name
-
-    def test_report_external_done_none_backend_returns_false(self, monkeypatch) -> None:
-        monkeypatch.setenv("DISPATCHIO_RECEIVER__BACKEND", "none")
-
-        sent = report_external_done(
-            event_name="event.user_registered",
-            run_id="20250115",
-        )
-
-        assert sent is False
-
-    def test_report_external_event_sqs_requires_queue_url(self, monkeypatch) -> None:
-        monkeypatch.setenv("DISPATCHIO_RECEIVER__BACKEND", "sqs")
-        monkeypatch.delenv("DISPATCHIO_RECEIVER__QUEUE_URL", raising=False)
-
-        with pytest.raises(ValueError, match="DISPATCHIO_RECEIVER__QUEUE_URL"):
-            report_external_done(
-                event_name="event.user_registered",
-                run_id="20250115",
-            )

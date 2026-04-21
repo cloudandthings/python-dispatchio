@@ -19,7 +19,7 @@ app = typer.Typer(help="Manually inspect or override run records.")
 @handle_cli_errors
 def record_set(
     job_name: Annotated[str, typer.Argument(help="Job name.")],
-    run_id: Annotated[str, typer.Argument(help="Logical run ID.")],
+    run_key: Annotated[str, typer.Argument(help="Run key.")],
     new_status: Annotated[
         Status,
         typer.Argument(metavar="STATUS", help="New status value."),
@@ -33,17 +33,17 @@ def record_set(
     store = load_store_from_context(context_name)
 
     if not yes and not output.confirm(
-        f"Set {job_name}[{run_id}] -> {new_status.value}?"
+        f"Set {job_name}[{run_key}] -> {new_status.value}?"
     ):
         raise typer.Exit()
 
-    existing = store.get_latest_attempt(job_name, run_id)
+    existing = store.get_latest_attempt(job_name, run_key)
     if existing is None:
         record = AttemptRecord(
             job_name=job_name,
-            logical_run_id=run_id,
+            run_key=run_key,
             attempt=0,
-            dispatchio_attempt_id=uuid4(),
+            correlation_id=uuid4(),
             status=new_status,
             reason=reason,
         )
@@ -52,7 +52,7 @@ def record_set(
         record = existing.model_copy(update={"status": new_status, "reason": reason})
         store.update_attempt(record)
 
-    output.print_success(f"Set {job_name}[{run_id}] -> {new_status.value}")
+    output.print_success(f"Set {job_name}[{run_key}] -> {new_status.value}")
 
 
 @app.callback()

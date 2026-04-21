@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 
 from dispatchio.graph.spec import GraphSpec
+from dispatchio.models import EventDependency, JobDependency
 
 if TYPE_CHECKING:
     from dispatchio.config.settings import DispatchioSettings
@@ -100,26 +101,34 @@ def validate_graph(spec: GraphSpec) -> None:
 
     for job in spec.jobs:
         for dep in job.depends_on:
-            is_external = dep.job_name.startswith("event.") or dep.job_name.startswith(
-                "external."
-            )
-            if is_external:
-                if dep.job_name not in declared_external:
+            if isinstance(dep, EventDependency):
+                if dep.event_name not in declared_external:
                     errors.append(
-                        f"Job {job.name!r} depends on undeclared external "
-                        f"{dep.job_name!r}. Add it to external_dependencies."
+                        f"Job {job.name!r} depends on undeclared event "
+                        f"{dep.event_name!r}. Add it to external_dependencies."
                     )
-            elif dep.job_name not in job_names:
-                errors.append(
-                    f"Job {job.name!r} depends on {dep.job_name!r} "
-                    f"which is not defined in this graph."
-                )
+            else:
+                assert isinstance(dep, JobDependency)
+                is_external = dep.job_name.startswith(
+                    "event."
+                ) or dep.job_name.startswith("external.")
+                if is_external:
+                    if dep.job_name not in declared_external:
+                        errors.append(
+                            f"Job {job.name!r} depends on undeclared external "
+                            f"{dep.job_name!r}. Add it to external_dependencies."
+                        )
+                elif dep.job_name not in job_names:
+                    errors.append(
+                        f"Job {job.name!r} depends on {dep.job_name!r} "
+                        f"which is not defined in this graph."
+                    )
 
     # 4. Circular dependency detection (internal deps only)
     internal_adj: dict[str, list[str]] = {j.name: [] for j in spec.jobs}
     for job in spec.jobs:
         for dep in job.depends_on:
-            if dep.job_name in job_names:
+            if isinstance(dep, JobDependency) and dep.job_name in job_names:
                 internal_adj[job.name].append(dep.job_name)
 
     errors.extend(_find_cycles(internal_adj))

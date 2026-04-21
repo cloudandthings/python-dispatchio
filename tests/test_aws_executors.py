@@ -25,14 +25,12 @@ def _ref_time() -> datetime:
     return datetime(2026, 4, 18, 0, 0, tzinfo=timezone.utc)
 
 
-def _make_attempt(
-    job_name: str, logical_run_id: str, attempt: int = 0
-) -> AttemptRecord:
+def _make_attempt(job_name: str, run_key: str, attempt: int = 0) -> AttemptRecord:
     return AttemptRecord(
         job_name=job_name,
-        logical_run_id=logical_run_id,
+        run_key=run_key,
         attempt=attempt,
-        dispatchio_attempt_id=uuid4(),
+        correlation_id=uuid4(),
         status=Status.RUNNING,
         trigger_type=TriggerType.SCHEDULED,
         trace={},
@@ -64,7 +62,7 @@ def test_lambda_executor_submit_tracks_reference() -> None:
     executor = LambdaExecutor(client=client)
 
     executor.submit(job=job, attempt=attempt, reference_time=_ref_time())
-    reference = executor.get_executor_reference(attempt.dispatchio_attempt_id)
+    reference = executor.get_executor_reference(attempt.correlation_id)
 
     assert reference is not None
     assert reference["function_name"] == "dispatchio-worker"
@@ -89,7 +87,7 @@ def test_stepfunctions_executor_submit_tracks_execution_arn() -> None:
     executor = StepFunctionsExecutor(region="eu-west-1")
 
     executor.submit(job=job, attempt=attempt, reference_time=_ref_time())
-    reference = executor.get_executor_reference(attempt.dispatchio_attempt_id)
+    reference = executor.get_executor_reference(attempt.correlation_id)
 
     assert reference is not None
     assert reference["execution_arn"].startswith("arn:")
@@ -111,7 +109,7 @@ def test_athena_executor_submit_tracks_query_execution_id() -> None:
     executor = AthenaExecutor(region="eu-west-1")
 
     executor.submit(job=job, attempt=attempt, reference_time=_ref_time())
-    reference = executor.get_executor_reference(attempt.dispatchio_attempt_id)
+    reference = executor.get_executor_reference(attempt.correlation_id)
 
     assert reference is not None
     assert reference["query_execution_id"]
@@ -129,9 +127,9 @@ def test_stepfunctions_poke_maps_terminal_statuses(monkeypatch) -> None:
 
     record = AttemptRecord(
         job_name="transform",
-        logical_run_id="20260418",
+        run_key="20260418",
         attempt=0,
-        dispatchio_attempt_id=uuid4(),
+        correlation_id=uuid4(),
         status=Status.RUNNING,
         trigger_type=TriggerType.SCHEDULED,
         trace={
@@ -154,9 +152,9 @@ def test_athena_poke_maps_terminal_statuses(monkeypatch) -> None:
 
     record = AttemptRecord(
         job_name="athena-job",
-        logical_run_id="20260418",
+        run_key="20260418",
         attempt=0,
-        dispatchio_attempt_id=uuid4(),
+        correlation_id=uuid4(),
         status=Status.RUNNING,
         trigger_type=TriggerType.SCHEDULED,
         trace={"executor": {"query_execution_id": "qid-123"}},

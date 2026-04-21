@@ -24,9 +24,7 @@ class LambdaExecutor:
         client: BaseClient | None = None,
     ) -> None:
         self._client = client or boto3.client("lambda", region_name=region)
-        self._references: dict[
-            str, dict[str, Any]
-        ] = {}  # keyed by str(dispatchio_attempt_id)
+        self._references: dict[str, dict[str, Any]] = {}  # keyed by str(correlation_id)
 
     def submit(
         self,
@@ -59,12 +57,10 @@ class LambdaExecutor:
             )
 
         request_id = response.get("ResponseMetadata", {}).get("RequestId")
-        self._references[str(attempt.dispatchio_attempt_id)] = {
+        self._references[str(attempt.correlation_id)] = {
             "function_name": cfg.function_name,
             "request_id": request_id,
         }
 
-    def get_executor_reference(
-        self, dispatchio_attempt_id: UUID
-    ) -> dict[str, Any] | None:
-        return self._references.get(str(dispatchio_attempt_id))
+    def get_executor_reference(self, correlation_id: UUID) -> dict[str, Any] | None:
+        return self._references.get(str(correlation_id))

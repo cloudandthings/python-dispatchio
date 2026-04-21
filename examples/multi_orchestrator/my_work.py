@@ -3,25 +3,25 @@
 import time
 
 
-def ingest(run_id: str) -> None:
+def ingest(run_key: str) -> None:
     """Simulate daily data ingestion."""
     time.sleep(0.1)
-    print(f"Ingested daily records for {run_id}.")
+    print(f"Ingested daily records for {run_key}.")
 
 
-def transform(run_id: str) -> None:
+def transform(run_key: str) -> None:
     """Simulate daily transformation — depends on ingest."""
     time.sleep(0.1)
-    print(f"Transformed daily records for {run_id}.")
+    print(f"Transformed daily records for {run_key}.")
 
 
-def aggregate(run_id: str) -> None:
+def aggregate(run_key: str) -> None:
     """Simulate weekly aggregation."""
     time.sleep(0.1)
-    print(f"Aggregated weekly records for {run_id}.")
+    print(f"Aggregated weekly records for {run_key}.")
 
 
-def report(run_id: str) -> None:
+def report(run_key: str) -> None:
     """Simulate weekly report generation — depends on aggregate."""
     time.sleep(0.1)
-    print(f"Generated weekly report for {run_id}.")
+    print(f"Generated weekly report for {run_key}.")

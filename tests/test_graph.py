@@ -31,7 +31,10 @@ def _raw(**overrides) -> dict:
         "jobs": [
             {
                 "name": "ingest",
-                "executor": {"type": "subprocess", "command": ["echo", "{run_id}"]},
+                "executor": {
+                    "type": "subprocess",
+                    "command": ["echo", "{run_key}"],
+                },
             }
         ],
     }
@@ -50,7 +53,7 @@ def _daily_cadence() -> dict:
 
 
 def _dep(job_name: str) -> dict:
-    return {"job_name": job_name, "cadence": _daily_cadence()}
+    return {"kind": "job", "job_name": job_name, "cadence": _daily_cadence()}
 
 
 # ---------------------------------------------------------------------------

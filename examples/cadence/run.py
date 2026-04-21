@@ -2,10 +2,10 @@
 Cadence & Cross-Cadence Dependencies demo runner.
 
 Uses reference_time=2025-01-15 09:00 UTC (Wednesday, mid-month) so that:
-  monthly_ledger  → run_id = "202501"   (submits immediately)
-  daily_reconcile → run_id = "20250115" (blocked until monthly_ledger/202501 done)
-  weekly_summary  → run_id = "20250113" (blocked until monthly_ledger/202501 done)
-  yesterday_load  → run_id = "20250114" (submits immediately, independent)
+  monthly_ledger  → run_key = "202501"   (submits immediately)
+  daily_reconcile → run_key = "20250115" (blocked until monthly_ledger/202501 done)
+  weekly_summary  → run_key = "20250113" (blocked until monthly_ledger/202501 done)
+  yesterday_load  → run_key = "20250114" (submits immediately, independent)
 
 Run with:
   python examples/cadence/run.py

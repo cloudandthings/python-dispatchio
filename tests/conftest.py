@@ -30,19 +30,19 @@ def mem_store():
 def simple_job():
     return Job(
         name="test_job",
-        executor=SubprocessJob(command=["echo", "{logical_run_id}"]),
+        executor=SubprocessJob(command=["echo", "{run_key}"]),
     )
 
 
 def make_attempt(
-    job_name="job", logical_run_id="20250115", attempt=0, status=Status.DONE, **kw
+    job_name="job", run_key="20250115", attempt=0, status=Status.DONE, **kw
 ):
     """Helper to create AttemptRecord for tests."""
     return AttemptRecord(
         job_name=job_name,
-        logical_run_id=logical_run_id,
+        run_key=run_key,
         attempt=attempt,
-        dispatchio_attempt_id=uuid4(),
+        correlation_id=uuid4(),
         status=status,
         **kw,
     )

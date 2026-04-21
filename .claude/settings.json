@@ -14,7 +14,9 @@
       "Bash(python -m dispatchio cancel --help)",
       "Bash(python -m pytest tests/test_cli.py tests/test_orchestrator.py::TestManualOperations tests/test_aws_completion_handler.py -v)",
       "Bash(python -m pytest --tb=short -q)",
-      "Bash(wait)"
+      "Bash(wait)",
+      "Bash(python examples/event_dependencies/run.py)",
+      "Bash(python -m pytest tests/test_graph.py --tb=short -q)"
     ]
   }
 }

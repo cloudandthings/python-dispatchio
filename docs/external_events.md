@@ -21,7 +21,7 @@ Use the existing `CompletionEvent` payload shape:
 ```json
 {
   "job_name": "event.user_registered",
-  "run_id": "20250115",
+  "run_id": "D20250115",
   "status": "done",
   "metadata": {"source": "identity-service"}
 }
@@ -40,7 +40,7 @@ from dispatchio.completion import report_external_done
 
 report_external_done(
   event_name="event.user_registered",
-  run_id="20250115",
+  run_id="D20250115",
   metadata={"source": "identity-service"},
 )
 ```
@@ -59,7 +59,7 @@ prevent typos and improve discoverability.
 Recommended fields:
 
 - `name`: dependency key (for example, `event.user_registered`)
-- `cadence`: run_id contract (for example, `daily (YYYYMMDD)`)
+- `cadence`: run_id contract (for example, `daily (DYYYYMMDD)`)
 - `description`: source system and business meaning
 
 Use `event_dependency()` to declare event dependencies and

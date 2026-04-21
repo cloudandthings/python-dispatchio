@@ -6,6 +6,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from typing import Annotated
+from uuid import UUID
 
 import typer
 
@@ -30,13 +31,14 @@ from dispatchio.cli.options import (
     OrchestratorOption,
     ReasonOption,
     ReferenceTimeOption,
-    RunIdOption,
-    RunIdRequiredOption,
+    RunKeyOption,
+    RunKeyRequiredOption,
     ScriptPathArgument,
     StatusFilterOption,
     YesOption,
 )
 from dispatchio.models import Status, TickResult
+from dispatchio.models import OrchestratorRunMode, OrchestratorRunStatus
 
 
 @app.command()
@@ -166,7 +168,7 @@ def status(
     *,
     context_name: ContextOption = None,
     job: JobOption = None,
-    run_id: RunIdOption = None,
+    run_key: RunKeyOption = None,
     filter_status: StatusFilterOption = None,
 ) -> None:
     """Show the status of job runs."""
@@ -174,8 +176,8 @@ def status(
         store = load_store_from_context(context_name)
 
     records = store.list_attempts(job_name=job, status=filter_status)
-    if run_id:
-        records = [record for record in records if record.logical_run_id == run_id]
+    if run_key:
+        records = [record for record in records if record.run_key == run_key]
 
     if not records:
         output.print_warning("No records found.")
@@ -221,11 +223,11 @@ def ticks(
 def cancel(
     *,
     context_name: ContextOption = None,
-    run_id: RunIdRequiredOption,
+    run_key: RunKeyRequiredOption,
     job: JobRequiredOption,
     attempt: AttemptOption = None,
     reason: ReasonOption = None,
-    operator: OperatorOption = "cli",
+    requested_by: OperatorOption = "cli",
     yes: YesOption = False,
 ) -> None:
     """Cancel an active attempt."""
@@ -233,27 +235,27 @@ def cancel(
         store = load_store_from_context(context_name)
 
     if attempt is not None:
-        candidates = store.list_attempts(
-            job_name=job, logical_run_id=run_id, attempt=attempt
-        )
+        candidates = store.list_attempts(job_name=job, run_key=run_key, attempt=attempt)
         rec = candidates[0] if candidates else None
     else:
-        rec = store.get_latest_attempt(job, run_id)
+        rec = store.get_latest_attempt(job, run_key)
         if rec is not None and rec.is_finished():
             raise CliUserError(
-                f"{job}[{run_id}] latest attempt {rec.attempt} is already {rec.status.value} (terminal). "
+                f"{job}[{run_key}] latest attempt {rec.attempt} is already {rec.status.value} (terminal). "
                 "Specify --attempt to cancel a specific attempt."
             )
 
     if rec is None:
-        raise CliUserError(f"No attempt found for {job}[{run_id}].")
+        raise CliUserError(f"No attempt found for {job}[{run_key}].")
 
     if rec.is_finished():
         raise CliUserError(
-            f"{job}[{run_id}] attempt {rec.attempt} is already {rec.status.value} (terminal)."
+            f"{job}[{run_key}] attempt {rec.attempt} is already {rec.status.value} (terminal)."
         )
 
-    if not yes and not output.confirm(f"Cancel {job}[{run_id}] attempt {rec.attempt}?"):
+    if not yes and not output.confirm(
+        f"Cancel {job}[{run_key}] attempt {rec.attempt}?"
+    ):
         raise typer.Exit()
 
     cancelled = rec.model_copy(
@@ -261,8 +263,244 @@ def cancel(
             "status": Status.CANCELLED,
             "completed_at": datetime.now(tz=timezone.utc),
             "reason": reason,
-            "operator_name": operator,
+            "requested_by": requested_by,
         }
     )
     store.update_attempt(cancelled)
-    output.print_warning(f"Cancelled {job}[{run_id}] attempt {rec.attempt}.")
+    output.print_warning(f"Cancelled {job}[{run_key}] attempt {rec.attempt}.")
+
+
+def _parse_iso_datetime(value: str, *, option_name: str) -> datetime:
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise CliUserError(f"Invalid {option_name}: {value!r}") from exc
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+@app.command("run-list")
+@handle_cli_errors
+def run_list(
+    *,
+    orchestrator: OrchestratorOption = None,
+    status: Annotated[
+        OrchestratorRunStatus | None,
+        typer.Option("--status", help="Filter by run status.", case_sensitive=False),
+    ] = None,
+    mode: Annotated[
+        OrchestratorRunMode | None,
+        typer.Option("--mode", help="Filter by run mode.", case_sensitive=False),
+    ] = None,
+) -> None:
+    """List orchestrator runs."""
+    if not orchestrator:
+        raise CliUserError(
+            "Specify an orchestrator with --orchestrator or DISPATCHIO_ORCHESTRATOR"
+        )
+    orch = load_orchestrator(orchestrator)
+    runs = orch.list_runs(status=status, mode=mode)
+    if not runs:
+        output.print_warning("No orchestrator runs found.")
+        return
+    for run in runs:
+        output.print_info(
+            f"{run.orchestrator_run_id}  {run.run_key}  status={run.status.value}  mode={run.mode.value}  priority={run.priority}"
+        )
+
+
+@app.command("run-show")
+@handle_cli_errors
+def run_show(
+    *,
+    orchestrator: OrchestratorOption = None,
+    orchestrator_run_id: Annotated[
+        str,
+        typer.Option("--orchestrator-run-id", help="Run UUID."),
+    ],
+) -> None:
+    """Show one orchestrator run by UUID."""
+    if not orchestrator:
+        raise CliUserError(
+            "Specify an orchestrator with --orchestrator or DISPATCHIO_ORCHESTRATOR"
+        )
+    orch = load_orchestrator(orchestrator)
+    try:
+        run_uuid = UUID(orchestrator_run_id)
+    except ValueError as exc:
+        raise CliUserError(
+            f"Invalid --orchestrator-run-id: {orchestrator_run_id!r}"
+        ) from exc
+    run = orch.show_run(run_uuid)
+    output.print_info(f"orchestrator_run_id: {run.orchestrator_run_id}")
+    output.print_info(f"orchestrator_name  : {run.orchestrator_name}")
+    output.print_info(f"run_key            : {run.run_key}")
+    output.print_info(f"status             : {run.status.value}")
+    output.print_info(f"mode               : {run.mode.value}")
+    output.print_info(f"priority           : {run.priority}")
+    output.print_info(f"submitted_by       : {run.submitted_by}")
+    output.print_info(f"reason             : {run.reason}")
+
+
+@app.command("run-resume")
+@handle_cli_errors
+def run_resume(
+    *,
+    orchestrator: OrchestratorOption = None,
+    orchestrator_run_id: Annotated[
+        str,
+        typer.Option("--orchestrator-run-id", help="Run UUID."),
+    ],
+    reason: ReasonOption = None,
+) -> None:
+    """Resume an orchestrator run (set status to active)."""
+    if not orchestrator:
+        raise CliUserError(
+            "Specify an orchestrator with --orchestrator or DISPATCHIO_ORCHESTRATOR"
+        )
+    orch = load_orchestrator(orchestrator)
+    try:
+        run_uuid = UUID(orchestrator_run_id)
+    except ValueError as exc:
+        raise CliUserError(
+            f"Invalid --orchestrator-run-id: {orchestrator_run_id!r}"
+        ) from exc
+    run = orch.resume_run(run_uuid, reason=reason)
+    output.print_success(
+        f"Resumed run {run.orchestrator_run_id} ({run.run_key}) to status={run.status.value}."
+    )
+
+
+@app.command("run-cancel")
+@handle_cli_errors
+def run_cancel(
+    *,
+    orchestrator: OrchestratorOption = None,
+    orchestrator_run_id: Annotated[
+        str,
+        typer.Option("--orchestrator-run-id", help="Run UUID."),
+    ],
+    reason: ReasonOption = None,
+) -> None:
+    """Cancel an orchestrator run (set status to cancelled)."""
+    if not orchestrator:
+        raise CliUserError(
+            "Specify an orchestrator with --orchestrator or DISPATCHIO_ORCHESTRATOR"
+        )
+    orch = load_orchestrator(orchestrator)
+    try:
+        run_uuid = UUID(orchestrator_run_id)
+    except ValueError as exc:
+        raise CliUserError(
+            f"Invalid --orchestrator-run-id: {orchestrator_run_id!r}"
+        ) from exc
+    run = orch.cancel_run(run_uuid, reason=reason)
+    output.print_warning(
+        f"Cancelled run {run.orchestrator_run_id} ({run.run_key}) status={run.status.value}."
+    )
+
+
+@app.command("backfill-plan")
+@handle_cli_errors
+def backfill_plan(
+    *,
+    orchestrator: OrchestratorOption = None,
+    start: Annotated[
+        str, typer.Option("--start", help="Backfill start (ISO datetime).")
+    ],
+    end: Annotated[str, typer.Option("--end", help="Backfill end (ISO datetime).")],
+) -> None:
+    """Plan backfill run keys for a date range."""
+    if not orchestrator:
+        raise CliUserError(
+            "Specify an orchestrator with --orchestrator or DISPATCHIO_ORCHESTRATOR"
+        )
+    orch = load_orchestrator(orchestrator)
+    start_dt = _parse_iso_datetime(start, option_name="--start")
+    end_dt = _parse_iso_datetime(end, option_name="--end")
+    run_keys = orch.plan_backfill(start_dt, end_dt)
+    output.print_info(f"Planned {len(run_keys)} run key(s):")
+    for key in run_keys:
+        output.print_info(f"  {key}")
+
+
+@app.command("backfill-enqueue")
+@handle_cli_errors
+def backfill_enqueue(
+    *,
+    orchestrator: OrchestratorOption = None,
+    start: Annotated[
+        str, typer.Option("--start", help="Backfill start (ISO datetime).")
+    ],
+    end: Annotated[str, typer.Option("--end", help="Backfill end (ISO datetime).")],
+    priority: Annotated[int, typer.Option("--priority", help="Run priority.")] = 0,
+    submitted_by: Annotated[
+        str | None,
+        typer.Option("--submitted-by", help="Who submitted this request."),
+    ] = None,
+    reason: ReasonOption = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Requeue runs if they already exist."),
+    ] = False,
+) -> None:
+    """Enqueue pending backfill runs for a date range."""
+    if not orchestrator:
+        raise CliUserError(
+            "Specify an orchestrator with --orchestrator or DISPATCHIO_ORCHESTRATOR"
+        )
+    orch = load_orchestrator(orchestrator)
+    start_dt = _parse_iso_datetime(start, option_name="--start")
+    end_dt = _parse_iso_datetime(end, option_name="--end")
+    runs = orch.enqueue_backfill(
+        start=start_dt,
+        end=end_dt,
+        priority=priority,
+        submitted_by=submitted_by,
+        reason=reason,
+        force=force,
+    )
+    output.print_success(f"Enqueued {len(runs)} backfill run(s).")
+    for run in runs:
+        output.print_info(f"  {run.orchestrator_run_id}  {run.run_key}")
+
+
+@app.command("replay-enqueue")
+@handle_cli_errors
+def replay_enqueue(
+    *,
+    orchestrator: OrchestratorOption = None,
+    run_key: Annotated[
+        list[str],
+        typer.Option("--run-key", help="Run key to replay (repeatable)."),
+    ],
+    priority: Annotated[int, typer.Option("--priority", help="Run priority.")] = 0,
+    submitted_by: Annotated[
+        str | None,
+        typer.Option("--submitted-by", help="Who submitted this request."),
+    ] = None,
+    reason: ReasonOption = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Requeue runs if they already exist."),
+    ] = False,
+) -> None:
+    """Enqueue pending replay runs for explicit run keys."""
+    if not orchestrator:
+        raise CliUserError(
+            "Specify an orchestrator with --orchestrator or DISPATCHIO_ORCHESTRATOR"
+        )
+    if not run_key:
+        raise CliUserError("Provide at least one --run-key")
+    orch = load_orchestrator(orchestrator)
+    runs = orch.enqueue_replay(
+        run_keys=run_key,
+        priority=priority,
+        submitted_by=submitted_by,
+        reason=reason,
+        force=force,
+    )
+    output.print_success(f"Enqueued {len(runs)} replay run(s).")
+    for run in runs:
+        output.print_info(f"  {run.orchestrator_run_id}  {run.run_key}")

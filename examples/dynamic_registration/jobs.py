@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dispatchio import DAILY, Dependency, Job, PythonJob, orchestrator_from_config
+from dispatchio import DAILY, Job, JobDependency, PythonJob, orchestrator_from_config
 
 BASE = Path(__file__).parent
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))
@@ -38,7 +38,7 @@ def register_bootstrap_jobs() -> None:
         "transform",
         PythonJob(script=str(BASE / "my_work.py"), function="transform"),
         cadence=DAILY,
-        depends_on=[Dependency(job_name="discover", cadence=DAILY)],
+        depends_on=[discover_job],
     )
     orchestrator.add_jobs([discover_job, transform_job])
 
@@ -57,7 +57,7 @@ def register_entity_jobs(entities: list[str]) -> None:
                 job_name,
                 PythonJob(script=str(BASE / "my_work.py"), function=job_name),
                 cadence=DAILY,
-                depends_on=[Dependency(job_name="transform", cadence=DAILY)],
+                depends_on=[JobDependency(job_name="transform", cadence=DAILY)],
             )
         )
 

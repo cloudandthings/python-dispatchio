@@ -12,7 +12,7 @@ Before describing gaps, it is worth noting what the existing model
 already handles correctly:
 
 - **Monthly and weekly run IDs** — `run_id_expr` already supports `mon0`,
-  `week0`, `hour0`, etc. (see `dispatchio/run_id.py`).
+  `week0`, `hour0`, etc. (see `dispatchio/run_key_resolution.py`).
 - **Cross-granularity dependencies** — because `Dependency.run_id_expr` is
   resolved independently from the parent job's own `run_id_expr`, a daily
   job can already declare `Dependency(job_name="monthly_etl", run_id_expr="mon0")`
@@ -95,7 +95,7 @@ instead of replacing it wholesale.
 
 ```python
 def job_factory(reference_time: datetime, artifacts: ArtifactStore) -> list[Job]:
-    run_id = reference_time.strftime("%Y%m%d")
+    run_id = f"D{reference_time.strftime('%Y%m%d')}"
 
     # Read which entities changed today (see Phase 4 for ArtifactStore)
     changed = artifacts.read(
@@ -164,7 +164,7 @@ build artifacts. `DataStore` is neutral and accurate.
   orchestrators sharing a backing store use distinct namespaces.
 - `key` defaults to `"return_value"`.
 - When `job` or `run_id` is `None` in a write/read call, the values are
-  resolved from `DISPATCHIO_JOB_NAME` and `DISPATCHIO_RUN_ID` env vars
+  resolved from `DISPATCHIO_JOB_NAME` and `DISPATCHIO_JOB_RUN_KEY` env vars
   injected by the executor. This makes the harness API ergonomic:
 
 ```python
@@ -252,7 +252,7 @@ backend (distributed deployments).
 
 ### Scope of change (implemented)
 
-- `dispatchio/datastore/base.py` — `DataStore` protocol, `_resolve_job`, `_resolve_run_id`
+- `dispatchio/datastore/base.py` — `DataStore` protocol, `_resolve_job`, `_resolve_job_run_key`
 - `dispatchio/datastore/memory.py` — `MemoryDataStore`
 - `dispatchio/datastore/filesystem.py` — `FilesystemDataStore`
 - `dispatchio/datastore/__init__.py` — `get_data_store()` factory
@@ -291,7 +291,7 @@ and log a warning naming the blocking upstream.
 
 permanently_blocked = [
     dep for dep in unmet
-    if (rec := self.state.get(dep.job_name, resolve_run_id(dep.run_id_expr, reference_time)))
+    if (rec := self.state.get(dep.job_name, resolve_job_run_key(dep.run_id_expr, reference_time)))
     and rec.is_terminal()
     and rec.status != dep.required_status
 ]
@@ -449,15 +449,15 @@ member to the `Cadence` union.
 
 **Deferred** — Option A is sufficient for now.
 
-### Option C — Separate `logical_run_id` from execution `run_id` (future enhancement)
+### Option C — Separate `job_run_key` from execution `run_id` (future enhancement)
 
 Some workflows have a *business date* (the period the job covers) that
 is distinct from the *execution date* (when it runs). For example, a
 reprocessing job for last Monday runs today but its outputs should be
 keyed to last Monday's run_id.
 
-`RunRecord` and `Job` could gain an optional `logical_run_id_expr`
-field. State would be stored under `logical_run_id` but evaluated under
+`RunRecord` and `Job` could gain an optional `job_run_key_expr`
+field. State would be stored under `job_run_key` but evaluated under
 the execution `run_id`.
 
 **Deferred** — this is a significant model change. The factory pattern

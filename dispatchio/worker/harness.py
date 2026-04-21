@@ -4,7 +4,7 @@ run_job() — the Dispatchio job harness.
 This is the single entry point job scripts should call. It handles all
 the Dispatchio-specific concerns so job code stays pure business logic:
 
-  - Parses --run-id (and --drop-dir for the default filesystem reporter)
+  - Parses --run-key (and --drop-dir for the default filesystem reporter)
     from sys.argv, or accepts them as explicit arguments.
   - Runs the job function inside a try/except.
   - Always posts a completion event (DONE or ERROR) — even if the job
@@ -13,7 +13,7 @@ the Dispatchio-specific concerns so job code stays pure business logic:
 The job function receives only what its signature declares — nothing is
 injected unless the function asks for it by name. Available context keys:
 
-    run_id    — the run ID string for this execution  (e.g. "20260414")
+    run_key    — the run key string for this execution  (e.g. "20260414")
     job_name  — the registered job name               (e.g. "ingest")
 
 Usage examples:
@@ -22,27 +22,26 @@ Usage examples:
     def main() -> None:
         ...
 
-    # Pass run_id only
-    def main(run_id: str) -> None:
-        print(f"Processing {run_id}")
+    # Pass run_key only
+    def main(run_key: str) -> None:
+        print(f"Processing {run_key}")
         ...
 
     # Pass everything via **kwargs
     def main(**ctx) -> None:
-        print(ctx["run_id"], ctx["job_name"])
+        print(ctx["run_key"], ctx["job_name"])
         ...
 
     if __name__ == "__main__":
         run_job("my_etl_job", main)
 
-The harness reads --run-id and --drop-dir from sys.argv automatically.
+The harness reads --run-key and --drop-dir from sys.argv automatically.
 Override via explicit arguments or env vars for testing.
 
 Environment variables (all optional):
-    DISPATCHIO_RUN_ID      fallback if --run-id not in argv
-    DISPATCHIO_DROP_DIR    fallback if --drop-dir not in argv (filesystem reporter)
-    DISPATCHIO_ATTEMPT     attempt number injected by executor (Phase 2)
-    DISPATCHIO_ATTEMPT_ID  attempt UUID injected by executor (Phase 2)
+    DISPATCHIO_RUN_KEY          fallback if --run-key not in argv
+    DISPATCHIO_DROP_DIR         fallback if --drop-dir not in argv (filesystem reporter)
+    DISPATCHIO_CORRELATION_ID   attempt UUID injected by executor
 """
 
 from __future__ import annotations
@@ -56,7 +55,7 @@ from typing import Any
 from uuid import UUID
 
 from dispatchio.models import Status
-from dispatchio.worker.reporter.base import Reporter
+from dispatchio.worker.reporter.base import BaseReporter
 from dispatchio.worker.reporter.filesystem import FilesystemReporter
 
 logger = logging.getLogger(__name__)
@@ -68,7 +67,7 @@ logger = logging.getLogger(__name__)
 
 
 def _arg_from_argv(flag: str) -> str | None:
-    """Extract the value after `flag` in sys.argv, e.g. --run-id 20250115."""
+    """Extract the value after `flag` in sys.argv, e.g. --run-key 20250115."""
     argv = sys.argv
     try:
         idx = argv.index(flag)
@@ -77,17 +76,19 @@ def _arg_from_argv(flag: str) -> str | None:
         return None
 
 
-def _resolve_run_id(run_id: str | None) -> str:
-    value = run_id or _arg_from_argv("--run-id") or os.environ.get("DISPATCHIO_RUN_ID")
+def _resolve_run_key(run_key: str | None) -> str:
+    value = (
+        run_key or _arg_from_argv("--run-key") or os.environ.get("DISPATCHIO_RUN_KEY")
+    )
     if not value:
         raise RuntimeError(
-            "run_id is required. Pass it explicitly to run_job(), "
-            "via --run-id in argv, or via DISPATCHIO_RUN_ID env var."
+            "run_key is required. Pass it explicitly to run_job(), "
+            "via --run-key in argv, or via DISPATCHIO_RUN_KEY env var."
         )
     return value
 
 
-def _resolve_reporter(reporter: Reporter | None) -> Reporter | None:
+def _resolve_reporter(reporter: BaseReporter | None) -> BaseReporter | None:
     """
     Auto-detect a reporter if none is provided.
     Returns None (with a warning) if no reporter can be configured —
@@ -118,7 +119,7 @@ def _resolve_reporter(reporter: Reporter | None) -> Reporter | None:
             )
 
     logger.warning(
-        "No reporter configured. Completion events will NOT be sent to Dispatchio. "
+        "No reporter configured. Status events will NOT be sent to Dispatchio. "
         "Pass a reporter to run_job(), use --drop-dir, or set DISPATCHIO_DROP_DIR."
     )
     return None
@@ -182,8 +183,8 @@ def run_job(
     job_name: str,
     fn: Callable[..., None],
     *,
-    run_id: str | None = None,
-    reporter: Reporter | None = None,
+    run_key: str | None = None,
+    reporter: BaseReporter | None = None,
     metadata_fn: Callable[[], dict[str, Any]] | None = None,
 ) -> None:
     """
@@ -195,10 +196,10 @@ def run_job(
     Args:
         job_name:           Must match the Job name exactly.
         fn:                 The job function. Declare parameters by name to
-                            receive context values (run_id, job_name). Raise
+                            receive context values (run_key, job_name). Raise
                             any exception to signal failure.
-        run_id:             The run_id for this execution. If None, resolved
-                            from --run-id argv or DISPATCHIO_RUN_ID env var.
+        run_key:        The run_key for this execution. If None, resolved
+                            from --run-key argv or DISPATCHIO_RUN_KEY env var.
         reporter:           How to send completion events back to Dispatchio.
                             Defaults to FilesystemReporter if --drop-dir or
                             DISPATCHIO_DROP_DIR is set, otherwise a warning is
@@ -207,71 +208,57 @@ def run_job(
                             attach to the DONE event. Called after fn() returns
                             successfully.
     """
-    resolved_run_id = _resolve_run_id(run_id)
+    resolved_run_key = _resolve_run_key(run_key)
     resolved_reporter = _resolve_reporter(reporter)
 
     # Phase 2: read attempt identity injected by executor env vars
-    attempt_id_str = os.environ.get("DISPATCHIO_ATTEMPT_ID")
-    attempt_str = os.environ.get("DISPATCHIO_ATTEMPT")
-    dispatchio_attempt_id: UUID | None = None
-    attempt_number: int | None = None
-    if attempt_id_str:
+    correlation_id_str = os.environ.get("DISPATCHIO_CORRELATION_ID")
+    correlation_id: UUID | None = None
+    if correlation_id_str:
         try:
-            dispatchio_attempt_id = UUID(attempt_id_str)
+            correlation_id = UUID(correlation_id_str)
         except ValueError:
-            logger.warning("Invalid DISPATCHIO_ATTEMPT_ID: %r", attempt_id_str)
-    if attempt_str:
-        try:
-            attempt_number = int(attempt_str)
-        except ValueError:
-            logger.warning("Invalid DISPATCHIO_ATTEMPT: %r", attempt_str)
+            logger.warning("Invalid DISPATCHIO_CORRELATION_ID: %r", correlation_id_str)
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-    )
-    logger.info("Starting job=%s run_id=%s", job_name, resolved_run_id)
+    logger.info("Starting job=%s run_key=%s", job_name, resolved_run_key)
 
-    context: dict[str, Any] = {"run_id": resolved_run_id, "job_name": job_name}
+    context: dict[str, Any] = {
+        "run_key": resolved_run_key,
+        "job_name": job_name,
+    }
 
     try:
         _call_fn(fn, context)
 
         metadata = metadata_fn() if metadata_fn else {}
         logger.info(
-            "Job completed successfully: job=%s run_id=%s", job_name, resolved_run_id
+            "Job completed successfully: job=%s run_key=%s",
+            job_name,
+            resolved_run_key,
         )
 
         if resolved_reporter is not None:
             resolved_reporter.report(
-                job_name,
-                resolved_run_id,
-                Status.DONE,
+                correlation_id=correlation_id,
+                status=Status.DONE,
                 metadata=metadata,
-                logical_run_id=resolved_run_id,
-                attempt=attempt_number,
-                dispatchio_attempt_id=dispatchio_attempt_id,
             )
 
     except Exception as exc:
-        error_reason = f"{type(exc).__name__}: {exc}"
+        reason = f"{type(exc).__name__}: {exc}"
         logger.error(
-            "Job failed: job=%s run_id=%s error=%s",
+            "Job failed: job=%s run_key=%s reason=%s",
             job_name,
-            resolved_run_id,
-            error_reason,
+            resolved_run_key,
+            reason,
         )
         logger.debug("Traceback:", exc_info=True)
 
         if resolved_reporter is not None:
             resolved_reporter.report(
-                job_name,
-                resolved_run_id,
-                Status.ERROR,
-                error_reason=error_reason,
-                logical_run_id=resolved_run_id,
-                attempt=attempt_number,
-                dispatchio_attempt_id=dispatchio_attempt_id,
+                correlation_id=correlation_id,
+                status=Status.ERROR,
+                reason=reason,
             )
 
         sys.exit(1)

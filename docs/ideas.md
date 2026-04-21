@@ -1,7 +1,9 @@
 # Suggested features - developer
 
-dependency state caching
+job renames
+other renames
 
+dependency state caching
 
 tick log in database ?
 
@@ -14,7 +16,21 @@ superbatch?
 
 perf tests?
 
-typer?
+8. Calendar-aware scheduling
+Why: Business calendars are a frequent need in finance and ops.
+Include:
+- Holiday calendars, market/business-day policies, timezone-aware windows.
+- “Nth business day” and “last business day” conditions.
+Impact: Medium. Effort: Medium.
+
+10. Lightweight web console (read-first)
+Why: Improves usability for operators without replacing CLI.
+Include:
+- Tick timeline, DAG state view, attempt history, manual retry/cancel actions.
+- Start read-only, then add guarded mutation actions.
+Impact: Medium. Effort: High.
+
+
 
 # Suggested features - copilot
 
@@ -37,6 +53,7 @@ Include:
 Impact: High. Effort: Medium.
 
 3. Concurrency, pools, and rate-limiting controls
+============== DONE ===================
 Why: Critical for protecting downstream systems.
 Include:
 - Global max active jobs.

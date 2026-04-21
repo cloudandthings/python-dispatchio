@@ -66,10 +66,10 @@ def print_info(message: str) -> None:
 
 
 def print_retry_plan(
-    run_id: str, jobs_with_attempts: list[tuple[str, int]], *, dry_run: bool
+    run_key: str, jobs_with_attempts: list[tuple[str, int]], *, dry_run: bool
 ) -> None:
     prefix = "[dry-run] Would retry" if dry_run else "Retrying"
-    print_info(f"{prefix} {len(jobs_with_attempts)} job(s) for run {run_id}:")
+    print_info(f"{prefix} {len(jobs_with_attempts)} job(s) for run {run_key}:")
     for job_name, attempt in jobs_with_attempts:
         print_info(f"  {job_name}  attempt={attempt}")
 
@@ -97,7 +97,7 @@ def print_graph_summary(
 def print_records(records: list[AttemptRecord]) -> None:
     table = Table(show_header=True, header_style="bold")
     table.add_column("JOB")
-    table.add_column("RUN_ID")
+    table.add_column("RUN_KEY")
     table.add_column("STATUS")
     table.add_column("ATTEMPT", justify="right")
     table.add_column("COMPLETED")
@@ -108,7 +108,7 @@ def print_records(records: list[AttemptRecord]) -> None:
         completed = record.completed_at.isoformat() if record.completed_at else "-"
         table.add_row(
             record.job_name,
-            record.logical_run_id,
+            record.run_key,
             f"[{status_colour}]{status_value}[/{status_colour}]",
             str(record.attempt),
             completed,
@@ -129,7 +129,7 @@ def print_tick_result(result: TickResult) -> None:
         action = item.action.value
         icon = _ACTION_ICONS.get(action, "?")
         colour = _STATUS_COLOURS.get(action, "white")
-        line = Text(f"{icon} {item.job_name}[{item.run_id}] -> {action}", style=colour)
+        line = Text(f"{icon} {item.job_name}[{item.run_key}] -> {action}", style=colour)
         if item.detail:
             line.append(f"  {item.detail}")
         lines.append(line)
@@ -163,24 +163,24 @@ def print_tick_summary(record: TickLogRecord, *, detail: bool = False) -> None:
         action_name = str(action.get("action", ""))
         icon = _ACTION_ICONS.get(action_name, "?")
         job_name = action.get("job_name", "?")
-        run_id = action.get("run_id", "?")
+        run_key = action.get("run_key", "?")
         action_detail = action.get("detail", "")
         suffix = f"  {action_detail}" if action_detail else ""
-        console.print(f"  {icon} {job_name}[{run_id}] -> {action_name}{suffix}")
+        console.print(f"  {icon} {job_name}[{run_key}] -> {action_name}{suffix}")
 
 
 def print_retry_requests(requests: list[RetryRequest]) -> None:
     table = Table(show_header=True, header_style="bold")
     table.add_column("REQUESTED_AT")
     table.add_column("BY")
-    table.add_column("RUN_ID")
+    table.add_column("RUN_KEY")
     table.add_column("JOBS")
 
     for request in requests:
         table.add_row(
             request.requested_at.isoformat(),
             request.requested_by,
-            request.logical_run_id,
+            request.run_key,
             ", ".join(request.selected_jobs),
         )
 

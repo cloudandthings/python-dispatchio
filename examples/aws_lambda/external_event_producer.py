@@ -13,22 +13,22 @@ from __future__ import annotations
 
 import argparse
 
-from dispatchio.completion import report_external_done
+from dispatchio.reporter import report_external_done
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("run_id", help="Run ID in the expected cadence format")
+    parser.add_argument("run_key", help="Run key in the expected cadence format")
     args = parser.parse_args()
 
     report_external_done(
         event_name="event.user_registered",
-        run_id=args.run_id,
+        run_key=args.run_key,
         metadata={"source": "identity-service"},
     )
     report_external_done(
         event_name="event.kyc_passed",
-        run_id=args.run_id,
+        run_key=args.run_key,
         metadata={"source": "compliance-service"},
     )
 

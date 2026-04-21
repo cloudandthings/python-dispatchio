@@ -305,13 +305,13 @@ tick's reference time using an expression.
 
 | Expression | Resolves to (ref = 2025-01-15 09:30) |
 |---|---|
-| `day0` | `20250115` (today) |
-| `day1` | `20250114` (yesterday) |
-| `day3` | `20250112` (3 days ago) |
-| `mon0` | `202501` (current month) |
-| `mon1` | `202412` (previous month) |
-| `week0` | `20250113` (Monday of current week) |
-| `hour0` | `2025011509` (current hour) |
+| `day0` | `D20250115` (today) |
+| `day1` | `D20250114` (yesterday) |
+| `day3` | `D20250112` (3 days ago) |
+| `mon0` | `M202501` (current month) |
+| `mon1` | `M202412` (previous month) |
+| `week0` | `W20250113` (Monday of current week) |
+| `hour0` | `H2025011509` (current hour) |
 | `my-id` | `my-id` (literal — for ad-hoc runs) |
 
 The same expression system is used in dependencies, so cross-job temporal
@@ -385,7 +385,7 @@ The orchestrator exposes manual retry/cancel operations with audit metadata:
 ```python
 new_attempt = orchestrator.manual_retry(
     job_name="ingest",
-    logical_run_id="20260418",
+    job_run_key="D20260418",
     operator_name="oncall-alice",
     operator_reason="upstream partition repaired",
 )
@@ -400,7 +400,7 @@ cancelled = orchestrator.manual_cancel(
 Inspect immutable attempt history (including trigger metadata):
 
 ```python
-for a in orchestrator.state.list_attempts(job_name="ingest", logical_run_id="20260418"):
+for a in orchestrator.state.list_attempts(job_name="ingest", job_run_key="D20260418"):
     print(a.attempt, a.status.value, a.trigger_type.value, a.trigger_reason)
 ```
 
@@ -446,7 +446,7 @@ The following variables are interpolated into executor `command` strings and HTT
 
 | Variable | Value |
 |---|---|
-| `{run_id}` | Resolved run_id for this job (e.g. `20250115`) |
+| `{run_id}` | Resolved run_id for this job (e.g. `D20250115`) |
 | `{job_name}` | The job's name |
 | `{reference_time}` | ISO-8601 reference datetime of the tick |
 
@@ -667,7 +667,7 @@ Show the status of job runs.
 ```bash
 dispatchio status
 dispatchio status --job ingest
-dispatchio status --job ingest --run-id 20250115
+dispatchio status --job ingest --job-run-key D20250115
 dispatchio status --status error
 ```
 
@@ -677,8 +677,8 @@ Manually override a run record. Useful to unblock a stuck job or mark a
 completed job as done when the completion event was lost.
 
 ```bash
-dispatchio record set ingest 20250115 done
-dispatchio record set ingest 20250115 error --reason "manual reset"
+dispatchio record set ingest D20250115 done
+dispatchio record set ingest D20250115 error --reason "manual reset"
 ```
 
 ---
@@ -746,7 +746,7 @@ def ingest(run_id: str) -> None:
 from my_work import ingest
 
 def test_ingest():
-    ingest("20250115")  # call it like any function
+    ingest("D20250115")  # call it like any function
     # assert expected results
 ```
 
@@ -770,7 +770,7 @@ def test_dependencies():
     )
 
     # Seed state with preconditions
-    state.put(RunRecord(job_name="upstream", run_id="20250115", status=Status.DONE))
+    state.put(RunRecord(job_name="upstream", run_id="D20250115", status=Status.DONE))
 
     # Tick and verify downstream is submitted
     result = orchestrator.tick()

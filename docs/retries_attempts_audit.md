@@ -4,7 +4,7 @@ This guide is for operators who need to inspect attempt history, trigger manual 
 
 ## Core model
 
-For each `(job_name, logical_run_id)`, Dispatchio stores immutable attempt records:
+For each `(job_name, job_run_key)`, Dispatchio stores immutable attempt records:
 
 - `attempt`: 0, 1, 2, ...
 - `dispatchio_attempt_id`: UUID for exact correlation
@@ -19,12 +19,12 @@ Use attempt history (not just latest status) when debugging incidents.
 ```python
 attempts = orchestrator.state.list_attempts(
     job_name="ingest",
-    logical_run_id="20260418",
+    job_run_key="D20260418",
 )
 for a in attempts:
     print(
         a.job_name,
-        a.logical_run_id,
+        a.job_run_key,
         a.attempt,
         a.status.value,
         a.trigger_type.value,
@@ -40,7 +40,7 @@ Manual retry creates the next attempt for a terminal job attempt.
 ```python
 new_attempt = orchestrator.manual_retry(
     job_name="ingest",
-    logical_run_id="20260418",
+    job_run_key="D20260418",
     operator_name="oncall-alice",
     operator_reason="upstream partition repaired",
 )
@@ -82,7 +82,7 @@ Inspect dead letters:
 ```python
 dead_letters = orchestrator.state.list_dead_letters()
 for d in dead_letters:
-    print(d.reason_code.value, d.job_name, d.logical_run_id, d.dispatchio_attempt_id)
+    print(d.reason_code.value, d.job_name, d.job_run_key, d.dispatchio_attempt_id)
 ```
 
 ## What to look for during incidents

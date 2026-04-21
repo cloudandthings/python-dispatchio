@@ -7,7 +7,7 @@ from typing import Any, ParamSpec, TypeVar
 from beartype import beartype
 
 from dispatchio.worker.harness import run_job
-from dispatchio.worker.reporter.base import Reporter
+from dispatchio.worker.reporter.base import BaseReporter
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -18,12 +18,12 @@ def dispatchio_handler(
     fn: Callable[P, R] | None = None,
     *,
     job_name: str | None = None,
-    reporter: Reporter | None = None,
+    reporter: BaseReporter | None = None,
 ) -> Callable[..., dict[str, Any]]:
     """
     Decorator for Lambda functions that should report completion to dispatchio.
 
-    The wrapped lambda function expects an event containing run_id and receives
+    The wrapped lambda function expects an event containing run_key and receives
     context injection through dispatchio.run_job.
     """
 
@@ -32,9 +32,9 @@ def dispatchio_handler(
 
         @functools.wraps(target)
         def _wrapped(event: dict[str, Any], context: Any) -> dict[str, Any]:
-            run_id = event.get("run_id")
-            if not run_id:
-                raise ValueError("Lambda event must include 'run_id'")
+            run_key = event.get("run_key")
+            if not run_key:
+                raise ValueError("Lambda event must include 'run_key'")
 
             def _invoke(**kwargs: Any) -> None:
                 target(**kwargs)
@@ -42,10 +42,14 @@ def dispatchio_handler(
             run_job(
                 resolved_job_name,
                 _invoke,
-                run_id=run_id,
+                run_key=run_key,
                 reporter=reporter,
             )
-            return {"status": "ok", "job_name": resolved_job_name, "run_id": run_id}
+            return {
+                "status": "ok",
+                "job_name": resolved_job_name,
+                "run_key": run_key,
+            }
 
         return _wrapped
 

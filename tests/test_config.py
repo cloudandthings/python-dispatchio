@@ -42,7 +42,7 @@ def _toml(content: str, path: Path) -> Path:
 def simple_job():
     return Job(
         name="j",
-        executor=SubprocessJob(command=["echo", "{run_id}"]),
+        executor=SubprocessJob(command=["echo", "{run_key}"]),
     )
 
 
@@ -63,8 +63,7 @@ class TestDefaultSettings:
 
     def test_receiver_backend_default(self):
         s = DispatchioSettings()
-        assert s.receiver.backend == "filesystem"
-        assert s.receiver.drop_dir == ".dispatchio/completions"
+        assert s.receiver.backend == "none"
 
     def test_admission_defaults(self):
         s = DispatchioSettings()

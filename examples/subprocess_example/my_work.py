@@ -14,7 +14,7 @@ use get_reporter() for explicit control:
 
     from dispatchio.completion import get_reporter
     reporter = get_reporter("my_job")
-    reporter.report_success(run_id, metadata={"items": 100})
+    reporter.report_success(run_key, metadata={"items": 100})
 
 Usage (dispatched by SubprocessJob in jobs.py):
     python my_work.py generate
@@ -26,16 +26,16 @@ import sys
 from dispatchio.worker.harness import run_job
 
 
-def generate(run_id: str) -> None:
+def generate(run_key: str) -> None:
     """Simulate generating data — always succeeds."""
     items = list(range(10))
-    print(f"Generated {len(items)} items for run_id={run_id}")
+    print(f"Generated {len(items)} items for run_key={run_key}")
     # run_job() automatically reports success with metadata
 
 
-def summarize(run_id: str) -> None:
+def summarize(run_key: str) -> None:
     """Deliberately fail to demonstrate error handling and retries."""
-    print(f"Attempting to summarize {run_id}...")
+    print(f"Attempting to summarize {run_key}...")
     raise RuntimeError("Data source unavailable — demonstrating error handling")
     # run_job() automatically reports error and raises SystemExit(1)
 

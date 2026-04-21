@@ -77,17 +77,17 @@ class StateSettings(BaseModel):
 
 class ReceiverSettings(BaseModel):
     """
-    Completion event receiver configuration.
+    Status event receiver configuration.
 
     backend="filesystem"  — file-drop directory polled each tick; matches FilesystemReporter.
     backend="sqs"         — AWS SQS queue; requires dispatchio[aws].
     backend="none"        — no receiver; jobs must write directly to the state store.
     """
 
-    backend: Literal["filesystem", "sqs", "none"] = "filesystem"
+    backend: Literal["filesystem", "sqs", "none"] = "none"
 
     # filesystem
-    drop_dir: str = ".dispatchio/completions"
+    drop_dir: str | None = None
 
     # sqs (dispatchio[aws])
     queue_url: str | None = None

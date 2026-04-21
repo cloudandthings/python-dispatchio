@@ -8,14 +8,14 @@ import boto3
 from beartype import beartype
 from botocore.client import BaseClient
 
-from dispatchio.receiver.base import CompletionEvent
+from dispatchio.receiver.base import StatusEvent
 
 logger = logging.getLogger(__name__)
 
 
 @beartype
 class SQSReceiver:
-    """Poll completion events from SQS and convert them to CompletionEvent objects."""
+    """Poll completion events from SQS and convert them to StatusEvent objects."""
 
     def __init__(
         self,
@@ -33,8 +33,8 @@ class SQSReceiver:
         self._max_batch_size = max(1, min(max_batch_size, 10))
         self._client = client or boto3.client("sqs", region_name=region)
 
-    def drain(self) -> list[CompletionEvent]:
-        events: list[CompletionEvent] = []
+    def drain(self) -> list[StatusEvent]:
+        events: list[StatusEvent] = []
 
         while True:
             messages = self._receive_messages()
@@ -52,7 +52,7 @@ class SQSReceiver:
                 raw_body = message.get("Body", "")
                 try:
                     payload: Any = json.loads(raw_body)
-                    event = CompletionEvent.model_validate(payload)
+                    event = StatusEvent.model_validate(payload)
                     events.append(event)
                 except Exception as exc:
                     logger.warning("Skipping malformed SQS completion message: %s", exc)

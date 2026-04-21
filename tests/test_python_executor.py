@@ -10,9 +10,9 @@ from dispatchio.models import AttemptRecord, Job, PythonJob, Status, TriggerType
 def _make_attempt() -> AttemptRecord:
     return AttemptRecord(
         job_name="job_a",
-        logical_run_id="20250115",
+        run_key="20250115",
         attempt=0,
-        dispatchio_attempt_id=uuid4(),
+        correlation_id=uuid4(),
         status=Status.SUBMITTED,
         trigger_type=TriggerType.SCHEDULED,
         trace={},

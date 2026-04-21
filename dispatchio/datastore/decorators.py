@@ -27,8 +27,8 @@ def dispatchio_write_results(
     """
     Decorator that writes the wrapped function's return value to DataStore.
 
-    The store is resolved via get_data_store(), so job and run_id can be
-    sourced from worker env vars (DISPATCHIO_JOB_NAME / DISPATCHIO_RUN_ID).
+    The store is resolved via get_data_store(), so job and run_key can be
+    sourced from worker env vars (DISPATCHIO_JOB_NAME / DISPATCHIO_RUN_KEY).
 
     Args:
         fn: Optional function for bare decorator usage.
@@ -71,7 +71,7 @@ def dispatchio_read_results(
     param: str,
     job: str,
     key: str = "return_value",
-    run_id: str | None = None,
+    run_key: str | None = None,
     namespace: str | None = None,
     strict: bool = True,
 ) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
@@ -86,7 +86,7 @@ def dispatchio_read_results(
         param: Parameter name to inject.
         job: Producer job name to read from.
         key: DataStore key to read.
-        run_id: Optional run_id override. If omitted, resolved from env.
+        run_key: Optional run_key override. If omitted, resolved from env.
         namespace: Optional DataStore namespace override.
         strict: When True, DataStore errors are raised. When False, DataStore
             errors are logged and ignored; injected value becomes None.
@@ -111,7 +111,7 @@ def dispatchio_read_results(
                     from dispatchio.datastore import get_data_store
 
                     store = get_data_store(namespace=namespace)
-                    value = store.read(job=job, run_id=run_id, key=key)
+                    value = store.read(job=job, run_key=run_key, key=key)
                 except Exception:
                     if strict:
                         raise

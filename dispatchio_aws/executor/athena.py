@@ -22,9 +22,7 @@ class AthenaExecutor:
         client: BaseClient | None = None,
     ) -> None:
         self._client = client or boto3.client("athena", region_name=region)
-        self._references: dict[
-            str, dict[str, Any]
-        ] = {}  # keyed by str(dispatchio_attempt_id)
+        self._references: dict[str, dict[str, Any]] = {}  # keyed by str(correlation_id)
 
     def submit(
         self,
@@ -46,7 +44,7 @@ class AthenaExecutor:
             WorkGroup=cfg.workgroup,
         )
         query_execution_id = response["QueryExecutionId"]
-        self._references[str(attempt.dispatchio_attempt_id)] = {
+        self._references[str(attempt.correlation_id)] = {
             "query_execution_id": query_execution_id,
             "workgroup": cfg.workgroup,
         }
@@ -67,7 +65,5 @@ class AthenaExecutor:
             return Status.DONE
         return Status.ERROR
 
-    def get_executor_reference(
-        self, dispatchio_attempt_id: UUID
-    ) -> dict[str, Any] | None:
-        return self._references.get(str(dispatchio_attempt_id))
+    def get_executor_reference(self, correlation_id: UUID) -> dict[str, Any] | None:
+        return self._references.get(str(correlation_id))

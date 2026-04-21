@@ -14,29 +14,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
-from dispatchio import FilesystemReceiver, Status  # noqa: E402
-from dispatchio.receiver.base import CompletionEvent  # noqa: E402
+from dispatchio.events import emit_event  # noqa: E402
 from examples.event_dependencies.jobs import orchestrator  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
-
-
-def _emit_external_event(event_name: str, run_id: str) -> None:
-    receiver = orchestrator.receiver
-    if not isinstance(receiver, FilesystemReceiver):
-        raise RuntimeError(
-            "This demo expects a filesystem receiver so it can emit local events."
-        )
-
-    receiver.emit(
-        CompletionEvent(
-            job_name=event_name,
-            run_id=run_id,
-            status=Status.DONE,
-            metadata={"source": "external_demo"},
-        )
-    )
 
 
 def _tick(label: str, reference_time: datetime) -> list[tuple[str, str]]:
@@ -57,9 +39,9 @@ def _submitted(rows: list[tuple[str, str]], job_name: str) -> bool:
     )
 
 
-def _log_attempts(run_id: str) -> None:
-    attempts = orchestrator.state.list_attempts(logical_run_id=run_id)
-    log.info("Attempt history for logical_run_id=%s", run_id)
+def _log_attempts(run_key: str) -> None:
+    attempts = orchestrator.state.list_attempts(run_key=run_key)
+    log.info("Attempt history for run_key=%s", run_key)
     for record in attempts:
         log.info(
             "  %s attempt=%d status=%s trigger=%s reason=%s",
@@ -73,7 +55,7 @@ def _log_attempts(run_id: str) -> None:
 
 if __name__ == "__main__":
     reference_time = datetime(2025, 1, 15, 9, 0, tzinfo=timezone.utc)
-    run_id = reference_time.strftime("%Y%m%d")
+    run_key = f"D{reference_time.strftime('%Y%m%d')}"
 
     # Tick 1: nothing submitted yet (no events received).
     tick1 = _tick("Tick 1 - no events", reference_time)
@@ -81,7 +63,7 @@ if __name__ == "__main__":
     assert not _submitted(tick1, "activate_paid_features")
 
     # Emit one event.
-    _emit_external_event("event.user_registered", run_id)
+    emit_event("user_registered", run_key)
 
     # Tick 2: single-event job is now unblocked; two-event job is still waiting.
     tick2 = _tick("Tick 2 - event.user_registered received", reference_time)
@@ -89,12 +71,12 @@ if __name__ == "__main__":
     assert not _submitted(tick2, "activate_paid_features")
 
     # Emit the second event required by the fan-in job.
-    _emit_external_event("event.kyc_passed", run_id)
+    emit_event("kyc_passed", run_key)
 
     # Tick 3: two-event dependency fan-in is now satisfied.
     tick3 = _tick("Tick 3 - event.kyc_passed received", reference_time)
     assert _submitted(tick3, "activate_paid_features")
 
-    _log_attempts(run_id)
+    _log_attempts(run_key)
 
     log.info("Event dependency demo completed successfully")

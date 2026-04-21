@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime, time
 from enum import Enum
 from typing import Annotated, Any, Literal
+from collections.abc import Sequence
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -73,9 +74,8 @@ class DeadLetterReasonCode(str, Enum):
         "validation_failure"  # payload missing required fields or invalid schema
     )
     CORRELATION_FAILURE = (
-        "correlation_failure"  # dispatchio_attempt_id + identity fields do not resolve
+        "correlation_failure"  # correlation_id + identity fields do not resolve
     )
-    CONFLICT_FAILURE = "conflict_failure"  # duplicate dispatchio_attempt_id with incompatible terminal update
     POLICY_REJECT = "policy_reject"  # invalid state transition or other orchestration rule violation
 
 
@@ -121,21 +121,21 @@ class DependencyMode(str, Enum):
 
 class AttemptRecord(BaseModel):
     """
-    A single immutable execution instance (attempt) of a job for a given logical_run_id.
+    A single immutable execution instance (attempt) of a job for a given run_key.
     This is the unit stored in the run_attempts table.
 
-    One logical run (e.g., a daily schedule) can have multiple attempts due to
+    One job run (e.g., a daily schedule) can have multiple attempts due to
     retries. Attempts are numbered sequentially starting at 0.
 
-    Phase 3: Operator context fields track manual operations (retry, cancel).
+    Operator context fields track manual operations (retry, cancel).
     """
 
     job_name: str
-    logical_run_id: str  # e.g. "20250115", "202501", "2025011502"
+    run_key: str  # e.g. "20250115", "202501", "2025011502"
     attempt: int  # 0-indexed; incremented for each retry/re-execution
-    dispatchio_attempt_id: UUID  # opaque UUID; primary correlation key
+    correlation_id: UUID  # opaque UUID; primary correlation key
     status: Status
-    reason: str | None = None  # terminal state reason (all terminal states)
+    reason: str | None = None  # status reason
     submitted_at: datetime | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
@@ -145,8 +145,8 @@ class AttemptRecord(BaseModel):
     completion_event_trace: dict[str, Any] | None = (
         None  # raw completion payload snapshot
     )
-    # Phase 3: Operator context for manual operations
-    operator_name: str | None = None  # who initiated manual operation (audit)
+    # Operator context for manual operations
+    requested_by: str | None = None  # who initiated manual operation (audit)
 
     def is_finished(self) -> bool:
         return self.status in Status.finished()
@@ -175,10 +175,10 @@ class DeadLetterRecord(BaseModel):
     reason_detail: str | None = None
     status: DeadLetterStatus = DeadLetterStatus.OPEN
     # Event identity fields (attempted correlation)
-    job_name: str
-    logical_run_id: str | None = None
+    job_name: str | None = None
+    run_key: str | None = None
     attempt: int | None = None
-    dispatchio_attempt_id: UUID | None = None
+    correlation_id: UUID | None = None
     # Raw event payload for audit
     raw_payload: dict[str, Any] = Field(default_factory=dict)
     # Resolution tracking
@@ -203,7 +203,7 @@ class RetryRequest(BaseModel):
     retry_request_id: UUID = Field(default_factory=uuid4)
     requested_at: datetime
     requested_by: str
-    logical_run_id: str
+    run_key: str
     requested_jobs: list[str] = Field(default_factory=list)
     cascade: bool = True
     reason: str | None = None
@@ -216,38 +216,68 @@ class RetryRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class Dependency(BaseModel):
+class JobDependency(BaseModel):
     """
     Declares that a job depends on another job reaching a given status
-    for a particular run_id (resolved from a Cadence at tick time).
+    for a particular run_key (resolved from a Cadence at tick time).
 
     Examples:
-        Dependency(job_name="ingest", cadence=DAILY)
+        JobDependency(job_name="ingest", cadence=DAILY)
             -> wait for 'ingest' to be DONE for today
 
-        Dependency(job_name="monthly_load", cadence=MONTHLY)
+        JobDependency(job_name="monthly_load", cadence=MONTHLY)
             -> wait for 'monthly_load' to be DONE for current month
 
-        Dependency(job_name="ingest", cadence=DateCadence(frequency=Frequency.DAILY, offset=-3))
+        JobDependency(job_name="ingest", cadence=DateCadence(frequency=Frequency.DAILY, offset=-3))
             -> wait for 'ingest' to be DONE for 3 days ago
     """
 
+    kind: Literal["job"] = "job"
     job_name: str
     cadence: Cadence | None = None
     required_status: Status = Status.DONE
 
     @classmethod
-    def from_job(cls, job: Job, required_status: Status = Status.DONE) -> Dependency:
+    def from_job(cls, job: Job, required_status: Status = Status.DONE) -> JobDependency:
         """
-        Create a Dependency from a Job, inheriting its cadence.
+        Create a JobDependency from a Job, inheriting its cadence.
 
         Example:
-             dep = Dependency.from_job(ingest)
+             dep = JobDependency.from_job(ingest)
              -> wait for 'ingest' to be DONE for the same cadence as this job
         """
         return cls(
             job_name=job.name, cadence=job.cadence, required_status=required_status
         )
+
+
+class EventDependency(BaseModel):
+    """
+    TODO
+    """
+
+    kind: Literal["event"] = "event"
+    event_name: str
+    cadence: Cadence | None = None
+    required_status: Status = Status.DONE
+
+
+Dependency = Annotated[JobDependency | EventDependency, Field(discriminator="kind")]
+
+# ---------------------------------------------------------------------------
+# Event
+# ---------------------------------------------------------------------------
+
+
+class Event(BaseModel):
+    name: str
+    run_key: str
+    status: Status = Status.DONE
+    occurred_at: datetime = Field(default_factory=datetime.now)
+    trace: dict[str, Any] = Field(default_factory=dict)
+
+    def is_finished(self) -> bool:
+        return self.status in Status.finished()
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +371,7 @@ class SubprocessJob(BaseModel):
     type: Literal["subprocess"] = "subprocess"
     command: list[str]
     env: dict[str, str] = Field(default_factory=dict)
-    # {run_id}, {job_name}, {reference_time} are interpolated into command strings
+    # {run_key}, {job_name}, {reference_time} are interpolated into command strings
 
 
 class HttpJob(BaseModel):
@@ -352,7 +382,7 @@ class HttpJob(BaseModel):
     method: str = "POST"
     headers: dict[str, str] = Field(default_factory=dict)
     body: dict[str, Any] = Field(default_factory=dict)
-    # {run_id}, {job_name}, {reference_time} interpolated into url and body values
+    # {run_key}, {job_name}, {reference_time} interpolated into url and body values
 
 
 class PythonJob(BaseModel):
@@ -363,7 +393,7 @@ class PythonJob(BaseModel):
             entry_point="mypackage.jobs:run_ingest"  — runs via `dispatchio run`
             script="/abs/path/worker.py", function="run_ingest"  — runs via `dispatchio run-script`
 
-    Run ID and reporter are injected as env vars (DISPATCHIO_RUN_ID, DISPATCHIO_DROP_DIR)
+    Run key and reporter are injected as env vars (DISPATCHIO_RUN_KEY, DISPATCHIO_DROP_DIR)
     by the executor — job functions need no Dispatchio imports.
 
     pythonpath entries are prepended to PYTHONPATH in the spawned subprocess,
@@ -429,10 +459,12 @@ ExecutorConfig = Annotated[
 
 def _normalise_dep(item: Job | Dependency) -> Dependency:
     """Convert anything dep-like to a Dependency."""
-    if isinstance(item, Dependency):
+    if isinstance(item, JobDependency):
         return item
     if isinstance(item, Job):
-        return Dependency.from_job(item)
+        return JobDependency.from_job(item)
+    if isinstance(item, EventDependency):
+        return item
     raise TypeError(f"Cannot convert {item!r} to Dependency.")
 
 
@@ -441,7 +473,7 @@ class Job(BaseModel):
     Declares a job: what it does, when it runs, what it depends on,
     and how errors are handled.
 
-    `cadence` controls how this job's run_id is computed from the tick's
+    `cadence` controls how this job's run_key is computed from the tick's
     reference_time. None means "inherit the orchestrator's default_cadence".
     """
 
@@ -479,9 +511,9 @@ class Job(BaseModel):
                 if item.cadence is None:
                     raise ValueError(
                         f"Job {item.name!r} has cadence=None; set an explicit "
-                        "cadence on it, or use Dependency(...) directly."
+                        "cadence on it, or use JobDependency(...) directly."
                     )
-                result.append(Dependency.from_job(item))
+                result.append(JobDependency.from_job(item))
             else:
                 result.append(item)
         return result
@@ -491,7 +523,7 @@ class Job(BaseModel):
         cls,
         name: str,
         executor: ExecutorConfig,
-        depends_on: list[Job | Dependency] | Dependency | Job | None = None,
+        depends_on: Sequence[Job | Dependency] | Dependency | Job | None = None,
         **kwargs,
     ) -> Job:
         """
@@ -549,7 +581,7 @@ _SKIPPED_ACTIONS: frozenset[JobAction] = frozenset(
 
 class JobTickResult(BaseModel):
     job_name: str
-    run_id: str
+    run_key: str
     pool: str = "default"
     action: JobAction
     detail: str | None = None
@@ -564,3 +596,55 @@ class TickResult(BaseModel):
 
     def skipped(self) -> list[JobTickResult]:
         return [r for r in self.results if r.action in _SKIPPED_ACTIONS]
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator Run Record — first-class run model for backfill and replay
+# ---------------------------------------------------------------------------
+
+
+class OrchestratorRunStatus(str, Enum):
+    """Lifecycle states for an orchestrator run."""
+
+    PENDING = "pending"  # queued, waiting to become active
+    ACTIVE = "active"  # currently being worked on
+    BLOCKED = "blocked"  # paused due to external condition or operator intervention
+    COMPLETED = "completed"  # successfully finished all jobs
+    FAILED = "failed"  # terminated with unrecoverable error
+    CANCELLED = "cancelled"  # explicitly cancelled by operator
+
+
+class OrchestratorRunMode(str, Enum):
+    """Why this orchestrator run was created."""
+
+    SCHEDULED = "scheduled"  # normal wall-clock scheduling
+    BACKFILL = "backfill"  # operator-initiated date range backfill
+    REPLAY = "replay"  # operator-initiated replay of specific run key(s)
+
+
+class OrchestratorRunRecord(BaseModel):
+    """
+    A first-class persisted orchestrator run, the outer unit of scheduling
+    and backfill/replay coordination.
+
+    An orchestrator run encapsulates one scheduling unit and tracks its
+    lifecycle from submission through completion. Job attempts within the run
+    reference the same run_key to derive their per-job run IDs.
+    """
+
+    orchestrator_run_id: UUID = Field(default_factory=uuid4)
+    orchestrator_name: str  # e.g. "myjobs:orchestrator"
+    run_key: str  # identity of this orchestrator run, e.g. "20250115" or "event:12345"
+    status: OrchestratorRunStatus
+    mode: OrchestratorRunMode
+    priority: int = 0  # higher priority runs are activated first when pending
+    submitted_by: str | None = None  # user/system that submitted this run
+    reason: str | None = None  # operator-provided reason (for audit)
+    force: bool = False  # if true, allow re-running an already-completed run
+    replay_group_id: UUID | None = None  # links multiple replay runs submitted together
+    checkpoint: dict[str, Any] = Field(
+        default_factory=dict
+    )  # run-level checkpoint for resume/diagnostics
+    opened_at: datetime
+    activated_at: datetime | None = None
+    closed_at: datetime | None = None

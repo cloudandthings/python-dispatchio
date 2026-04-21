@@ -27,15 +27,15 @@ def test_stepfunctions_completion_handler_posts_to_sqs(monkeypatch, tmp_path) ->
     monkeypatch.setenv("DISPATCHIO_STATE__CONNECTION_STRING", f"sqlite:///{db_path}")
 
     store = SQLAlchemyStateStore(f"sqlite:///{db_path}")
-    attempt_id = uuid4()
+    correlation_id = uuid4()
     execution_arn = (
         "arn:aws:states:eu-west-1:123456789012:execution:my-sfn:ingest--20260418--0"
     )
     record = AttemptRecord(
         job_name="ingest",
-        logical_run_id="20260418",
+        run_key="20260418",
         attempt=0,
-        dispatchio_attempt_id=attempt_id,
+        correlation_id=correlation_id,
         status=Status.RUNNING,
         trigger_type=TriggerType.SCHEDULED,
         trace={
@@ -58,19 +58,16 @@ def test_stepfunctions_completion_handler_posts_to_sqs(monkeypatch, tmp_path) ->
     response = handler(event, None)
     assert response["status"] == "ok"
     assert response["job_name"] == "ingest"
-    assert response["logical_run_id"] == "20260418"
+    assert response["run_key"] == "20260418"
     assert response["attempt"] == 0
-    assert response["dispatchio_attempt_id"] == str(attempt_id)
+    assert response["correlation_id"] == str(correlation_id)
 
     receiver = SQSReceiver(queue_url=queue_url, region="eu-west-1")
     events = receiver.drain()
 
     assert len(events) == 1
-    assert events[0].job_name == "ingest"
-    assert events[0].logical_run_id == "20260418"
     assert events[0].status == Status.DONE
-    assert events[0].attempt == 0
-    assert events[0].dispatchio_attempt_id == attempt_id
+    assert events[0].correlation_id == correlation_id
 
 
 @mock_aws
@@ -90,12 +87,12 @@ def test_athena_completion_handler_resolves_context_from_state(
     monkeypatch.setenv("DISPATCHIO_STATE__CONNECTION_STRING", f"sqlite:///{db_path}")
 
     store = SQLAlchemyStateStore(f"sqlite:///{db_path}")
-    attempt_id = uuid4()
+    correlation_id = uuid4()
     record = AttemptRecord(
         job_name="athena-job",
-        logical_run_id="20260418",
+        run_key="20260418",
         attempt=0,
-        dispatchio_attempt_id=attempt_id,
+        correlation_id=correlation_id,
         status=Status.RUNNING,
         trigger_type=TriggerType.SCHEDULED,
         trace={"executor": {"query_execution_id": "qid-123", "workgroup": "primary"}},
@@ -112,17 +109,11 @@ def test_athena_completion_handler_resolves_context_from_state(
 
     response = handler(event, None)
     assert response["status"] == "ok"
-    assert response["job_name"] == "athena-job"
-    assert response["logical_run_id"] == "20260418"
-    assert response["attempt"] == 0
-    assert response["dispatchio_attempt_id"] == str(attempt_id)
+    assert response["correlation_id"] == str(correlation_id)
 
     receiver = SQSReceiver(queue_url=queue_url, region="eu-west-1")
     events = receiver.drain()
 
     assert len(events) == 1
-    assert events[0].job_name == "athena-job"
-    assert events[0].logical_run_id == "20260418"
     assert events[0].status == Status.DONE
-    assert events[0].attempt == 0
-    assert events[0].dispatchio_attempt_id == attempt_id
+    assert events[0].correlation_id == correlation_id
