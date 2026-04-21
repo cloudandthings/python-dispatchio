@@ -14,7 +14,7 @@ Quick start (local):
         Job(
             name="transform",
             cadence=DAILY,
-            depends_on=[Dependency(job_name="ingest", cadence=DAILY)],
+            depends_on=[JobDependency(job_name="ingest", cadence=DAILY)],
             executor=PythonJob(entry_point="myproject.jobs:run_transform"),
         ),
     ]
@@ -50,14 +50,7 @@ from dispatchio.conditions import (
     MinuteOfHourCondition,
     TimeOfDayCondition,
 )
-from dispatchio.external import (
-    EventDependencySpec,
-    ExternalDependencySpec,
-    event_dependency,
-    external_dependency,
-    validate_event_dependencies,
-    validate_external_dependencies,
-)
+from dispatchio.events import EventDependency, event_dependency
 from dispatchio.models import (
     AdmissionPolicy,
     AthenaJob,
@@ -67,6 +60,7 @@ from dispatchio.models import (
     DependencyMode,
     HttpJob,
     Job,
+    JobDependency,
     LambdaJob,
     PythonJob,
     RetryPolicy,
@@ -77,17 +71,15 @@ from dispatchio.models import (
     TickResult,
 )
 from dispatchio.orchestrator import Orchestrator
-from dispatchio.run_id import resolve_run_id
+from dispatchio.run_key_resolution import resolve_run_key
 from dispatchio.state import SQLAlchemyStateStore
 from dispatchio.executor import SubprocessExecutor, PythonJobExecutor
 from dispatchio.receiver import FilesystemReceiver
 from dispatchio.config import DispatchioSettings, load_config, orchestrator_from_config
-from dispatchio.completion import (
-    CompletionReporter,
+from dispatchio.reporter import (
+    Reporter,
     build_reporter,
     get_reporter,
-    report_external_done,
-    report_external_event,
 )
 from dispatchio.run_loop import run_loop
 from dispatchio.tick_log import FilesystemTickLogStore, TickLogRecord, TickLogStore
@@ -121,16 +113,16 @@ def local_orchestrator(
 ) -> Orchestrator:
     """
     Create an Orchestrator wired for local use with filesystem-backed state,
-    subprocess and python executors, and a file-drop completion receiver.
+    subprocess and python executors, and a file-drop status receiver.
 
     Directory layout under base_dir:
         state/          AttemptRecord JSON files
-        completions/    Completion event drop directory
+        events/         Status event drop directory
         tick_log.jsonl  Append-only tick audit log
 
     Args:
         jobs:               List of Jobs to evaluate each tick.
-        base_dir:           Root directory for state and completions.
+        base_dir:           Root directory for state and status events.
                             Created if it doesn't exist. Defaults to .dispatchio/
         name:               Orchestrator name, used in tick log and context registry.
         data_store:         Optional DataStore for inter-job data passing.
@@ -142,7 +134,7 @@ def local_orchestrator(
     from dispatchio.tick_log import FilesystemTickLogStore
 
     base = Path(base_dir)
-    completions = base / "completions"
+    events = base / "events"
     db_path = base / "dispatchio.db"
     data_env = data_store.worker_env() if data_store is not None else {}
     return Orchestrator(
@@ -152,11 +144,11 @@ def local_orchestrator(
         executors={
             "subprocess": SubprocessExecutor(data_env=data_env),
             "python": PythonJobExecutor(
-                reporter_env={"DISPATCHIO_DROP_DIR": str(completions)},
+                reporter_env={"DISPATCHIO_DROP_DIR": str(events)},
                 data_env=data_env,
             ),
         },
-        receiver=FilesystemReceiver(completions),
+        receiver=FilesystemReceiver(events),
         tick_log=FilesystemTickLogStore(base / "tick_log.jsonl"),
         data_store=data_store,
         **orchestrator_kwargs,
@@ -186,13 +178,9 @@ __all__ = [
     "DayOfWeekCondition",
     "MinuteOfHourCondition",
     "TimeOfDayCondition",
-    # External dependency helpers
-    "EventDependencySpec",
-    "ExternalDependencySpec",
+    # Event dependency helpers
+    "EventDependency",
     "event_dependency",
-    "external_dependency",
-    "validate_event_dependencies",
-    "validate_external_dependencies",
     # Models
     "AthenaJob",
     "AdmissionPolicy",
@@ -202,6 +190,7 @@ __all__ = [
     "DependencyMode",
     "HttpJob",
     "Job",
+    "JobDependency",
     "LambdaJob",
     "PythonJob",
     "RetryPolicy",
@@ -222,14 +211,12 @@ __all__ = [
     "DispatchioSettings",
     "load_config",
     "orchestrator_from_config",
-    # Completion reporters
-    "CompletionReporter",
+    # Reporters
+    "Reporter",
     "get_reporter",
     "build_reporter",
-    "report_external_event",
-    "report_external_done",
     # Utilities
-    "resolve_run_id",
+    "resolve_run_key",
     # Development / demos
     "run_loop",
     # Tick log

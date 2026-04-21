@@ -11,15 +11,13 @@ def build_execution_context(
     """Build the context dict injected into executor payloads.
 
     Includes all Phase 2 attempt identity fields so jobs can report back
-    with the correct dispatchio_attempt_id, logical_run_id, and attempt.
-    The legacy 'run_id' key is preserved as an alias for backward compat.
+    with the correct correlation_id, run_key, and attempt.
     """
     return {
         "job_name": attempt.job_name,
-        "logical_run_id": attempt.logical_run_id,
-        "run_id": attempt.logical_run_id,  # backward compat alias
+        "run_key": attempt.run_key,
         "attempt": str(attempt.attempt),
-        "dispatchio_attempt_id": str(attempt.dispatchio_attempt_id),
+        "correlation_id": str(attempt.correlation_id),
         "reference_time": reference_time_iso,
     }
 

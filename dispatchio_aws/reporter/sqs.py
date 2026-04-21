@@ -10,13 +10,14 @@ from beartype import beartype
 from botocore.client import BaseClient
 
 from dispatchio.models import Status
-from dispatchio.receiver.base import CompletionEvent
+from dispatchio.receiver.base import StatusEvent
+from dispatchio.worker.reporter.base import BaseReporter
 
 logger = logging.getLogger(__name__)
 
 
 @beartype
-class SQSReporter:
+class SQSReporter(BaseReporter):
     """Post completion events to SQS from job workers."""
 
     def __init__(
@@ -31,33 +32,28 @@ class SQSReporter:
 
     def report(
         self,
-        job_name: str,
-        run_id: str,
+        correlation_id: str | UUID,
         status: Status,
         *,
-        error_reason: str | None = None,
+        reason: str | None = None,
         metadata: dict[str, Any] | None = None,
-        logical_run_id: str | None = None,
-        attempt: int | None = None,
-        dispatchio_attempt_id: UUID | None = None,
     ) -> None:
         try:
-            event = CompletionEvent(
-                job_name=job_name,
-                run_id=run_id,
+            uuid = (
+                UUID(correlation_id)
+                if isinstance(correlation_id, str)
+                else correlation_id
+            )
+            event = StatusEvent(
+                correlation_id=uuid,
                 status=status,
-                error_reason=error_reason,
+                reason=reason,
                 metadata=metadata or {},
-                logical_run_id=logical_run_id or run_id,
-                attempt=attempt,
-                dispatchio_attempt_id=dispatchio_attempt_id,
             )
             self._client.send_message(
                 QueueUrl=self._queue_url,
                 MessageBody=json.dumps(event.model_dump(mode="json")),
             )
-            logger.info("Reported %s/%s -> %s via SQS", job_name, run_id, status.value)
+            logger.info("Reported %s -> %s via SQS", correlation_id, status.value)
         except Exception:
-            logger.exception(
-                "SQSReporter failed to post event for %s/%s", job_name, run_id
-            )
+            logger.exception("SQSReporter failed to post event for %s", correlation_id)

@@ -1,13 +1,13 @@
 """
 Filesystem Reporter.
 
-Writes a CompletionEvent JSON file to a drop directory, where the
+Writes a StatusEvent JSON file to a drop directory, where the
 FilesystemReceiver will pick it up on the next orchestrator tick.
 
 This is the local/dev counterpart to SQSReporter. Use it whenever
 you're running jobs as subprocesses and using FilesystemReceiver.
 
-File naming: {job_name}__{run_id}__{status}.json
+File naming: {job_name}__{run_key}__{status}.json
 The filename is informational only — the receiver reads the JSON content.
 """
 
@@ -19,46 +19,41 @@ from typing import Any
 from uuid import UUID
 
 from dispatchio.models import Status
-from dispatchio.receiver.base import CompletionEvent
+from dispatchio.receiver.base import StatusEvent
+from dispatchio.worker.reporter import BaseReporter
 
 logger = logging.getLogger(__name__)
 
 
-class FilesystemReporter:
+class FilesystemReporter(BaseReporter):
     def __init__(self, drop_dir: str | Path) -> None:
         self.drop_dir = Path(drop_dir)
         self.drop_dir.mkdir(parents=True, exist_ok=True)
 
     def report(
         self,
-        job_name: str,
-        run_id: str,
+        correlation_id: str | UUID,
         status: Status,
-        *,
-        error_reason: str | None = None,
+        reason: str | None = None,
         metadata: dict[str, Any] | None = None,
-        logical_run_id: str | None = None,
-        attempt: int | None = None,
-        dispatchio_attempt_id: UUID | None = None,
     ) -> None:
         try:
-            event = CompletionEvent(
-                job_name=job_name,
-                run_id=run_id,
-                status=status,
-                error_reason=error_reason,
-                metadata=metadata or {},
-                logical_run_id=logical_run_id or run_id,
-                attempt=attempt,
-                dispatchio_attempt_id=dispatchio_attempt_id,
+            uuid = (
+                UUID(correlation_id)
+                if isinstance(correlation_id, str)
+                else correlation_id
             )
-            filename = f"{job_name}__{run_id}__{status.value}.json"
+            event = StatusEvent(
+                correlation_id=uuid,
+                status=status,
+                reason=reason,
+                metadata=metadata or {},
+            )
+            filename = f"{correlation_id}__{status.value}.json"
             path = self.drop_dir / filename
             path.write_text(event.model_dump_json())
-            logger.info("Reported %s/%s → %s", job_name, run_id, status.value)
+            logger.info("Reported %s → %s", correlation_id, status.value)
         except Exception:
             logger.exception(
-                "FilesystemReporter failed to write event for %s/%s",
-                job_name,
-                run_id,
+                "FilesystemReporter failed to write event for %s", correlation_id
             )

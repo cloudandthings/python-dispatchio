@@ -8,7 +8,7 @@ Two jobs:
 Key difference from PythonJob:
   SubprocessJob does not get the dispatchio harness automatically. The worker
   script must call run_job() itself, and the job's `env` config must inject
-  DISPATCHIO_RUN_ID and DISPATCHIO_DROP_DIR so run_job() can report completion
+  DISPATCHIO_RUN_KEY and DISPATCHIO_DROP_DIR so run_job() can report completion
   back to the orchestrator.
 
   sys.executable is used instead of "python" so the subprocess inherits the
@@ -31,7 +31,7 @@ BASE = Path(__file__).parent
 # Injected into each subprocess so run_job() can auto-configure FilesystemReporter.
 DROP_DIR = str(BASE / ".dispatchio" / "completions")
 
-ENV = {"DISPATCHIO_RUN_ID": "{run_id}", "DISPATCHIO_DROP_DIR": DROP_DIR}
+ENV = {"DISPATCHIO_RUN_KEY": "{run_key}", "DISPATCHIO_DROP_DIR": DROP_DIR}
 
 generate = Job.create(
     "generate",

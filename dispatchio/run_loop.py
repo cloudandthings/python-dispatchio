@@ -54,7 +54,7 @@ def run_loop(
         tick_interval:  Seconds to sleep between ticks. Can be overridden by the
                         DISPATCHIO_TICK_INTERVAL environment variable.
         max_ticks:      Hard upper bound on the number of ticks.
-        stop_when:      Callable(store, jobs, run_id) -> bool. Called after
+        stop_when:      Callable(store, jobs, run_key) -> bool. Called after
                         each tick; the loop exits when it returns True.
                         Defaults to stopping once every job is in a finished
                         state (DONE, ERROR, LOST, or SKIPPED).
@@ -71,7 +71,7 @@ def run_loop(
     if env_interval is not None:
         tick_interval = float(env_interval)
 
-    run_id = reference_time.strftime("%Y%m%d")
+    run_key = reference_time.strftime("%Y%m%d")
 
     for tick_num in range(1, max_ticks + 1):
         log.info(
@@ -85,15 +85,15 @@ def run_loop(
             log.info(
                 "  %-25s [%s] → %s%s",
                 r.job_name,
-                r.run_id,
+                r.run_key,
                 r.action.value,
                 f"  ({r.detail})" if r.detail else "",
             )
 
-        if stop_when(orchestrator.state, orchestrator.jobs, run_id):
+        if stop_when(orchestrator.state, orchestrator.jobs, run_key):
             log.info("Stop condition met. Final state:")
             for j in orchestrator.jobs:
-                rec = orchestrator.state.get_latest_attempt(j.name, run_id)
+                rec = orchestrator.state.get_latest_attempt(j.name, run_key)
                 status = rec.status.value if rec else "NO_RECORD"
                 suffix = f"  — {rec.reason}" if rec and rec.reason else ""
                 log.info("  %-25s %s%s", j.name, status, suffix)
@@ -105,9 +105,9 @@ def run_loop(
     log.warning("Reached max_ticks=%d without the stop condition being met.", max_ticks)
 
 
-def _all_finished(store: StateStore, jobs: list[Job], run_id: str) -> bool:
-    """Default stop condition: every job has a finished record for run_id."""
+def _all_finished(store: StateStore, jobs: list[Job], run_key: str) -> bool:
+    """Default stop condition: every job has a finished record for run_key."""
     return all(
-        (rec := store.get_latest_attempt(j.name, run_id)) and rec.is_finished()
+        (rec := store.get_latest_attempt(j.name, run_key)) and rec.is_finished()
         for j in jobs
     )

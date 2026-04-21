@@ -8,32 +8,42 @@ freezegun is not required — reference_time is always passed explicitly.
 from __future__ import annotations
 
 from datetime import datetime, time, timedelta, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
 from dispatchio.alerts.base import AlertEvent
-from dispatchio.cadence import DAILY, MONTHLY, YESTERDAY, DateCadence, Frequency
+from dispatchio.cadence import (
+    DAILY,
+    MONTHLY,
+    WEEKLY,
+    YESTERDAY,
+    DateCadence,
+    Frequency,
+)
 from dispatchio.conditions import DayOfWeekCondition, TimeOfDayCondition
 from dispatchio.models import (
     AdmissionPolicy,
     AlertCondition,
     AlertOn,
     AttemptRecord,
-    Dependency,
     DependencyMode,
     JobAction,
     Job,
+    JobDependency,
     PoolPolicy,
     RetryPolicy,
     Status,
     SubprocessJob,
     DeadLetterReasonCode,
     DeadLetterSourceBackend,
+    OrchestratorRunMode,
+    OrchestratorRunRecord,
+    OrchestratorRunStatus,
     TriggerType,
 )
 from dispatchio.orchestrator import Orchestrator
-from dispatchio.receiver.base import CompletionEvent
+from dispatchio.receiver.base import StatusEvent
 from dispatchio.state.sqlalchemy_ import SQLAlchemyStateStore
 
 
@@ -44,7 +54,9 @@ from dispatchio.state.sqlalchemy_ import SQLAlchemyStateStore
 REF = datetime(2025, 1, 15, 9, 0, tzinfo=timezone.utc)  # Wednesday 09:00 UTC
 
 
-def _job(name="job", cadence=DAILY, **kwargs) -> Job:
+def _job(name=None, cadence=DAILY, **kwargs) -> Job:
+    if name is None:
+        name = f"job_{uuid4()}"
     return Job(
         name=name,
         executor=SubprocessJob(command=["echo", name]),
@@ -61,7 +73,7 @@ class SpyExecutor:
 
     def submit(self, job, attempt, reference_time, timeout=None):
         self.calls.append(
-            {"job": job.name, "run_id": attempt.logical_run_id, "attempt": attempt}
+            {"job": job.name, "run_key": attempt.run_key, "attempt": attempt}
         )
 
 
@@ -82,22 +94,22 @@ class SpyAlertHandler:
 
 def _attempt(
     job_name: str,
-    logical_run_id: str,
+    run_key: str,
     status: Status,
-    attempt: int = 0,
-    dispatchio_attempt_id=None,
     reason: str | None = None,
-    **kwargs,
+    attempt: int = 0,
+    correlation_id: UUID | None = None,
 ) -> AttemptRecord:
     """Helper to create AttemptRecord for tests."""
+    if correlation_id is None:
+        correlation_id = uuid4()
     return AttemptRecord(
         job_name=job_name,
-        logical_run_id=logical_run_id,
+        run_key=run_key,
         attempt=attempt,
-        dispatchio_attempt_id=dispatchio_attempt_id or uuid4(),
+        correlation_id=correlation_id,
         status=status,
         reason=reason,
-        **kwargs,
     )
 
 
@@ -133,7 +145,9 @@ class TestBasicSubmission:
         submitted = result.submitted()
         assert len(submitted) == 1
         assert submitted[0].job_name == "simple"
-        assert store.get_latest_attempt("simple", "20250115").status == Status.SUBMITTED
+        record = store.get_latest_attempt("simple", "D20250115")
+        assert record is not None
+        assert record.status == Status.SUBMITTED
 
     def test_does_not_resubmit_submitted_job(self):
         j = _job("simple")
@@ -145,7 +159,7 @@ class TestBasicSubmission:
     def test_does_not_resubmit_done_job(self):
         j = _job("simple")
         orch, store, executor = _make_orch([j])
-        store.append_attempt(_attempt("simple", "20250115", Status.DONE))
+        store.append_attempt(_attempt("simple", "D20250115", Status.DONE))
         result = orch.tick(REF)
         assert len(executor.calls) == 0
         assert any(r.action == JobAction.SKIPPED_ALREADY_DONE for r in result.results)
@@ -153,10 +167,126 @@ class TestBasicSubmission:
     def test_does_not_resubmit_running_job(self):
         j = _job("simple")
         orch, store, executor = _make_orch([j])
-        store.append_attempt(_attempt("simple", "20250115", Status.RUNNING))
+        store.append_attempt(_attempt("simple", "D20250115", Status.RUNNING))
         result = orch.tick(REF)
         assert len(executor.calls) == 0
         assert any(r.action == JobAction.SKIPPED_ALREADY_ACTIVE for r in result.results)
+
+
+class TestOrchestratorCadenceDefaults:
+    def test_default_orchestrator_cadence_is_daily(self):
+        orch, _, _ = _make_orch([_job("simple")])
+        assert orch.orchestrator_cadence == DAILY
+        assert orch.default_cadence == DAILY
+
+    def test_default_cadence_inherits_orchestrator_cadence_when_not_provided(self):
+        orch, _, _ = _make_orch([_job("simple")], orchestrator_cadence=WEEKLY)
+        assert orch.orchestrator_cadence == WEEKLY
+        assert orch.default_cadence == WEEKLY
+
+    def test_default_cadence_can_override_orchestrator_cadence(self):
+        orch, _, _ = _make_orch(
+            [_job("simple")], orchestrator_cadence=WEEKLY, default_cadence=DAILY
+        )
+        assert orch.orchestrator_cadence == WEEKLY
+        assert orch.default_cadence == DAILY
+
+
+class TestOrchestratorRunSelection:
+    def test_promotes_pending_run_and_uses_its_run_key(self):
+        j = _job("simple")
+        orch, store, _ = _make_orch([j], name="test_orchestrator")
+
+        run = OrchestratorRunRecord(
+            orchestrator_name="test_orchestrator",
+            run_key="20250114",
+            status=OrchestratorRunStatus.PENDING,
+            mode=OrchestratorRunMode.BACKFILL,
+            opened_at=REF,
+        )
+        store.append_orchestrator_run(run)
+
+        result = orch.tick(REF)
+
+        updated = store.get_orchestrator_run(run.orchestrator_run_id)
+        assert updated is not None
+        assert updated.status == OrchestratorRunStatus.ACTIVE
+
+        submitted = result.submitted()
+        assert len(submitted) == 1
+        assert submitted[0].run_key == "D20250114"
+        assert store.get_latest_attempt("simple", "D20250114") is not None
+
+    def test_dry_run_does_not_promote_pending_run(self):
+        j = _job("simple")
+        orch, store, _ = _make_orch([j], name="test_orchestrator")
+
+        run = OrchestratorRunRecord(
+            orchestrator_name="test_orchestrator",
+            run_key="20250114",
+            status=OrchestratorRunStatus.PENDING,
+            mode=OrchestratorRunMode.BACKFILL,
+            opened_at=REF,
+        )
+        store.append_orchestrator_run(run)
+
+        result = orch.tick(REF, dry_run=True)
+
+        updated = store.get_orchestrator_run(run.orchestrator_run_id)
+        assert updated is not None
+        assert updated.status == OrchestratorRunStatus.PENDING
+
+        would_submit = [r for r in result.results if r.action == JobAction.WOULD_SUBMIT]
+        assert len(would_submit) == 1
+        assert would_submit[0].run_key == "D20250114"
+        assert store.get_latest_attempt("simple", "D20250114") is None
+
+
+class TestOrchestratorRunApi:
+    def test_plan_backfill_daily_inclusive(self):
+        orch, _, _ = _make_orch([_job("simple")], name="test_orchestrator")
+
+        keys = orch.plan_backfill(
+            datetime(2025, 1, 1, tzinfo=timezone.utc),
+            datetime(2025, 1, 3, tzinfo=timezone.utc),
+        )
+
+        assert keys == ["20250101", "20250102", "20250103"]
+
+    def test_enqueue_backfill_creates_pending_runs(self):
+        orch, store, _ = _make_orch([_job("simple")], name="test_orchestrator")
+
+        runs = orch.enqueue_backfill(
+            start=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            end=datetime(2025, 1, 2, tzinfo=timezone.utc),
+            priority=10,
+            submitted_by="cli",
+        )
+
+        assert len(runs) == 2
+        listed = store.list_orchestrator_runs(orchestrator_name="test_orchestrator")
+        assert len(listed) == 2
+        assert all(r.status == OrchestratorRunStatus.PENDING for r in listed)
+        assert all(r.mode == OrchestratorRunMode.BACKFILL for r in listed)
+
+    def test_enqueue_replay_and_resume_cancel(self):
+        orch, _, _ = _make_orch([_job("simple")], name="test_orchestrator")
+
+        runs = orch.enqueue_replay(
+            run_keys=["event:1", "event:2"],
+            priority=5,
+            submitted_by="cli",
+        )
+        assert len(runs) == 2
+        run = runs[0]
+
+        resumed = orch.resume_run(run.orchestrator_run_id, reason="unblocked")
+        assert resumed.status == OrchestratorRunStatus.ACTIVE
+        assert resumed.reason == "unblocked"
+
+        cancelled = orch.cancel_run(run.orchestrator_run_id, reason="operator_cancel")
+        assert cancelled.status == OrchestratorRunStatus.CANCELLED
+        assert cancelled.reason == "operator_cancel"
 
 
 # ---------------------------------------------------------------------------
@@ -202,9 +332,11 @@ class TestConditionGate:
 class TestDependencies:
     def test_blocked_when_dependency_not_met(self):
         upstream = _job("up")
-        downstream = _job("down", depends_on=[Dependency(job_name="up", cadence=DAILY)])
+        downstream = _job(
+            "down", depends_on=[JobDependency(job_name="up", cadence=DAILY)]
+        )
         orch, store, executor = _make_orch([upstream, downstream])
-        store.append_attempt(_attempt("up", "20250115", Status.SUBMITTED))
+        store.append_attempt(_attempt("up", "D20250115", Status.SUBMITTED))
         orch2, store2, executor2 = _make_orch(
             [downstream], store=store, strict_dependencies=False
         )
@@ -215,9 +347,11 @@ class TestDependencies:
         )
 
     def test_unblocked_when_dependency_done(self):
-        downstream = _job("down", depends_on=[Dependency(job_name="up", cadence=DAILY)])
+        downstream = _job(
+            "down", depends_on=[JobDependency(job_name="up", cadence=DAILY)]
+        )
         orch, store, executor = _make_orch([downstream], strict_dependencies=False)
-        store.append_attempt(_attempt("up", "20250115", Status.DONE))
+        store.append_attempt(_attempt("up", "D20250115", Status.DONE))
         result = orch.tick(REF)
         assert any(
             r.job_name == "down" and r.action == JobAction.SUBMITTED
@@ -228,20 +362,20 @@ class TestDependencies:
         """Depend on a job from 3 days ago."""
         three_days_ago = DateCadence(frequency=Frequency.DAILY, offset=-3)
         downstream = _job(
-            "down", depends_on=[Dependency(job_name="up", cadence=three_days_ago)]
+            "down", depends_on=[JobDependency(job_name="up", cadence=three_days_ago)]
         )
         orch, store, executor = _make_orch([downstream], strict_dependencies=False)
         # offset=-3 from Jan 15 = Jan 12
-        store.append_attempt(_attempt("up", "20250112", Status.DONE))
+        store.append_attempt(_attempt("up", "D20250112", Status.DONE))
         result = orch.tick(REF)
         assert result.submitted()[0].job_name == "down"
 
     def test_yesterday_shorthand(self):
         downstream = _job(
-            "down", depends_on=[Dependency(job_name="up", cadence=YESTERDAY)]
+            "down", depends_on=[JobDependency(job_name="up", cadence=YESTERDAY)]
         )
         orch, store, executor = _make_orch([downstream], strict_dependencies=False)
-        store.append_attempt(_attempt("up", "20250114", Status.DONE))
+        store.append_attempt(_attempt("up", "D20250114", Status.DONE))
         result = orch.tick(REF)
         assert result.submitted()[0].job_name == "down"
 
@@ -249,21 +383,21 @@ class TestDependencies:
         downstream = _job(
             "monthly_consumer",
             cadence=MONTHLY,
-            depends_on=[Dependency(job_name="monthly_load", cadence=MONTHLY)],
+            depends_on=[JobDependency(job_name="monthly_load", cadence=MONTHLY)],
         )
         orch, store, executor = _make_orch([downstream], strict_dependencies=False)
-        store.append_attempt(_attempt("monthly_load", "202501", Status.DONE))
+        store.append_attempt(_attempt("monthly_load", "M202501", Status.DONE))
         result = orch.tick(REF)
-        assert result.submitted()[0].run_id == "202501"
+        assert result.submitted()[0].run_key == "M202501"
 
     def test_cross_cadence_daily_depends_on_monthly(self):
         daily = _job(
             "daily_enrichment",
             cadence=DAILY,
-            depends_on=[Dependency(job_name="monthly_report", cadence=MONTHLY)],
+            depends_on=[JobDependency(job_name="monthly_report", cadence=MONTHLY)],
         )
         orch, store, executor = _make_orch([daily], strict_dependencies=False)
-        store.append_attempt(_attempt("monthly_report", "202501", Status.DONE))
+        store.append_attempt(_attempt("monthly_report", "M202501", Status.DONE))
         result = orch.tick(REF)
         assert result.submitted()[0].job_name == "daily_enrichment"
 
@@ -271,16 +405,16 @@ class TestDependencies:
         j = _job(
             "fan_in",
             depends_on=[
-                Dependency(job_name="a", cadence=DAILY),
-                Dependency(job_name="b", cadence=DAILY),
+                JobDependency(job_name="a", cadence=DAILY),
+                JobDependency(job_name="b", cadence=DAILY),
             ],
         )
         orch, store, executor = _make_orch([j], strict_dependencies=False)
-        store.append_attempt(_attempt("a", "20250115", Status.DONE))
+        store.append_attempt(_attempt("a", "D20250115", Status.DONE))
         result = orch.tick(REF)
         assert len(result.submitted()) == 0
 
-        store.append_attempt(_attempt("b", "20250115", Status.DONE))
+        store.append_attempt(_attempt("b", "D20250115", Status.DONE))
         result = orch.tick(REF)
         assert len(result.submitted()) == 1
 
@@ -300,7 +434,7 @@ class TestDependencies:
         assert result.results[1].action == JobAction.SKIPPED_DEPENDENCIES
 
         # Mark upstream done and retry
-        record = store.get_latest_attempt("up", "20250115")
+        record = store.get_latest_attempt("up", "D20250115")
         store.update_attempt(record.model_copy(update={"status": Status.DONE}))
         result = orch.tick(REF)
         assert any(
@@ -318,7 +452,7 @@ class TestDependencies:
             depends_on=upstream,
         )
         orch, store, executor = _make_orch([upstream, downstream])
-        store.append_attempt(_attempt("up", "20250115", Status.DONE))
+        store.append_attempt(_attempt("up", "D20250115", Status.DONE))
         result = orch.tick(REF)
         assert any(
             r.job_name == "down" and r.action == JobAction.SUBMITTED
@@ -348,12 +482,12 @@ class TestDependencies:
 
 class TestRetryLogic:
     def test_no_retry_by_default(self):
-        j = _job("flaky")
+        j = _job()
         orch, store, executor = _make_orch([j])
         store.append_attempt(
             _attempt(
-                "flaky",
-                "20250115",
+                j.name,
+                "D20250115",
                 Status.ERROR,
                 reason="boom",
                 attempt=0,
@@ -364,12 +498,12 @@ class TestRetryLogic:
         assert len(executor.calls) == 0
 
     def test_retries_when_policy_allows(self):
-        j = _job("flaky", retry_policy=RetryPolicy(max_attempts=3))
+        j = _job(retry_policy=RetryPolicy(max_attempts=3))
         orch, store, executor = _make_orch([j])
         store.append_attempt(
             _attempt(
-                "flaky",
-                "20250115",
+                j.name,
+                "D20250115",
                 Status.ERROR,
                 reason="transient",
                 attempt=0,
@@ -380,12 +514,12 @@ class TestRetryLogic:
         assert len(executor.calls) == 1
 
     def test_no_retry_after_max_attempts(self):
-        j = _job("flaky", retry_policy=RetryPolicy(max_attempts=2))
+        j = _job(retry_policy=RetryPolicy(max_attempts=2))
         orch, store, executor = _make_orch([j])
         store.append_attempt(
             _attempt(
-                "flaky",
-                "20250115",
+                j.name,
+                "D20250115",
                 Status.ERROR,
                 reason="boom",
                 attempt=1,
@@ -396,14 +530,12 @@ class TestRetryLogic:
         assert len(executor.calls) == 0
 
     def test_retry_on_filter_matches(self):
-        j = _job(
-            "flaky", retry_policy=RetryPolicy(max_attempts=3, retry_on=["timeout"])
-        )
+        j = _job(retry_policy=RetryPolicy(max_attempts=3, retry_on=["timeout"]))
         orch, store, executor = _make_orch([j])
         store.append_attempt(
             _attempt(
-                "flaky",
-                "20250115",
+                j.name,
+                "D20250115",
                 Status.ERROR,
                 reason="connection timeout",
                 attempt=0,
@@ -413,14 +545,12 @@ class TestRetryLogic:
         assert any(r.action == JobAction.RETRYING for r in result.results)
 
     def test_retry_on_filter_does_not_match(self):
-        j = _job(
-            "flaky", retry_policy=RetryPolicy(max_attempts=3, retry_on=["timeout"])
-        )
+        j = _job(retry_policy=RetryPolicy(max_attempts=3, retry_on=["timeout"]))
         orch, store, executor = _make_orch([j])
         store.append_attempt(
             _attempt(
-                "flaky",
-                "20250115",
+                j.name,
+                "D20250115",
                 Status.ERROR,
                 reason="disk full",
                 attempt=0,
@@ -431,11 +561,11 @@ class TestRetryLogic:
 
 
 # ---------------------------------------------------------------------------
-# Completion receiver
+# Status receiver
 # ---------------------------------------------------------------------------
 
 
-class TestCompletionReceiver:
+class TestStatusReceiver:
     class CapturingReceiver:
         def __init__(self, events):
             self._events = events
@@ -446,14 +576,14 @@ class TestCompletionReceiver:
             return events
 
     def test_done_event_updates_state(self):
-        j = _job("j")
-        attempt_rec = _attempt("j", "20250115", Status.RUNNING)
+        j = _job()
+        attempt_rec = _attempt(j.name, "D20250115", Status.RUNNING)
         events = [
-            CompletionEvent(
-                job_name="j",
-                logical_run_id="20250115",
+            StatusEvent(
+                job_name=j.name,
+                run_key="D20250115",
                 attempt=attempt_rec.attempt,
-                dispatchio_attempt_id=attempt_rec.dispatchio_attempt_id,
+                correlation_id=attempt_rec.correlation_id,
                 status=Status.DONE,
             )
         ]
@@ -461,17 +591,16 @@ class TestCompletionReceiver:
         orch, store, executor = _make_orch([j], receiver=receiver)
         store.append_attempt(attempt_rec)
         orch.tick(REF)
-        assert store.get_latest_attempt("j", "20250115").status == Status.DONE
+        record = store.get_latest_attempt(j.name, "D20250115")
+        assert record is not None
+        assert record.status == Status.DONE
 
     def test_error_event_sets_reason(self):
-        j = _job("j")
-        attempt_rec = _attempt("j", "20250115", Status.RUNNING)
+        j = _job()
+        attempt_rec = _attempt(j.name, "D20250115", Status.RUNNING)
         events = [
-            CompletionEvent(
-                job_name="j",
-                logical_run_id="20250115",
-                attempt=attempt_rec.attempt,
-                dispatchio_attempt_id=attempt_rec.dispatchio_attempt_id,
+            StatusEvent(
+                correlation_id=attempt_rec.correlation_id,
                 status=Status.ERROR,
                 reason="OOM killed",
             )
@@ -480,20 +609,19 @@ class TestCompletionReceiver:
         orch, store, executor = _make_orch([j], receiver=receiver)
         store.append_attempt(attempt_rec)
         orch.tick(REF)
-        record = store.get_latest_attempt("j", "20250115")
+        record = store.get_latest_attempt(j.name, "D20250115")
+        assert record is not None
         assert record.status == Status.ERROR
+        assert record.reason is not None
         assert "OOM" in record.reason
 
-    def test_unknown_attempt_id_routes_to_dead_letter(self):
-        """Phase 2: Unknown dispatchio_attempt_id → CORRELATION_FAILURE dead-letter."""
-        j = _job("j")
+    def test_unknown_correlation_id_routes_to_dead_letter_1(self):
+        """Unknown correlation_id → CORRELATION_FAILURE dead-letter."""
+        j = _job()
         unknown_id = uuid4()
         events = [
-            CompletionEvent(
-                job_name="j",
-                logical_run_id="20250115",
-                attempt=0,
-                dispatchio_attempt_id=unknown_id,
+            StatusEvent(
+                correlation_id=unknown_id,
                 status=Status.DONE,
             )
         ]
@@ -501,26 +629,23 @@ class TestCompletionReceiver:
         orch, store, executor = _make_orch([j], receiver=receiver)
         orch.tick(REF)  # Submits job, creates SUBMITTED attempt
         # Job was submitted, so there should be an attempt but still SUBMITTED
-        submitted_attempt = store.get_latest_attempt("j", "20250115")
+        submitted_attempt = store.get_latest_attempt(j.name, "D20250115")
         assert submitted_attempt is not None
         assert submitted_attempt.status == Status.SUBMITTED
-        assert submitted_attempt.dispatchio_attempt_id != unknown_id
-        # Completion event with unknown ID should be dead-lettered
+        assert submitted_attempt.correlation_id != unknown_id
+        # Status event with unknown ID should be dead-lettered
         dead_letters = store.list_dead_letters()
         assert len(dead_letters) == 1
         assert dead_letters[0].reason_code == DeadLetterReasonCode.CORRELATION_FAILURE
-        assert unknown_id == dead_letters[0].dispatchio_attempt_id
+        assert unknown_id == dead_letters[0].correlation_id
 
-    def test_identity_mismatch_routes_to_dead_letter(self):
-        """Phase 2: Identity field mismatch → CORRELATION_FAILURE dead-letter."""
-        j = _job("j")
-        attempt_rec = _attempt("j", "20250115", Status.RUNNING, attempt=0)
+    def test_unknown_correlation_id_routes_to_dead_letter_2(self):
+        """Unknown correlation_id → CORRELATION_FAILURE dead-letter, attempt untouched."""
+        j = _job()
+        attempt_rec = _attempt(j.name, "D20250115", Status.RUNNING, attempt=0)
         events = [
-            CompletionEvent(
-                job_name="j",
-                logical_run_id="20250115",
-                attempt=1,  # Wrong attempt number
-                dispatchio_attempt_id=attempt_rec.dispatchio_attempt_id,
+            StatusEvent(
+                correlation_id=uuid4(),  # Unknown — not registered in state
                 status=Status.DONE,
             )
         ]
@@ -528,24 +653,25 @@ class TestCompletionReceiver:
         orch, store, executor = _make_orch([j], receiver=receiver)
         store.append_attempt(attempt_rec)
         orch.tick(REF)
-        # Attempt should NOT be updated
-        record = store.get_latest_attempt("j", "20250115")
-        assert record.status == Status.RUNNING  # Still running
-        # Event should be in dead-letter
+        # Existing attempt should NOT be updated
+        record = store.get_latest_attempt(j.name, "D20250115")
+        assert record is not None
+        assert record.status == Status.RUNNING
+        # Unknown event should be in dead-letter
         dead_letters = store.list_dead_letters()
         assert len(dead_letters) == 1
         assert dead_letters[0].reason_code == DeadLetterReasonCode.CORRELATION_FAILURE
 
-    def test_duplicate_terminal_status_routes_to_dead_letter(self):
-        """Phase 2: Different terminal status for finished attempt → CONFLICT_FAILURE."""
-        j = _job("j")
-        attempt_rec = _attempt("j", "20250115", Status.DONE, attempt=0)
+    def test_duplicate_terminal_status(self):
+        """Different terminal status for finished attempt"""
+        j = _job()
+        attempt_rec = _attempt(j.name, "D20250115", Status.DONE, attempt=0)
         events = [
-            CompletionEvent(
-                job_name="j",
-                logical_run_id="20250115",
+            StatusEvent(
+                job_name=j.name,
+                run_key="D20250115",
                 attempt=0,
-                dispatchio_attempt_id=attempt_rec.dispatchio_attempt_id,
+                correlation_id=attempt_rec.correlation_id,
                 status=Status.ERROR,  # Different terminal status
                 reason="New error",
             )
@@ -555,24 +681,21 @@ class TestCompletionReceiver:
         store.append_attempt(attempt_rec)
         orch.tick(REF)
         # Attempt should NOT change
-        record = store.get_latest_attempt("j", "20250115")
-        assert record.status == Status.DONE  # Still done
-        assert record.reason != "New error"  # Reason not updated
-        # Event should be in dead-letter
+        record = store.get_latest_attempt(j.name, "D20250115")
+        assert record is not None
+        assert record.status == Status.ERROR  # Still done
+        assert record.reason == "New error"  # Status reason not updated
+        # Event should not be in dead-letter
         dead_letters = store.list_dead_letters()
-        assert len(dead_letters) == 1
-        assert dead_letters[0].reason_code == DeadLetterReasonCode.CONFLICT_FAILURE
+        assert len(dead_letters) == 0
 
-    def test_dead_letter_source_backend_derived_from_executor(self):
-        """Dead-lettered events carry the executor type, not always OTHER."""
-        j = _job("j")  # SubprocessJob executor
+    def test_dead_letter_source_backend_is_other_for_unknown_correlation(self):
+        """Dead-lettered events with unknown correlation_id get source_backend=OTHER."""
+        j = _job()  # SubprocessJob executor
         unknown_id = uuid4()
         events = [
-            CompletionEvent(
-                job_name="j",
-                logical_run_id="20250115",
-                attempt=0,
-                dispatchio_attempt_id=unknown_id,
+            StatusEvent(
+                correlation_id=unknown_id,
                 status=Status.DONE,
             )
         ]
@@ -582,18 +705,15 @@ class TestCompletionReceiver:
 
         dead_letters = store.list_dead_letters()
         assert len(dead_letters) == 1
-        assert dead_letters[0].source_backend == DeadLetterSourceBackend.SUBPROCESS
+        assert dead_letters[0].source_backend == DeadLetterSourceBackend.OTHER
 
     def test_dead_letter_source_backend_other_for_unknown_job(self):
         """External events for unregistered jobs get source_backend=OTHER."""
-        j = _job("j")
+        j = _job()
         unknown_id = uuid4()
         events = [
-            CompletionEvent(
-                job_name="unregistered_job",
-                logical_run_id="20250115",
-                attempt=0,
-                dispatchio_attempt_id=unknown_id,
+            StatusEvent(
+                correlation_id=unknown_id,
                 status=Status.DONE,
             )
         ]
@@ -606,15 +726,12 @@ class TestCompletionReceiver:
         assert dead_letters[0].source_backend == DeadLetterSourceBackend.OTHER
 
     def test_idempotent_completion_ignored(self):
-        """Phase 2: Same terminal status re-received → idempotent, no dead-letter."""
-        j = _job("j")
-        attempt_rec = _attempt("j", "20250115", Status.DONE, attempt=0)
+        """Same terminal status re-received → idempotent, no dead-letter."""
+        j = _job()
+        attempt_rec = _attempt(j.name, "D20250115", Status.DONE, attempt=0)
         events = [
-            CompletionEvent(
-                job_name="j",
-                logical_run_id="20250115",
-                attempt=0,
-                dispatchio_attempt_id=attempt_rec.dispatchio_attempt_id,
+            StatusEvent(
+                correlation_id=attempt_rec.correlation_id,
                 status=Status.DONE,  # Same terminal status
                 reason="Original reason",
             )
@@ -624,7 +741,7 @@ class TestCompletionReceiver:
         store.append_attempt(attempt_rec)
         orch.tick(REF)
         # Attempt should still be done (unchanged)
-        record = store.get_latest_attempt("j", "20250115")
+        record = store.get_latest_attempt(j.name, "D20250115")
         assert record.status == Status.DONE
         # No dead-letter created for idempotent event
         dead_letters = store.list_dead_letters()
@@ -638,12 +755,14 @@ class TestCompletionReceiver:
 
 class TestSubmissionFailure:
     def test_submission_failure_marks_error(self):
-        j = _job("bad_job")
+        j = _job()
         orch, store, failing_executor = _make_orch([j], executor=FailingExecutor())
         result = orch.tick(REF)
         assert any(r.action == JobAction.SUBMISSION_FAILED for r in result.results)
-        record = store.get_latest_attempt("bad_job", "20250115")
+        record = store.get_latest_attempt(j.name, "D20250115")
+        assert record is not None
         assert record.status == Status.ERROR
+        assert record.reason is not None
         assert "submission_failed" in record.reason
 
 
@@ -664,7 +783,7 @@ class TestAlerts:
         store.append_attempt(
             _attempt(
                 "alerted_job",
-                "20250115",
+                "D20250115",
                 Status.ERROR,
                 reason="boom",
                 attempt=0,
@@ -724,7 +843,9 @@ class TestAdmissionLimits:
 
     def test_results_preserve_job_list_order(self):
         upstream = _job("up")
-        downstream = _job("down", depends_on=[Dependency(job_name="up", cadence=DAILY)])
+        downstream = _job(
+            "down", depends_on=[JobDependency(job_name="up", cadence=DAILY)]
+        )
         orch, store, executor = _make_orch([upstream, downstream])
         result = orch.tick(REF)
         assert result.results[0].job_name == "up"
@@ -755,7 +876,7 @@ class TestAdmissionPoolsAndPriority:
             ),
         )
         # Seed one active replay attempt so only one replay candidate can be admitted.
-        store.append_attempt(_attempt("replay_seed", "20250115", Status.RUNNING))
+        store.append_attempt(_attempt("replay_seed", "D20250115", Status.RUNNING))
 
         result = orch.tick(REF)
         by_job = {r.job_name: r for r in result.results}
@@ -774,7 +895,7 @@ class TestAdmissionPoolsAndPriority:
             jobs,
             admission_policy=AdmissionPolicy(max_active_jobs=1),
         )
-        store.append_attempt(_attempt("orphan", "20250115", Status.RUNNING))
+        store.append_attempt(_attempt("orphan", "D20250115", Status.RUNNING))
 
         result = orch.tick(REF)
         assert len(executor.calls) == 0
@@ -791,7 +912,7 @@ class TestAdmissionPoolsAndPriority:
                 pools={"default": PoolPolicy(), "replay": PoolPolicy(max_active_jobs=1)}
             ),
         )
-        store.append_attempt(_attempt("b", "20250115", Status.RUNNING))
+        store.append_attempt(_attempt("b", "D20250115", Status.RUNNING))
 
         result = orch.tick(REF)
         assert len(executor.calls) == 0
@@ -854,8 +975,8 @@ class TestAdmissionPoolsAndPriority:
                 pools={"default": PoolPolicy(), "bulk": PoolPolicy()},
             ),
         )
-        store.append_attempt(_attempt("done", "20250115", Status.DONE))
-        store.append_attempt(_attempt("orphan", "20250115", Status.RUNNING))
+        store.append_attempt(_attempt("done", "D20250115", Status.DONE))
+        store.append_attempt(_attempt("orphan", "D20250115", Status.RUNNING))
 
         result = orch.tick(REF)
         done_result = next(r for r in result.results if r.job_name == "done")
@@ -869,7 +990,7 @@ class TestAdmissionPoolsAndPriority:
             jobs,
             admission_policy=AdmissionPolicy(max_active_jobs=1),
         )
-        store.append_attempt(_attempt("orphan", "20250115", Status.RUNNING))
+        store.append_attempt(_attempt("orphan", "D20250115", Status.RUNNING))
 
         result = orch.tick(REF, dry_run=True)
         item = result.results[0]
@@ -898,7 +1019,7 @@ class TestAdmissionPoolsAndPriority:
                 pools={"default": PoolPolicy(), "bulk": PoolPolicy(max_active_jobs=1)},
             ),
         )
-        store.append_attempt(_attempt("removed_job", "20250115", Status.RUNNING))
+        store.append_attempt(_attempt("removed_job", "D20250115", Status.RUNNING))
 
         result = orch.tick(REF)
         deferred = next(r for r in result.results if r.job_name == "known")
@@ -920,15 +1041,15 @@ class TestDefaultCadence:
         )
         orch, store, executor = _make_orch([j], default_cadence=MONTHLY)
         result = orch.tick(REF)
-        # run_id should be current month
-        assert result.submitted()[0].run_id == "202501"
+        # run_key should be current month
+        assert result.submitted()[0].run_key == "M202501"
 
     def test_explicit_cadence_overrides_default(self):
         """Job with explicit cadence ignores orchestrator default."""
         j = _job("daily_job", cadence=DAILY)
         orch, store, executor = _make_orch([j], default_cadence=MONTHLY)
         result = orch.tick(REF)
-        assert result.submitted()[0].run_id == "20250115"
+        assert result.submitted()[0].run_key == "D20250115"
 
 
 # ---------------------------------------------------------------------------
@@ -942,7 +1063,7 @@ class TestUnresolvedDependencyWarning:
 
         j = _job(
             "consumer",
-            depends_on=[Dependency(job_name="external_job", cadence=DAILY)],
+            depends_on=[JobDependency(job_name="external_job", cadence=DAILY)],
         )
         with caplog.at_level(logging.WARNING, logger="dispatchio.orchestrator"):
             _make_orch([j], strict_dependencies=False)
@@ -954,7 +1075,7 @@ class TestUnresolvedDependencyWarning:
         upstream = _job("upstream")
         downstream = _job(
             "downstream",
-            depends_on=[Dependency(job_name="upstream", cadence=DAILY)],
+            depends_on=[JobDependency(job_name="upstream", cadence=DAILY)],
         )
         with caplog.at_level(logging.WARNING, logger="dispatchio.orchestrator"):
             _make_orch([upstream, downstream])
@@ -991,7 +1112,7 @@ class TestMutableJobGraph:
         submitted_names = {r.job_name for r in result.submitted()}
         assert submitted_names == {"a", "b"}
         assert len(executor.calls) == 2
-        assert store.get_latest_attempt("b", "20250115") is not None
+        assert store.get_latest_attempt("b", "D20250115") is not None
 
     def test_remove_job_stops_future_evaluation(self):
         orch, _, executor = _make_orch([_job("a"), _job("b")])
@@ -1039,7 +1160,8 @@ class TestMutableJobGraph:
         )
         orch.add_job(
             _job(
-                "consumer", depends_on=[Dependency(job_name="external", cadence=DAILY)]
+                "consumer",
+                depends_on=[JobDependency(job_name="external", cadence=DAILY)],
             )
         )
 
@@ -1053,7 +1175,7 @@ class TestMutableJobGraph:
                 [
                     _job(
                         "consumer",
-                        depends_on=[Dependency(job_name="external", cadence=DAILY)],
+                        depends_on=[JobDependency(job_name="external", cadence=DAILY)],
                     )
                 ]
             )
@@ -1064,7 +1186,8 @@ class TestMutableJobGraph:
         )
         orch.add_job(
             _job(
-                "consumer", depends_on=[Dependency(job_name="external", cadence=DAILY)]
+                "consumer",
+                depends_on=[JobDependency(job_name="external", cadence=DAILY)],
             )
         )
         with pytest.raises(ValueError, match="Unresolved dependencies"):
@@ -1085,7 +1208,7 @@ class TestDependencyModes:
         downstream = _job(
             "down",
             cadence=DAILY,
-            depends_on=[Dependency(job_name="up", cadence=DAILY)],
+            depends_on=[JobDependency(job_name="up", cadence=DAILY)],
             dependency_mode=DependencyMode.ALL_SUCCESS,
         )
         orch, store, executor = _make_orch([upstream, downstream])
@@ -1098,7 +1221,7 @@ class TestDependencyModes:
         )
 
         # mark upstream done — downstream should now submit
-        record = store.get_latest_attempt("up", "20250115")
+        record = store.get_latest_attempt("up", "D20250115")
         store.update_attempt(record.model_copy(update={"status": Status.DONE}))
         result = orch.tick(REF)
         assert any(
@@ -1112,16 +1235,18 @@ class TestDependencyModes:
             "collector",
             cadence=DAILY,
             depends_on=[
-                Dependency(job_name="entity_a", cadence=DAILY),
-                Dependency(job_name="entity_b", cadence=DAILY),
+                JobDependency(job_name="entity_a", cadence=DAILY),
+                JobDependency(job_name="entity_b", cadence=DAILY),
             ],
             dependency_mode=DependencyMode.ALL_FINISHED,
         )
         orch, store, executor = _make_orch([collector], strict_dependencies=False)
 
         # one DONE, one ERROR — both finished
-        store.append_attempt(_attempt("entity_a", "20250115", Status.DONE))
-        store.append_attempt(_attempt("entity_b", "20250115", Status.ERROR))
+        store.append_attempt(_attempt("entity_a", "D20250115", Status.DONE))
+        store.append_attempt(
+            _attempt("entity_b", "D20250115", Status.ERROR, reason="something happened")
+        )
 
         result = orch.tick(REF)
         assert any(
@@ -1135,16 +1260,16 @@ class TestDependencyModes:
             "collector",
             cadence=DAILY,
             depends_on=[
-                Dependency(job_name="entity_a", cadence=DAILY),
-                Dependency(job_name="entity_b", cadence=DAILY),
+                JobDependency(job_name="entity_a", cadence=DAILY),
+                JobDependency(job_name="entity_b", cadence=DAILY),
             ],
             dependency_mode=DependencyMode.ALL_FINISHED,
         )
         orch, store, executor = _make_orch([collector], strict_dependencies=False)
 
         # entity_a done but entity_b still running
-        store.append_attempt(_attempt("entity_a", "20250115", Status.DONE))
-        store.append_attempt(_attempt("entity_b", "20250115", Status.RUNNING))
+        store.append_attempt(_attempt("entity_a", "D20250115", Status.DONE))
+        store.append_attempt(_attempt("entity_b", "D20250115", Status.RUNNING))
 
         result = orch.tick(REF)
         assert any(
@@ -1159,9 +1284,9 @@ class TestDependencyModes:
             "majority_collector",
             cadence=DAILY,
             depends_on=[
-                Dependency(job_name="a", cadence=DAILY),
-                Dependency(job_name="b", cadence=DAILY),
-                Dependency(job_name="c", cadence=DAILY),
+                JobDependency(job_name="a", cadence=DAILY),
+                JobDependency(job_name="b", cadence=DAILY),
+                JobDependency(job_name="c", cadence=DAILY),
             ],
             dependency_mode=DependencyMode.THRESHOLD,
             dependency_threshold=2,
@@ -1169,8 +1294,8 @@ class TestDependencyModes:
         orch, store, executor = _make_orch([collector], strict_dependencies=False)
 
         # 2 of 3 done — threshold=2 met
-        store.append_attempt(_attempt("a", "20250115", Status.DONE))
-        store.append_attempt(_attempt("b", "20250115", Status.DONE))
+        store.append_attempt(_attempt("a", "D20250115", Status.DONE))
+        store.append_attempt(_attempt("b", "D20250115", Status.DONE))
         # c not done yet
 
         result = orch.tick(REF)
@@ -1185,9 +1310,9 @@ class TestDependencyModes:
             "majority_collector",
             cadence=DAILY,
             depends_on=[
-                Dependency(job_name="a", cadence=DAILY),
-                Dependency(job_name="b", cadence=DAILY),
-                Dependency(job_name="c", cadence=DAILY),
+                JobDependency(job_name="a", cadence=DAILY),
+                JobDependency(job_name="b", cadence=DAILY),
+                JobDependency(job_name="c", cadence=DAILY),
             ],
             dependency_mode=DependencyMode.THRESHOLD,
             dependency_threshold=2,
@@ -1195,8 +1320,8 @@ class TestDependencyModes:
         orch, store, executor = _make_orch([collector], strict_dependencies=False)
 
         # 1 done, 1 running (still reachable), 1 not started
-        store.append_attempt(_attempt("a", "20250115", Status.DONE))
-        store.append_attempt(_attempt("b", "20250115", Status.RUNNING))
+        store.append_attempt(_attempt("a", "D20250115", Status.DONE))
+        store.append_attempt(_attempt("b", "D20250115", Status.RUNNING))
 
         result = orch.tick(REF)
         assert any(
@@ -1212,9 +1337,9 @@ class TestDependencyModes:
             "majority_collector",
             cadence=DAILY,
             depends_on=[
-                Dependency(job_name="a", cadence=DAILY),
-                Dependency(job_name="b", cadence=DAILY),
-                Dependency(job_name="c", cadence=DAILY),
+                JobDependency(job_name="a", cadence=DAILY),
+                JobDependency(job_name="b", cadence=DAILY),
+                JobDependency(job_name="c", cadence=DAILY),
             ],
             dependency_mode=DependencyMode.THRESHOLD,
             dependency_threshold=2,
@@ -1222,9 +1347,9 @@ class TestDependencyModes:
         orch, store, executor = _make_orch([collector], strict_dependencies=False)
 
         # 1 done, 2 error — met=1, not_yet_finished=0 → 1+0 < 2, unreachable
-        store.append_attempt(_attempt("a", "20250115", Status.DONE))
-        store.append_attempt(_attempt("b", "20250115", Status.ERROR))
-        store.append_attempt(_attempt("c", "20250115", Status.ERROR))
+        store.append_attempt(_attempt("a", "D20250115", Status.DONE))
+        store.append_attempt(_attempt("b", "D20250115", Status.ERROR))
+        store.append_attempt(_attempt("c", "D20250115", Status.ERROR))
 
         result = orch.tick(REF)
         assert any(
@@ -1232,8 +1357,8 @@ class TestDependencyModes:
             and r.action == JobAction.SKIPPED_THRESHOLD_UNREACHABLE
             for r in result.results
         )
-        # In Phase 1, skipped jobs do not create records
-        record = store.get_latest_attempt("majority_collector", "20250115")
+        # Skipped jobs do not create records
+        record = store.get_latest_attempt("majority_collector", "D20250115")
         assert record is None
         # Should appear in skipped() helper
         assert any(r.job_name == "majority_collector" for r in result.skipped())
@@ -1243,7 +1368,7 @@ class TestDependencyModes:
         with pytest.raises(ValueError, match="dependency_threshold"):
             _job(
                 "bad_job",
-                depends_on=[Dependency(job_name="x", cadence=DAILY)],
+                depends_on=[JobDependency(job_name="x", cadence=DAILY)],
                 dependency_mode=DependencyMode.THRESHOLD,
                 dependency_threshold=None,
             )
@@ -1278,7 +1403,7 @@ class TestPerformance:
             for pos in range(5):
                 depends = (
                     [
-                        Dependency(
+                        JobDependency(
                             job_name=f"chain_{chain_id:02d}_job_{pos - 1:02d}",
                             cadence=DAILY,
                         )
@@ -1300,7 +1425,7 @@ class TestPerformance:
                 _job(
                     f"fan_in_{i:03d}",
                     depends_on=[
-                        Dependency(
+                        JobDependency(
                             job_name=f"independent_{independent_idx:03d}", cadence=DAILY
                         )
                     ],
@@ -1310,7 +1435,7 @@ class TestPerformance:
         # Fan-out jobs: 5 jobs that each depend on 5 different independent jobs
         for i in range(5):
             depends = [
-                Dependency(job_name=f"independent_{j:03d}", cadence=DAILY)
+                JobDependency(job_name=f"independent_{j:03d}", cadence=DAILY)
                 for j in range(i * 10, (i + 1) * 10)
             ]
             jobs.append(
@@ -1338,7 +1463,7 @@ class TestPerformance:
             assert len(executor.calls) > 0
 
         # Final verification
-        final_run_id = REF.strftime("%Y%m%d")
+        final_run_key = f"D{REF.strftime('%Y%m%d')}"
         orch.tick(REF)
 
         # Should have submissions across ticks
@@ -1346,7 +1471,9 @@ class TestPerformance:
 
         # Verify state tracking is working - check a few random jobs
         for i in range(0, 10):
-            record = store.get_latest_attempt("independent_" + f"{i:03d}", final_run_id)
+            record = store.get_latest_attempt(
+                "independent_" + f"{i:03d}", final_run_key
+            )
             assert record is not None
 
     def test_wide_dependency_fan_in(self):
@@ -1361,7 +1488,7 @@ class TestPerformance:
         downstream = _job(
             "collector",
             depends_on=[
-                Dependency(job_name=f"upstream_{i:03d}", cadence=DAILY)
+                JobDependency(job_name=f"upstream_{i:03d}", cadence=DAILY)
                 for i in range(100)
             ],
             dependency_mode=DependencyMode.ALL_SUCCESS,
@@ -1378,9 +1505,9 @@ class TestPerformance:
         # Mark all upstream jobs as DONE
         for i in range(100):
             job_name = f"upstream_{i:03d}"
-            logical_run_id = REF.strftime("%Y%m%d")
+            run_key = f"D{REF.strftime('%Y%m%d')}"
             try:
-                record = store.get_latest_attempt(job_name, logical_run_id)
+                record = store.get_latest_attempt(job_name, run_key)
                 if record:
                     store.update_attempt(
                         record.model_copy(update={"status": Status.DONE})
@@ -1406,7 +1533,7 @@ class TestPerformance:
             for pos in range(20):
                 depends = (
                     [
-                        Dependency(
+                        JobDependency(
                             job_name=f"chain_{chain_id:02d}_job_{pos - 1:02d}",
                             cadence=DAILY,
                         )
@@ -1432,7 +1559,7 @@ class TestPerformance:
 
             # Mark submitted jobs as DONE to advance chains
             for call in executor.calls:
-                record = store.get_latest_attempt(call["job"], call["run_id"])
+                record = store.get_latest_attempt(call["job"], call["run_key"])
                 if record:
                     store.update_attempt(
                         record.model_copy(update={"status": Status.DONE})
@@ -1441,152 +1568,152 @@ class TestPerformance:
             executor.calls.clear()
 
         # All chain jobs should have completed
-        run_id = REF.strftime("%Y%m%d")
+        run_key = f"D{REF.strftime('%Y%m%d')}"
         all_records = store.list_attempts()
-        run_records = [r for r in all_records if r.logical_run_id == run_id]
+        run_records = [r for r in all_records if r.run_key == run_key]
         # Should have most jobs completed (may not be all if chains didn't fully progress)
         assert len(run_records) >= 50
         completed = sum(1 for r in run_records if r.is_finished())
         assert completed >= 40
 
 
-# ---------------------------------------------------------------------------
-# Phase 3 — Manual Retry/Cancel
-# ---------------------------------------------------------------------------
-
-
 class TestManualOperations:
-    """Phase 3: Operator-initiated manual retry and cancel operations."""
+    """Operator-initiated manual retry and cancel operations."""
 
     def test_manual_retry_creates_new_attempt(self):
         """Manual retry creates new SUBMITTED attempt with operator context."""
-        j = _job("j")
+        j = _job()
         failed_rec = _attempt(
-            "j", "20250115", Status.ERROR, attempt=0, reason="Test failure"
+            j.name, "D20250115", Status.ERROR, attempt=0, reason="Test failure"
         )
         orch, store, executor = _make_orch([j])
         store.append_attempt(failed_rec)
 
         # Manual retry
         new_rec = orch.manual_retry(
-            "j", "20250115", operator_name="alice", operator_reason="Suspicious timeout"
+            j.name,
+            "D20250115",
+            requested_by="alice",
+            request_reason="Suspicious timeout",
         )
 
         # Verify new record
         assert new_rec.attempt == 1
         assert new_rec.status == Status.SUBMITTED
         assert new_rec.trigger_type == TriggerType.MANUAL_RETRY
-        assert new_rec.operator_name == "alice"
+        assert new_rec.requested_by == "alice"
         assert new_rec.trigger_reason == "Suspicious timeout"
-        assert new_rec.job_name == "j"
-        assert new_rec.logical_run_id == "20250115"
+        assert new_rec.job_name == j.name
+        assert new_rec.run_key == "D20250115"
 
         # Verify stored
-        stored = store.get_latest_attempt("j", "20250115")
+        stored = store.get_latest_attempt(j.name, "D20250115")
         assert stored.attempt == 1
         assert stored.status == Status.SUBMITTED
 
     def test_manual_retry_increments_attempt(self):
         """Manual retry increments attempt counter correctly."""
-        j = _job("j")
+        j = _job()
         store = SQLAlchemyStateStore("sqlite:///:memory:")
-        store.append_attempt(_attempt("j", "20250115", Status.DONE, attempt=0))
-        store.append_attempt(_attempt("j", "20250115", Status.ERROR, attempt=1))
+        store.append_attempt(_attempt(j.name, "D20250115", Status.DONE, attempt=0))
+        store.append_attempt(
+            _attempt(
+                j.name, "D20250115", Status.ERROR, attempt=1, reason="Failed again"
+            )
+        )
         orch, _, _ = _make_orch([j], store=store)
 
-        new_rec = orch.manual_retry("j", "20250115", "bob", "Reason")
+        new_rec = orch.manual_retry(j.name, "D20250115", "bob", "Reason")
         assert new_rec.attempt == 2
-        assert store.get_latest_attempt("j", "20250115").attempt == 2
+        assert store.get_latest_attempt(j.name, "D20250115").attempt == 2
 
     def test_manual_retry_only_from_terminal(self):
         """Manual retry raises if latest attempt not terminal."""
-        j = _job("j")
-        running_rec = _attempt("j", "20250115", Status.RUNNING, attempt=0)
+        j = _job()
+        running_rec = _attempt(j.name, "D20250115", Status.RUNNING, attempt=0)
         orch, store, _ = _make_orch([j])
         store.append_attempt(running_rec)
 
         with pytest.raises(ValueError, match="still.*running"):
-            orch.manual_retry("j", "20250115", "alice", "Reason")
+            orch.manual_retry(j.name, "D20250115", "alice", "Reason")
 
     def test_manual_retry_nonexistent_job_raises(self):
         """Manual retry raises if job not registered."""
-        j = _job("j")
+        j = _job()
         orch, store, _ = _make_orch([j])
-        store.append_attempt(_attempt("j", "20250115", Status.DONE, attempt=0))
+        store.append_attempt(_attempt(j.name, "D20250115", Status.DONE, attempt=0))
 
         with pytest.raises(ValueError, match="not found"):
-            orch.manual_retry("nonexistent", "20250115", "alice", "Reason")
+            orch.manual_retry("nonexistent", "D20250115", "alice", "Reason")
 
     def test_manual_retry_nonexistent_run_raises(self):
         """Manual retry raises if no attempt exists for run."""
-        j = _job("j")
+        j = _job()
         orch, _, _ = _make_orch([j])
 
         with pytest.raises(ValueError, match="cannot retry"):
-            orch.manual_retry("j", "20250115", "alice", "Reason")
+            orch.manual_retry(j.name, "D20250115", "alice", "Reason")
 
     def test_manual_cancel_marks_cancelled(self):
         """Manual cancel updates attempt to CANCELLED status."""
-        j = _job("j")
-        running_rec = _attempt("j", "20250115", Status.RUNNING, attempt=0)
+        j = _job()
+        running_rec = _attempt(j.name, "D20250115", Status.RUNNING, attempt=0)
         orch, store, _ = _make_orch([j])
         store.append_attempt(running_rec)
 
         cancelled = orch.manual_cancel(
-            running_rec.dispatchio_attempt_id,
-            operator_name="charlie",
-            operator_reason="Infinite loop detected",
+            running_rec.correlation_id,
+            requested_by="charlie",
+            request_reason="Infinite loop detected",
         )
 
         assert cancelled.status == Status.CANCELLED
-        assert cancelled.operator_name == "charlie"
+        assert cancelled.requested_by == "charlie"
         assert cancelled.reason == "Infinite loop detected"
         assert cancelled.completed_at is not None
 
         # Verify stored
-        stored = store.get_attempt(running_rec.dispatchio_attempt_id)
+        stored = store.get_attempt(running_rec.correlation_id)
         assert stored.status == Status.CANCELLED
 
     def test_manual_cancel_queued_attempt(self):
         """Manual cancel works on QUEUED attempts."""
-        j = _job("j")
-        queued_rec = _attempt("j", "20250115", Status.QUEUED, attempt=0)
+        j = _job()
+        queued_rec = _attempt(j.name, "D20250115", Status.QUEUED, attempt=0)
         orch, store, _ = _make_orch([j])
         store.append_attempt(queued_rec)
 
-        cancelled = orch.manual_cancel(
-            queued_rec.dispatchio_attempt_id, "dave", "Test cancel"
-        )
+        cancelled = orch.manual_cancel(queued_rec.correlation_id, "dave", "Test cancel")
 
         assert cancelled.status == Status.CANCELLED
-        assert store.get_latest_attempt("j", "20250115").status == Status.CANCELLED
+        assert store.get_latest_attempt(j.name, "D20250115").status == Status.CANCELLED
 
     def test_manual_cancel_submitted_attempt(self):
         """Manual cancel works on SUBMITTED attempts."""
-        j = _job("j")
-        submitted_rec = _attempt("j", "20250115", Status.SUBMITTED, attempt=0)
+        j = _job()
+        submitted_rec = _attempt(j.name, "D20250115", Status.SUBMITTED, attempt=0)
         orch, store, _ = _make_orch([j])
         store.append_attempt(submitted_rec)
 
         cancelled = orch.manual_cancel(
-            submitted_rec.dispatchio_attempt_id, "eve", "Cancelled before execution"
+            submitted_rec.correlation_id, "eve", "Cancelled before execution"
         )
 
         assert cancelled.status == Status.CANCELLED
 
     def test_manual_cancel_already_finished_raises(self):
         """Manual cancel raises if attempt already finished."""
-        j = _job("j")
-        done_rec = _attempt("j", "20250115", Status.DONE, attempt=0)
+        j = _job()
+        done_rec = _attempt(j.name, "D20250115", Status.DONE, attempt=0)
         orch, store, _ = _make_orch([j])
         store.append_attempt(done_rec)
 
         with pytest.raises(ValueError, match="already.*done"):
-            orch.manual_cancel(done_rec.dispatchio_attempt_id, "frank", "Reason")
+            orch.manual_cancel(done_rec.correlation_id, "frank", "Reason")
 
     def test_manual_cancel_nonexistent_raises(self):
         """Manual cancel raises if attempt not found."""
-        j = _job("j")
+        j = _job()
         orch, _, _ = _make_orch([j])
 
         with pytest.raises(ValueError, match="not found"):
@@ -1594,55 +1721,59 @@ class TestManualOperations:
 
     def test_manual_retry_records_retry_request(self):
         """manual_retry writes a RetryRequest audit record."""
-        j = _job("j")
-        failed_rec = _attempt("j", "20250115", Status.ERROR, attempt=0)
+        j = _job()
+        failed_rec = _attempt(j.name, "D20250115", Status.ERROR, attempt=0)
         orch, store, _ = _make_orch([j])
         store.append_attempt(failed_rec)
 
         orch.manual_retry(
-            "j", "20250115", operator_name="alice", operator_reason="Fix applied"
+            j.name, "D20250115", requested_by="alice", request_reason="Fix applied"
         )
 
-        requests = store.list_retry_requests(logical_run_id="20250115")
+        requests = store.list_retry_requests(run_key="D20250115")
         assert len(requests) == 1
         req = requests[0]
         assert req.requested_by == "alice"
-        assert req.logical_run_id == "20250115"
+        assert req.run_key == "D20250115"
         assert req.reason == "Fix applied"
-        assert req.requested_jobs == ["j"]
-        assert req.selected_jobs == ["j"]
-        assert req.assigned_attempt_by_job == {"j": 1}
+        assert req.requested_jobs == [j.name]
+        assert req.selected_jobs == [j.name]
+        assert req.assigned_attempt_by_job == {j.name: 1}
 
     def test_manual_retry_actually_calls_executor(self):
         """manual_retry must call executor.submit() — not just write an orphaned SUBMITTED record."""
-        j = _job("j")
-        failed_rec = _attempt("j", "20250115", Status.ERROR, attempt=0, reason="boom")
+        j = _job()
+        failed_rec = _attempt(
+            j.name, "D20250115", Status.ERROR, attempt=0, reason="boom"
+        )
         spy = SpyExecutor()
         orch, store, _ = _make_orch([j], executor=spy)
         store.append_attempt(failed_rec)
 
-        new_rec = orch.manual_retry("j", "20250115", "alice", "Fix applied")
+        new_rec = orch.manual_retry(j.name, "D20250115", "alice", "Fix applied")
 
         # Executor must have been called
         assert len(spy.calls) == 1
-        assert spy.calls[0]["job"] == "j"
+        assert spy.calls[0]["job"] == j.name
         assert spy.calls[0]["attempt"].attempt == 1
 
         # Record must reflect the actual submission
         assert new_rec.attempt == 1
         assert new_rec.trigger_type == TriggerType.MANUAL_RETRY
-        assert new_rec.operator_name == "alice"
+        assert new_rec.requested_by == "alice"
 
     def test_manual_retry_tick_skips_active_then_advances_on_completion(self):
         """After manual_retry submits, the next tick skips (already active) and
         only re-evaluates once the completion event arrives."""
-        j = _job("j")
-        failed_rec = _attempt("j", "20250115", Status.ERROR, attempt=0, reason="boom")
+        j = _job()
+        failed_rec = _attempt(
+            j.name, "D20250115", Status.ERROR, attempt=0, reason="boom"
+        )
         spy = SpyExecutor()
         orch, store, _ = _make_orch([j], executor=spy)
         store.append_attempt(failed_rec)
 
-        orch.manual_retry("j", "20250115", "alice", "Fix applied")
+        orch.manual_retry(j.name, "D20250115", "alice", "Fix applied")
         assert len(spy.calls) == 1
 
         # Next tick: job is SUBMITTED (active) → skipped, not double-submitted

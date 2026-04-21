@@ -7,21 +7,21 @@ from __future__ import annotations
 import time
 
 
-def discover(run_id: str) -> None:
-    print(f"discover finished for run_id={run_id}")
+def discover(run_key: str) -> None:
+    print(f"discover finished for run_key={run_key}")
     time.sleep(0.1)
 
 
-def transform(run_id: str) -> None:
-    print(f"transform finished for run_id={run_id}")
+def transform(run_key: str) -> None:
+    print(f"transform finished for run_key={run_key}")
     time.sleep(0.1)
 
 
-def process_entity_alpha(run_id: str) -> None:
-    print(f"entity alpha processed for run_id={run_id}")
+def process_entity_alpha(run_key: str) -> None:
+    print(f"entity alpha processed for run_key={run_key}")
     time.sleep(0.1)
 
 
-def process_entity_beta(run_id: str) -> None:
-    print(f"entity beta processed for run_id={run_id}")
+def process_entity_beta(run_key: str) -> None:
+    print(f"entity beta processed for run_key={run_key}")
     time.sleep(0.1)

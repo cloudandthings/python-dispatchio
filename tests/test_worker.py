@@ -2,50 +2,45 @@
 Tests for the dispatchio.worker harness.
 
 We never call sys.exit() in tests — run_job is exercised via its internal
-logic with explicit run_id and a spy reporter, keeping tests fast and clean.
+logic with explicit run_key and a spy reporter, keeping tests fast and clean.
 """
 
 from __future__ import annotations
 
+import sys
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
 from dispatchio.models import Status
+from dispatchio.receiver.base import StatusEvent
 from dispatchio.worker.harness import run_job
-
+from dispatchio.worker.reporter.base import BaseReporter
+from dispatchio.worker.reporter.filesystem import FilesystemReporter
 
 # ---------------------------------------------------------------------------
 # Spy reporter
 # ---------------------------------------------------------------------------
 
 
-class SpyReporter:
+class SpyReporter(BaseReporter):
     def __init__(self):
         self.calls: list[dict[str, Any]] = []
 
     def report(
         self,
-        job_name,
-        run_id,
+        correlation_id,
         status,
-        *,
-        error_reason=None,
+        reason=None,
         metadata=None,
-        logical_run_id=None,
-        attempt=None,
-        dispatchio_attempt_id=None,
     ):
         self.calls.append(
             {
-                "job_name": job_name,
-                "run_id": run_id,
+                "correlation_id": correlation_id,
                 "status": status,
-                "error_reason": error_reason,
+                "reason": reason,
                 "metadata": metadata or {},
-                "logical_run_id": logical_run_id,
-                "attempt": attempt,
-                "dispatchio_attempt_id": dispatchio_attempt_id,
             }
         )
 
@@ -58,18 +53,18 @@ class SpyReporter:
 # ---------------------------------------------------------------------------
 
 
-def _noop(run_id: str) -> None:
+def _noop(run_key: str) -> None:
     pass
 
 
-def _failing(run_id: str) -> None:
+def _failing(run_key: str) -> None:
     raise ValueError("something went wrong")
 
 
-def _run(fn, reporter=None, run_id="20250115", **kwargs):
+def _run(fn, reporter=None, run_key="20250115", **kwargs):
     """Call run_job without triggering sys.exit on failure."""
     try:
-        run_job("test_job", fn, run_id=run_id, reporter=reporter, **kwargs)
+        run_job("test_job", fn, run_key=run_key, reporter=reporter, **kwargs)
     except SystemExit:
         pass
 
@@ -87,26 +82,24 @@ class TestSuccessPath:
 
     def test_done_event_has_correct_fields(self):
         spy = SpyReporter()
-        _run(_noop, reporter=spy, run_id="20250115")
+        _run(_noop, reporter=spy)
         call = spy.calls[0]
-        assert call["job_name"] == "test_job"
-        assert call["run_id"] == "20250115"
         assert call["status"] == Status.DONE
-        assert call["error_reason"] is None
+        assert call["reason"] is None
 
     def test_metadata_fn_attached_to_done_event(self):
         spy = SpyReporter()
         _run(_noop, reporter=spy, metadata_fn=lambda: {"rows": 42})
         assert spy.calls[0]["metadata"]["rows"] == 42
 
-    def test_fn_receives_run_id(self):
+    def test_fn_receives_run_key(self):
         received = []
 
-        def capture(run_id):
-            received.append(run_id)
+        def capture(run_key):
+            received.append(run_key)
 
         spy = SpyReporter()
-        _run(capture, reporter=spy, run_id="20250115")
+        _run(capture, reporter=spy, run_key="20250115")
         assert received == ["20250115"]
 
 
@@ -124,22 +117,22 @@ class TestFailurePath:
     def test_error_reason_contains_exception_info(self):
         spy = SpyReporter()
         _run(_failing, reporter=spy)
-        reason = spy.calls[0]["error_reason"]
+        reason = spy.calls[0]["reason"]
         assert "ValueError" in reason
         assert "something went wrong" in reason
 
     def test_error_posted_for_any_exception_type(self):
-        def raises_runtime(run_id):
+        def raises_runtime(run_key):
             raise RuntimeError("boom")
 
         spy = SpyReporter()
         _run(raises_runtime, reporter=spy)
         assert spy.calls[0]["status"] == Status.ERROR
-        assert "RuntimeError" in spy.calls[0]["error_reason"]
+        assert "RuntimeError" in spy.calls[0]["reason"]
 
     def test_exits_with_nonzero_on_failure(self):
         with pytest.raises(SystemExit) as exc_info:
-            run_job("test_job", _failing, run_id="20250115", reporter=SpyReporter())
+            run_job("test_job", _failing, run_key="20250115", reporter=SpyReporter())
         assert exc_info.value.code != 0
 
 
@@ -153,29 +146,26 @@ class TestNoReporter:
         """Job should run even if no reporter is configured."""
         called = []
 
-        def fn(run_id):
-            called.append(run_id)
+        def fn(run_key):
+            called.append(run_key)
 
         # No reporter, no argv flags — should just run and log a warning
-        import sys
 
         orig_argv = sys.argv
         sys.argv = ["test"]  # ensure no --drop-dir
         try:
-            run_job("test_job", fn, run_id="20250115", reporter=None)
+            run_job("test_job", fn, run_key="20250115", reporter=None)
         finally:
             sys.argv = orig_argv
 
         assert called == ["20250115"]
 
     def test_failure_still_exits_without_reporter(self):
-        import sys
-
         orig_argv = sys.argv
         sys.argv = ["test"]
         try:
             with pytest.raises(SystemExit):
-                run_job("test_job", _failing, run_id="20250115", reporter=None)
+                run_job("test_job", _failing, run_key="20250115", reporter=None)
         finally:
             sys.argv = orig_argv
 
@@ -187,30 +177,24 @@ class TestNoReporter:
 
 class TestFilesystemReporter:
     def test_writes_json_file_on_done(self, tmp_path):
-        from dispatchio.worker.reporter.filesystem import FilesystemReporter
-
         reporter = FilesystemReporter(tmp_path)
-        reporter.report("myjob", "20250115", Status.DONE)
+        correlation_id = uuid4()
+        reporter.report(correlation_id, Status.DONE)
         files = list(tmp_path.glob("*.json"))
         assert len(files) == 1
         assert "done" in files[0].name
 
     def test_written_file_is_valid_completion_event(self, tmp_path):
-        from dispatchio.worker.reporter.filesystem import FilesystemReporter
-        from dispatchio.receiver.base import CompletionEvent
-
         reporter = FilesystemReporter(tmp_path)
-        reporter.report("myjob", "20250115", Status.ERROR, error_reason="oops")
+        correlation_id = uuid4()
+        reporter.report(correlation_id, Status.ERROR, reason="oops")
         path = list(tmp_path.glob("*.json"))[0]
-        event = CompletionEvent.model_validate_json(path.read_text())
-        assert event.job_name == "myjob"
-        assert event.run_id == "20250115"
+        event = StatusEvent.model_validate_json(path.read_text())
         assert event.status == Status.ERROR
-        assert event.error_reason == "oops"
+        assert event.reason == "oops"
 
     def test_does_not_raise_on_bad_path(self):
         """Reporter must never raise — it logs and swallows errors."""
-        from dispatchio.worker.reporter.filesystem import FilesystemReporter
 
         reporter = FilesystemReporter.__new__(FilesystemReporter)
         reporter.drop_dir = type(

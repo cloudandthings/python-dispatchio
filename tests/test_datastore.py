@@ -13,11 +13,11 @@ from dispatchio.datastore import (
     dispatchio_write_results,
     get_data_store,
 )
-from dispatchio.datastore.base import _resolve_job, _resolve_run_id
+from dispatchio.datastore.base import _resolve_job, _resolve_run_key
 
 
 # ---------------------------------------------------------------------------
-# _resolve_job / _resolve_run_id
+# _resolve_job / _resolve_run_key
 # ---------------------------------------------------------------------------
 
 
@@ -34,17 +34,17 @@ class TestResolvers:
         with pytest.raises(ValueError, match="job is required"):
             _resolve_job(None)
 
-    def test_resolve_run_id_explicit(self):
-        assert _resolve_run_id("20260419") == "20260419"
+    def test_resolve_run_key_explicit(self):
+        assert _resolve_run_key("20260419") == "20260419"
 
-    def test_resolve_run_id_from_env(self, monkeypatch):
-        monkeypatch.setenv("DISPATCHIO_RUN_ID", "20260419")
-        assert _resolve_run_id(None) == "20260419"
+    def test_resolve_run_key_from_env(self, monkeypatch):
+        monkeypatch.setenv("DISPATCHIO_RUN_KEY", "20260419")
+        assert _resolve_run_key(None) == "20260419"
 
-    def test_resolve_run_id_raises_without_env(self, monkeypatch):
-        monkeypatch.delenv("DISPATCHIO_RUN_ID", raising=False)
-        with pytest.raises(ValueError, match="run_id is required"):
-            _resolve_run_id(None)
+    def test_resolve_run_key_raises_without_env(self, monkeypatch):
+        monkeypatch.delenv("DISPATCHIO_RUN_KEY", raising=False)
+        with pytest.raises(ValueError, match="run_key is required"):
+            _resolve_run_key(None)
 
 
 # ---------------------------------------------------------------------------
@@ -55,50 +55,50 @@ class TestResolvers:
 class TestMemoryDataStore:
     def test_write_and_read(self):
         store = MemoryDataStore()
-        store.write(["a", "b"], job="discover", run_id="20260419", key="entities")
-        assert store.read(job="discover", run_id="20260419", key="entities") == [
+        store.write(["a", "b"], job="discover", run_key="20260419", key="entities")
+        assert store.read(job="discover", run_key="20260419", key="entities") == [
             "a",
             "b",
         ]
 
     def test_read_missing_key_returns_none(self):
         store = MemoryDataStore()
-        assert store.read(job="discover", run_id="20260419", key="missing") is None
+        assert store.read(job="discover", run_key="20260419", key="missing") is None
 
     def test_default_key_is_return_value(self):
         store = MemoryDataStore()
-        store.write(42, job="j", run_id="r")
-        assert store.read(job="j", run_id="r") == 42
+        store.write(42, job="j", run_key="r")
+        assert store.read(job="j", run_key="r") == 42
 
     def test_write_is_idempotent(self):
         store = MemoryDataStore()
-        store.write("first", job="j", run_id="r", key="k")
-        store.write("second", job="j", run_id="r", key="k")
-        assert store.read(job="j", run_id="r", key="k") == "second"
+        store.write("first", job="j", run_key="r", key="k")
+        store.write("second", job="j", run_key="r", key="k")
+        assert store.read(job="j", run_key="r", key="k") == "second"
 
     def test_namespace_isolation(self):
         a = MemoryDataStore(namespace="ns_a")
         b = MemoryDataStore(namespace="ns_b")
-        a.write("from_a", job="j", run_id="r", key="k")
-        assert b.read(job="j", run_id="r", key="k") is None
+        a.write("from_a", job="j", run_key="r", key="k")
+        assert b.read(job="j", run_key="r", key="k") is None
 
     def test_json_value_types(self):
         store = MemoryDataStore()
         for value in [None, 1, 3.14, True, "str", [1, 2], {"x": 1}]:
-            store.write(value, job="j", run_id="r", key="k")
-            assert store.read(job="j", run_id="r", key="k") == value
+            store.write(value, job="j", run_key="r", key="k")
+            assert store.read(job="j", run_key="r", key="k") == value
 
     def test_write_uses_env_job(self, monkeypatch):
         monkeypatch.setenv("DISPATCHIO_JOB_NAME", "env_job")
-        monkeypatch.setenv("DISPATCHIO_RUN_ID", "20260419")
+        monkeypatch.setenv("DISPATCHIO_RUN_KEY", "20260419")
         store = MemoryDataStore()
         store.write("val")
-        assert store.read(job="env_job", run_id="20260419") == "val"
+        assert store.read(job="env_job", run_key="20260419") == "val"
 
     def test_read_uses_env_run_id(self, monkeypatch):
-        monkeypatch.setenv("DISPATCHIO_RUN_ID", "20260419")
+        monkeypatch.setenv("DISPATCHIO_RUN_KEY", "20260419")
         store = MemoryDataStore()
-        store.write("val", job="j", run_id="20260419")
+        store.write("val", job="j", run_key="20260419")
         assert store.read(job="j") == "val"
 
     def test_worker_env_returns_empty(self):
@@ -116,46 +116,46 @@ class TestMemoryDataStore:
 class TestFilesystemDataStore:
     def test_write_creates_json_file(self, tmp_path):
         store = FilesystemDataStore(tmp_path)
-        store.write(["x", "y"], job="discover", run_id="20260419", key="entities")
+        store.write(["x", "y"], job="discover", run_key="20260419", key="entities")
         p = tmp_path / "default" / "discover" / "20260419" / "entities.json"
         assert p.exists()
 
     def test_write_and_read_roundtrip(self, tmp_path):
         store = FilesystemDataStore(tmp_path)
-        store.write({"count": 3}, job="j", run_id="r", key="stats")
-        assert store.read(job="j", run_id="r", key="stats") == {"count": 3}
+        store.write({"count": 3}, job="j", run_key="r", key="stats")
+        assert store.read(job="j", run_key="r", key="stats") == {"count": 3}
 
     def test_read_missing_returns_none(self, tmp_path):
         store = FilesystemDataStore(tmp_path)
-        assert store.read(job="j", run_id="r", key="missing") is None
+        assert store.read(job="j", run_key="r", key="missing") is None
 
     def test_default_key_is_return_value(self, tmp_path):
         store = FilesystemDataStore(tmp_path)
-        store.write(99, job="j", run_id="r")
-        assert store.read(job="j", run_id="r") == 99
+        store.write(99, job="j", run_key="r")
+        assert store.read(job="j", run_key="r") == 99
 
     def test_write_is_idempotent(self, tmp_path):
         store = FilesystemDataStore(tmp_path)
-        store.write("first", job="j", run_id="r", key="k")
-        store.write("second", job="j", run_id="r", key="k")
-        assert store.read(job="j", run_id="r", key="k") == "second"
+        store.write("first", job="j", run_key="r", key="k")
+        store.write("second", job="j", run_key="r", key="k")
+        assert store.read(job="j", run_key="r", key="k") == "second"
 
     def test_namespace_in_path(self, tmp_path):
         store = FilesystemDataStore(tmp_path, namespace="my-ns")
-        store.write(1, job="j", run_id="r", key="k")
+        store.write(1, job="j", run_key="r", key="k")
         assert (tmp_path / "my-ns" / "j" / "r" / "k.json").exists()
 
     def test_namespace_isolation(self, tmp_path):
         a = FilesystemDataStore(tmp_path, namespace="a")
         b = FilesystemDataStore(tmp_path, namespace="b")
-        a.write("from_a", job="j", run_id="r", key="k")
-        assert b.read(job="j", run_id="r", key="k") is None
+        a.write("from_a", job="j", run_key="r", key="k")
+        assert b.read(job="j", run_key="r", key="k") is None
 
     def test_json_value_types(self, tmp_path):
         store = FilesystemDataStore(tmp_path)
         for value in [None, 1, 3.14, True, "str", [1, 2], {"x": 1}]:
-            store.write(value, job="j", run_id="r", key="k")
-            assert store.read(job="j", run_id="r", key="k") == value
+            store.write(value, job="j", run_key="r", key="k")
+            assert store.read(job="j", run_key="r", key="k") == value
 
     def test_worker_env_contains_data_dir_and_namespace(self, tmp_path):
         store = FilesystemDataStore(tmp_path, namespace="my-ns")
@@ -168,10 +168,10 @@ class TestFilesystemDataStore:
 
     def test_write_uses_env_job(self, tmp_path, monkeypatch):
         monkeypatch.setenv("DISPATCHIO_JOB_NAME", "env_job")
-        monkeypatch.setenv("DISPATCHIO_RUN_ID", "20260419")
+        monkeypatch.setenv("DISPATCHIO_RUN_KEY", "20260419")
         store = FilesystemDataStore(tmp_path)
         store.write("val")
-        assert store.read(job="env_job", run_id="20260419") == "val"
+        assert store.read(job="env_job", run_key="20260419") == "val"
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +219,7 @@ class TestDispatchioWriteResults:
         monkeypatch.setenv("DISPATCHIO_DATA_DIR", str(tmp_path))
         monkeypatch.setenv("DISPATCHIO_DATA_NAMESPACE", "ns")
         monkeypatch.setenv("DISPATCHIO_JOB_NAME", "discover")
-        monkeypatch.setenv("DISPATCHIO_RUN_ID", "20260419")
+        monkeypatch.setenv("DISPATCHIO_RUN_KEY", "20260419")
 
         @dispatchio_write_results
         def discover() -> list[str]:
@@ -229,7 +229,7 @@ class TestDispatchioWriteResults:
         assert out == ["a", "b"]
 
         store = FilesystemDataStore(tmp_path, namespace="ns")
-        assert store.read(job="discover", run_id="20260419", key="return_value") == [
+        assert store.read(job="discover", run_key="20260419", key="return_value") == [
             "a",
             "b",
         ]
@@ -238,7 +238,7 @@ class TestDispatchioWriteResults:
         monkeypatch.setenv("DISPATCHIO_DATA_DIR", str(tmp_path))
         monkeypatch.setenv("DISPATCHIO_DATA_NAMESPACE", "ns")
         monkeypatch.setenv("DISPATCHIO_JOB_NAME", "discover")
-        monkeypatch.setenv("DISPATCHIO_RUN_ID", "20260419")
+        monkeypatch.setenv("DISPATCHIO_RUN_KEY", "20260419")
 
         @dispatchio_write_results(key="entities")
         def discover() -> list[str]:
@@ -247,7 +247,7 @@ class TestDispatchioWriteResults:
         discover()
 
         store = FilesystemDataStore(tmp_path, namespace="ns")
-        assert store.read(job="discover", run_id="20260419", key="entities") == [
+        assert store.read(job="discover", run_key="20260419", key="entities") == [
             "x",
             "y",
         ]
@@ -281,13 +281,13 @@ class TestDispatchioReadResults:
     def test_injects_value_into_target_param(self, tmp_path, monkeypatch):
         monkeypatch.setenv("DISPATCHIO_DATA_DIR", str(tmp_path))
         monkeypatch.setenv("DISPATCHIO_DATA_NAMESPACE", "ns")
-        monkeypatch.setenv("DISPATCHIO_RUN_ID", "20260419")
+        monkeypatch.setenv("DISPATCHIO_RUN_KEY", "20260419")
 
         store = FilesystemDataStore(tmp_path, namespace="ns")
         store.write(
             ["customer_1", "customer_2"],
             job="discover",
-            run_id="20260419",
+            run_key="20260419",
             key="entities",
         )
 
@@ -300,7 +300,7 @@ class TestDispatchioReadResults:
     def test_does_not_override_explicit_kwarg(self, tmp_path, monkeypatch):
         monkeypatch.setenv("DISPATCHIO_DATA_DIR", str(tmp_path))
         monkeypatch.setenv("DISPATCHIO_DATA_NAMESPACE", "ns")
-        monkeypatch.setenv("DISPATCHIO_RUN_ID", "20260419")
+        monkeypatch.setenv("DISPATCHIO_RUN_KEY", "20260419")
 
         @dispatchio_read_results(param="entities", job="discover", key="entities")
         def process(entities: list[str] | None = None) -> list[str] | None:

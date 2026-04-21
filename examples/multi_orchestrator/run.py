@@ -35,7 +35,7 @@ from dispatchio import (
     WEEKLY,
     run_loop,
     orchestrator_from_config,
-    resolve_run_id,
+    resolve_run_key,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -95,15 +95,15 @@ run_loop(daily, reference_time=REFERENCE_TIME, tick_interval=0.5)
 print(f"\n{'─' * 60}")
 print(f"  Orchestrator: {weekly.name}  (reference: {REFERENCE_TIME.date()})")
 print(f"{'─' * 60}\n")
-# run_loop() uses a daily run_id by default; supply the correct weekly stop condition
+# run_loop() uses a daily run_key by default; supply the correct weekly stop condition
 # so it exits once both weekly jobs are done.
-weekly_run_id = resolve_run_id(WEEKLY, REFERENCE_TIME)
+weekly_run_key = resolve_run_key(WEEKLY, REFERENCE_TIME)
 run_loop(
     weekly,
     reference_time=REFERENCE_TIME,
     tick_interval=0.5,
     stop_when=lambda store, jobs, _: all(
-        (rec := store.get_latest_attempt(j.name, weekly_run_id)) and rec.is_finished()
+        (rec := store.get_latest_attempt(j.name, weekly_run_key)) and rec.is_finished()
         for j in jobs
     ),
 )

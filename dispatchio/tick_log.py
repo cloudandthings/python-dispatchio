@@ -26,7 +26,7 @@ class TickLogRecord:
     duration_seconds: float
     actions: list[
         dict
-    ]  # Serialised JobTickResult list: job_name, run_id, action, detail
+    ]  # Serialised JobTickResult list: job_name, run_key, action, detail
 
 
 @runtime_checkable

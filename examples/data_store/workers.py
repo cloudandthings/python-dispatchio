@@ -1,7 +1,7 @@
 """Worker functions for the data_store example.
 
 These run inside dispatchio worker subprocesses. DISPATCHIO_JOB_NAME,
-DISPATCHIO_RUN_ID, DISPATCHIO_DATA_DIR, and DISPATCHIO_DATA_NAMESPACE are
+DISPATCHIO_RUN_KEY, DISPATCHIO_DATA_DIR, and DISPATCHIO_DATA_NAMESPACE are
 injected automatically — no manual wiring needed.
 """
 

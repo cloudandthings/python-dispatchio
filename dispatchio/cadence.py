@@ -1,14 +1,11 @@
 """
-Cadence — the run_id resolution strategy for a job or dependency.
-
-Replaces the legacy ``run_id_expr`` string grammar ("day0", "mon1", …) with
-typed models that are easier to validate, document, and extend.
+Cadence — the run_key resolution strategy for a job or dependency.
 
 Public API (re-exported from dispatchio):
     Frequency           — HOURLY / DAILY / WEEKLY / MONTHLY
     DateCadence         — one run per calendar period, optional signed offset
-    FixedCadence        — static run_id (ad-hoc / event-driven)
-    IncrementalCadence  — batch-triggered; deferred to Phase 4
+    FixedCadence        — static run_key (ad-hoc / event-driven)
+    IncrementalCadence  — batch-triggered
     Cadence             — Annotated union (Pydantic discriminator)
 
     HOURLY / DAILY / WEEKLY / MONTHLY   — zero-offset DateCadence constants
@@ -41,7 +38,7 @@ class DateCadence(BaseModel):
 
 
 class FixedCadence(BaseModel):
-    """Fixed run_id — for ad-hoc / event-driven jobs."""
+    """Fixed run_key — for ad-hoc / event-driven jobs."""
 
     type: Literal["literal"] = "literal"
     value: str
@@ -49,8 +46,7 @@ class FixedCadence(BaseModel):
 
 class IncrementalCadence(BaseModel):
     """
-    Batch-triggered — run_id sourced from MetadataStore.
-    Implementation deferred to Phase 4 (MetadataStore required).
+    Batch-triggered — run_key sourced from MetadataStore.
     """
 
     type: Literal["incremental"] = "incremental"

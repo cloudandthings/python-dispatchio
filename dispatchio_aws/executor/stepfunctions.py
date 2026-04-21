@@ -24,9 +24,7 @@ class StepFunctionsExecutor:
         client: BaseClient | None = None,
     ) -> None:
         self._client = client or boto3.client("stepfunctions", region_name=region)
-        self._references: dict[
-            str, dict[str, Any]
-        ] = {}  # keyed by str(dispatchio_attempt_id)
+        self._references: dict[str, dict[str, Any]] = {}  # keyed by str(correlation_id)
 
     def submit(
         self,
@@ -42,7 +40,7 @@ class StepFunctionsExecutor:
             )
 
         # Include attempt number in execution name so retries get unique names
-        execution_name = f"{job.name}--{attempt.logical_run_id}--{attempt.attempt}"
+        execution_name = f"{job.name}--{attempt.run_key}--{attempt.attempt}"
         if len(execution_name) > 80:
             raise ValueError(
                 "Step Functions execution name must be <= 80 characters: "
@@ -61,7 +59,7 @@ class StepFunctionsExecutor:
             input=json.dumps(payload),
         )
         execution_arn = response["executionArn"]
-        self._references[str(attempt.dispatchio_attempt_id)] = {
+        self._references[str(attempt.correlation_id)] = {
             "execution_arn": execution_arn,
             "execution_name": execution_name,
         }
@@ -80,7 +78,5 @@ class StepFunctionsExecutor:
             return Status.DONE
         return Status.ERROR
 
-    def get_executor_reference(
-        self, dispatchio_attempt_id: UUID
-    ) -> dict[str, Any] | None:
-        return self._references.get(str(dispatchio_attempt_id))
+    def get_executor_reference(self, correlation_id: UUID) -> dict[str, Any] | None:
+        return self._references.get(str(correlation_id))

@@ -19,7 +19,7 @@ def test_aws_orchestrator_registers_aws_executors() -> None:
         ),
         receiver=ReceiverSettings(backend="none"),
     )
-    jobs = [Job(name="j", executor=SubprocessJob(command=["echo", "{run_id}"]))]
+    jobs = [Job(name="j", executor=SubprocessJob(command=["echo", "{run_key}"]))]
 
     orchestrator = aws_orchestrator_from_config(jobs=jobs, config=settings)
 

@@ -1,15 +1,17 @@
 """Tests for Pydantic model validation and behaviour."""
 
 from datetime import datetime, time, timezone
+from uuid import uuid4
 import pytest
+
 from dispatchio.cadence import DAILY, MONTHLY
 from dispatchio.conditions import TimeOfDayCondition
 from dispatchio.models import (
     AdmissionPolicy,
-    Dependency,
     HttpJob,
     JobAction,
     Job,
+    JobDependency,
     JobTickResult,
     PythonJob,
     PoolPolicy,
@@ -35,13 +37,11 @@ class TestStatus:
         assert Status.DONE not in Status.active()
 
     def test_attempt_record_is_finished(self):
-        from uuid import uuid4
-
         record = AttemptRecord(
             job_name="x",
-            logical_run_id="1",
+            run_key="1",
             attempt=0,
-            dispatchio_attempt_id=uuid4(),
+            correlation_id=uuid4(),
             status=Status.DONE,
         )
         assert record.is_finished()
@@ -51,9 +51,9 @@ class TestStatus:
 
         record = AttemptRecord(
             job_name="x",
-            logical_run_id="1",
+            run_key="1",
             attempt=0,
-            dispatchio_attempt_id=uuid4(),
+            correlation_id=uuid4(),
             status=Status.RUNNING,
         )
         assert record.is_active()
@@ -62,13 +62,11 @@ class TestStatus:
 
 class TestAttemptRecord:
     def test_defaults(self):
-        from uuid import uuid4
-
         r = AttemptRecord(
             job_name="job",
-            logical_run_id="20250115",
+            run_key="20250115",
             attempt=0,
-            dispatchio_attempt_id=uuid4(),
+            correlation_id=uuid4(),
             status=Status.SUBMITTED,
         )
         assert r.attempt == 0
@@ -77,14 +75,12 @@ class TestAttemptRecord:
         assert r.trigger_type == TriggerType.SCHEDULED
 
     def test_model_copy_update(self):
-        from uuid import uuid4
-
-        attempt_id = uuid4()
+        correlation_id = uuid4()
         r = AttemptRecord(
             job_name="job",
-            logical_run_id="20250115",
+            run_key="20250115",
             attempt=0,
-            dispatchio_attempt_id=attempt_id,
+            correlation_id=correlation_id,
             status=Status.RUNNING,
         )
         updated = r.model_copy(update={"status": Status.DONE})
@@ -147,7 +143,7 @@ class TestPythonJob:
 
 class TestDependency:
     def test_monthly_cadence(self):
-        dep = Dependency(job_name="up", cadence=MONTHLY)
+        dep = JobDependency(job_name="up", cadence=MONTHLY)
         assert dep.cadence == MONTHLY
 
 
@@ -169,8 +165,8 @@ class TestJob:
             cadence=DAILY,
             executor=SubprocessJob(command=["run.sh"]),
             depends_on=[
-                Dependency(job_name="upstream", cadence=DAILY),
-                Dependency(job_name="other", cadence=MONTHLY),
+                JobDependency(job_name="upstream", cadence=DAILY),
+                JobDependency(job_name="other", cadence=MONTHLY),
             ],
         )
         assert len(j.depends_on) == 2
@@ -209,7 +205,7 @@ class TestJob:
 
     def test_dependency_single_item(self):
         """depends_on accepts a single Dependency without wrapping in a list."""
-        dep = Dependency(job_name="up", cadence=DAILY)
+        dep = JobDependency(job_name="up", cadence=DAILY)
         downstream = Job(
             name="down",
             cadence=DAILY,
@@ -253,9 +249,9 @@ class TestTickResult:
         result = TickResult(
             reference_time=ref,
             results=[
-                JobTickResult(job_name="a", run_id="x", action=JobAction.SUBMITTED),
+                JobTickResult(job_name="a", run_key="x", action=JobAction.SUBMITTED),
                 JobTickResult(
-                    job_name="b", run_id="x", action=JobAction.SKIPPED_CONDITION
+                    job_name="b", run_key="x", action=JobAction.SKIPPED_CONDITION
                 ),
             ],
         )

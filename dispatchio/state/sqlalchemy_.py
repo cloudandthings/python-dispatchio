@@ -28,6 +28,7 @@ from sqlalchemy import (
     Text,
     TypeDecorator,
     UniqueConstraint,
+    Uuid,
     cast,
     create_engine,
     desc,
@@ -37,40 +38,22 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from dispatchio.models import AttemptRecord, DeadLetterRecord, RetryRequest, Status
+from dispatchio.models import (
+    AttemptRecord,
+    DeadLetterRecord,
+    Event,
+    OrchestratorRunRecord,
+    OrchestratorRunStatus,
+    OrchestratorRunMode,
+    RetryRequest,
+    Status,
+)
 from dispatchio.models import (
     TriggerType,
     DeadLetterReasonCode,
     DeadLetterStatus,
     DeadLetterSourceBackend,
 )
-
-
-# ---------------------------------------------------------------------------
-# Custom type: UUID
-# ---------------------------------------------------------------------------
-
-
-class _UUIDType(TypeDecorator):
-    """Store UUID as string for maximum database compatibility."""
-
-    impl = String(36)
-    cache_ok = True
-
-    def process_bind_param(self, value: UUID | None, dialect) -> str | None:
-        if value is None:
-            return None
-        if isinstance(value, str):
-            return value
-        return str(value)
-
-    def process_result_value(self, value: str | None, dialect) -> UUID | None:
-        if value is None:
-            return None
-        if isinstance(value, UUID):
-            return value
-        return UUID(value)
-
 
 # ---------------------------------------------------------------------------
 # Custom type: always returns UTC-aware datetimes (SQLite drops tz info)
@@ -115,11 +98,12 @@ class _AttemptRecordRow(_Base):
 
     __tablename__ = "run_attempts"
 
-    # PK: dispatchio_attempt_id as UUID string
-    dispatchio_attempt_id: Mapped[str] = mapped_column(_UUIDType, primary_key=True)
-    # Identity key: (job_name, logical_run_id, attempt)
+    # TODO: Maybe add another ID?
+    # PK: correlation_id as UUID string
+    correlation_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    # Identity key: (job_name, run_key, attempt)
     job_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    logical_run_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    run_key: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     attempt: Mapped[int] = mapped_column(Integer, nullable=False)
     # Status and reason
     status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
@@ -139,13 +123,11 @@ class _AttemptRecordRow(_Base):
     completion_event_trace: Mapped[dict[str, Any] | None] = mapped_column(
         JSON, nullable=True
     )
-    # Phase 3: Operator context for manual operations
-    operator_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Operator context for manual operations
+    requested_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     __table_args__ = (
-        UniqueConstraint(
-            "job_name", "logical_run_id", "attempt", name="uq_job_logical_run_attempt"
-        ),
+        UniqueConstraint("job_name", "run_key", "attempt", name="uq_run_key_attempt"),
     )
 
 
@@ -154,12 +136,12 @@ class _RetryRequestRow(_Base):
 
     __tablename__ = "retry_requests"
 
-    retry_request_id: Mapped[str] = mapped_column(_UUIDType, primary_key=True)
+    retry_request_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
     requested_at: Mapped[datetime] = mapped_column(
         _UTCDateTime, nullable=False, index=True
     )
     requested_by: Mapped[str] = mapped_column(String(255), nullable=False)
-    logical_run_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    run_key: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     requested_jobs: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     cascade: Mapped[bool] = mapped_column(Integer, nullable=False, default=1)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -174,7 +156,7 @@ class _DeadLetterRow(_Base):
 
     __tablename__ = "dead_letters"
 
-    dead_letter_id: Mapped[str] = mapped_column(_UUIDType, primary_key=True)
+    dead_letter_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
     occurred_at: Mapped[datetime] = mapped_column(
         _UTCDateTime, nullable=False, index=True
     )
@@ -185,10 +167,10 @@ class _DeadLetterRow(_Base):
         String(50), nullable=False, default=DeadLetterStatus.OPEN.value
     )
     # Event identity
-    job_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    logical_run_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    job_name: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    run_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     attempt: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    dispatchio_attempt_id: Mapped[str | None] = mapped_column(_UUIDType, nullable=True)
+    correlation_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
     # Audit
     raw_payload: Mapped[dict[str, Any]] = mapped_column(
         JSON, nullable=False, default=dict
@@ -197,20 +179,67 @@ class _DeadLetterRow(_Base):
     resolver_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class _OrchestratorRunRow(_Base):
+    """First-class orchestrator run record for backfill and replay coordination."""
+
+    __tablename__ = "orchestrator_runs"
+
+    orchestrator_run_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    orchestrator_name: Mapped[str] = mapped_column(
+        String(255), nullable=False, index=True
+    )
+    run_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    mode: Mapped[str] = mapped_column(String(50), nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    submitted_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    force: Mapped[bool] = mapped_column(Integer, nullable=False, default=0)
+    replay_group_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    checkpoint: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    opened_at: Mapped[datetime] = mapped_column(
+        _UTCDateTime, nullable=False, index=True
+    )
+    activated_at: Mapped[datetime | None] = mapped_column(_UTCDateTime, nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(_UTCDateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "orchestrator_name", "run_key", name="uq_orchestrator_run_key"
+        ),
+    )
+
+
+class _EventRow(_Base):
+    """Row for events."""
+
+    __tablename__ = "events"
+
+    name: Mapped[str] = mapped_column(String(255), primary_key=True)
+    run_key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        _UTCDateTime, nullable=False, index=True
+    )
+    trace: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+
+
 # ---------------------------------------------------------------------------
 # Conversion helpers
 # ---------------------------------------------------------------------------
 
 
 def _row_to_attempt_record(row: _AttemptRecordRow) -> AttemptRecord:
-    attempt_id = row.dispatchio_attempt_id
+    attempt_id = row.correlation_id
     if isinstance(attempt_id, str):
         attempt_id = UUID(attempt_id)
     return AttemptRecord(
         job_name=row.job_name,
-        logical_run_id=row.logical_run_id,
+        run_key=row.run_key,
         attempt=row.attempt,
-        dispatchio_attempt_id=attempt_id,
+        correlation_id=attempt_id,
         status=Status(row.status),
         reason=row.reason,
         submitted_at=row.submitted_at,
@@ -220,15 +249,15 @@ def _row_to_attempt_record(row: _AttemptRecordRow) -> AttemptRecord:
         trigger_reason=row.trigger_reason,
         trace=row.trace or {},
         completion_event_trace=row.completion_event_trace,
-        operator_name=row.operator_name,
+        requested_by=row.requested_by,
     )
 
 
 def _apply_attempt_record_to_row(record: AttemptRecord, row: _AttemptRecordRow) -> None:
     """Write all AttemptRecord fields onto an existing (or new) ORM row in-place."""
-    row.dispatchio_attempt_id = str(record.dispatchio_attempt_id)
+    row.correlation_id = record.correlation_id
     row.job_name = record.job_name
-    row.logical_run_id = record.logical_run_id
+    row.run_key = record.run_key
     row.attempt = record.attempt
     row.status = record.status.value
     row.reason = record.reason
@@ -239,20 +268,15 @@ def _apply_attempt_record_to_row(record: AttemptRecord, row: _AttemptRecordRow) 
     row.trigger_reason = record.trigger_reason
     row.trace = record.trace
     row.completion_event_trace = record.completion_event_trace
-    row.operator_name = record.operator_name
+    row.requested_by = record.requested_by
 
 
 def _row_to_retry_request(row: _RetryRequestRow) -> RetryRequest:
-    retry_request_id = (
-        row.retry_request_id
-        if isinstance(row.retry_request_id, UUID)
-        else UUID(row.retry_request_id)
-    )
     return RetryRequest(
-        retry_request_id=retry_request_id,
+        retry_request_id=row.retry_request_id,
         requested_at=row.requested_at,
         requested_by=row.requested_by,
-        logical_run_id=row.logical_run_id,
+        run_key=row.run_key,
         requested_jobs=row.requested_jobs or [],
         cascade=bool(row.cascade),
         reason=row.reason,
@@ -262,10 +286,10 @@ def _row_to_retry_request(row: _RetryRequestRow) -> RetryRequest:
 
 
 def _apply_retry_request_to_row(record: RetryRequest, row: _RetryRequestRow) -> None:
-    row.retry_request_id = str(record.retry_request_id)
+    row.retry_request_id = record.retry_request_id
     row.requested_at = record.requested_at
     row.requested_by = record.requested_by
-    row.logical_run_id = record.logical_run_id
+    row.run_key = record.run_key
     row.requested_jobs = record.requested_jobs
     row.cascade = int(record.cascade)
     row.reason = record.reason
@@ -274,29 +298,17 @@ def _apply_retry_request_to_row(record: RetryRequest, row: _RetryRequestRow) -> 
 
 
 def _row_to_dead_letter_record(row: _DeadLetterRow) -> DeadLetterRecord:
-    dead_letter_id = (
-        row.dead_letter_id
-        if isinstance(row.dead_letter_id, UUID)
-        else UUID(row.dead_letter_id)
-    )
-    dispatchio_attempt_id = None
-    if row.dispatchio_attempt_id:
-        dispatchio_attempt_id = (
-            row.dispatchio_attempt_id
-            if isinstance(row.dispatchio_attempt_id, UUID)
-            else UUID(row.dispatchio_attempt_id)
-        )
     return DeadLetterRecord(
-        dead_letter_id=dead_letter_id,
+        dead_letter_id=row.dead_letter_id,
         occurred_at=row.occurred_at,
         source_backend=DeadLetterSourceBackend(row.source_backend),
         reason_code=DeadLetterReasonCode(row.reason_code),
         reason_detail=row.reason_detail,
         status=DeadLetterStatus(row.status),
         job_name=row.job_name,
-        logical_run_id=row.logical_run_id,
+        run_key=row.run_key,
         attempt=row.attempt,
-        dispatchio_attempt_id=dispatchio_attempt_id,
+        correlation_id=row.correlation_id,
         raw_payload=row.raw_payload or {},
         resolved_at=row.resolved_at,
         resolver_notes=row.resolver_notes,
@@ -307,21 +319,71 @@ def _apply_dead_letter_record_to_row(
     record: DeadLetterRecord, row: _DeadLetterRow
 ) -> None:
     """Write all DeadLetterRecord fields onto an existing (or new) ORM row in-place."""
-    row.dead_letter_id = str(record.dead_letter_id)
+    row.dead_letter_id = record.dead_letter_id
     row.occurred_at = record.occurred_at
     row.source_backend = record.source_backend.value
     row.reason_code = record.reason_code.value
     row.reason_detail = record.reason_detail
     row.status = record.status.value
     row.job_name = record.job_name
-    row.logical_run_id = record.logical_run_id
+    row.run_key = record.run_key
     row.attempt = record.attempt
-    row.dispatchio_attempt_id = (
-        str(record.dispatchio_attempt_id) if record.dispatchio_attempt_id else None
-    )
+    row.correlation_id = record.correlation_id
     row.raw_payload = record.raw_payload
     row.resolved_at = record.resolved_at
     row.resolver_notes = record.resolver_notes
+
+
+def _row_to_orchestrator_run_record(
+    row: _OrchestratorRunRow,
+) -> OrchestratorRunRecord:
+    """Convert ORM row to OrchestratorRunRecord model."""
+    return OrchestratorRunRecord(
+        orchestrator_run_id=row.orchestrator_run_id,
+        orchestrator_name=row.orchestrator_name,
+        run_key=row.run_key,
+        status=OrchestratorRunStatus(row.status),
+        mode=OrchestratorRunMode(row.mode),
+        priority=row.priority,
+        submitted_by=row.submitted_by,
+        reason=row.reason,
+        force=bool(row.force),
+        replay_group_id=row.replay_group_id,
+        checkpoint=row.checkpoint or {},
+        opened_at=row.opened_at,
+        activated_at=row.activated_at,
+        closed_at=row.closed_at,
+    )
+
+
+def _apply_orchestrator_run_record_to_row(
+    record: OrchestratorRunRecord, row: _OrchestratorRunRow
+) -> None:
+    """Write all OrchestratorRunRecord fields onto an existing (or new) ORM row in-place."""
+    row.orchestrator_run_id = record.orchestrator_run_id
+    row.orchestrator_name = record.orchestrator_name
+    row.run_key = record.run_key
+    row.status = record.status.value
+    row.mode = record.mode.value
+    row.priority = record.priority
+    row.submitted_by = record.submitted_by
+    row.reason = record.reason
+    row.force = int(record.force)
+    row.replay_group_id = record.replay_group_id
+    row.checkpoint = record.checkpoint
+    row.opened_at = record.opened_at
+    row.activated_at = record.activated_at
+    row.closed_at = record.closed_at
+
+
+def _row_to_event(row: _EventRow) -> Event:
+    return Event(
+        name=row.name,
+        run_key=row.run_key,
+        status=Status(row.status),
+        occurred_at=row.occurred_at,
+        trace=row.trace or {},
+    )
 
 
 @contextmanager
@@ -376,9 +438,7 @@ class SQLAlchemyStateStore:
     # StateStore protocol - Attempt API
     # ------------------------------------------------------------------
 
-    def get_latest_attempt(
-        self, job_name: str, logical_run_id: str
-    ) -> AttemptRecord | None:
+    def get_latest_attempt(self, job_name: str, run_key: str) -> AttemptRecord | None:
         with self._lock or _nullctx():
             with Session(self._engine) as session:
                 row = session.scalar(
@@ -386,7 +446,7 @@ class SQLAlchemyStateStore:
                     .where(
                         and_(
                             _AttemptRecordRow.job_name == job_name,
-                            _AttemptRecordRow.logical_run_id == logical_run_id,
+                            _AttemptRecordRow.run_key == run_key,
                         )
                     )
                     .order_by(desc(_AttemptRecordRow.attempt))
@@ -394,13 +454,12 @@ class SQLAlchemyStateStore:
                 )
                 return _row_to_attempt_record(row) if row is not None else None
 
-    def get_attempt(self, dispatchio_attempt_id: UUID) -> AttemptRecord | None:
+    def get_attempt(self, correlation_id: UUID) -> AttemptRecord | None:
         with self._lock or _nullctx():
             with Session(self._engine) as session:
                 row = session.scalar(
                     select(_AttemptRecordRow).where(
-                        _AttemptRecordRow.dispatchio_attempt_id
-                        == str(dispatchio_attempt_id)
+                        _AttemptRecordRow.correlation_id == correlation_id
                     )
                 )
                 return _row_to_attempt_record(row) if row is not None else None
@@ -415,13 +474,12 @@ class SQLAlchemyStateStore:
                 session.commit()
 
     def update_attempt(self, record: AttemptRecord) -> None:
-        """Update an existing attempt row by dispatchio_attempt_id."""
+        """Update an existing attempt row by correlation_id."""
         with self._lock or _nullctx():
             with Session(self._engine) as session:
                 existing = session.scalar(
                     select(_AttemptRecordRow).where(
-                        _AttemptRecordRow.dispatchio_attempt_id
-                        == str(record.dispatchio_attempt_id)
+                        _AttemptRecordRow.correlation_id == record.correlation_id
                     )
                 )
                 if existing is not None:
@@ -431,7 +489,7 @@ class SQLAlchemyStateStore:
     def list_attempts(
         self,
         job_name: str | None = None,
-        logical_run_id: str | None = None,
+        run_key: str | None = None,
         attempt: int | None = None,
         status: Status | None = None,
     ) -> list[AttemptRecord]:
@@ -440,15 +498,15 @@ class SQLAlchemyStateStore:
                 q = select(_AttemptRecordRow)
                 if job_name is not None:
                     q = q.where(_AttemptRecordRow.job_name == job_name)
-                if logical_run_id is not None:
-                    q = q.where(_AttemptRecordRow.logical_run_id == logical_run_id)
+                if run_key is not None:
+                    q = q.where(_AttemptRecordRow.run_key == run_key)
                 if attempt is not None:
                     q = q.where(_AttemptRecordRow.attempt == attempt)
                 if status is not None:
                     q = q.where(_AttemptRecordRow.status == status.value)
                 q = q.order_by(
                     _AttemptRecordRow.job_name,
-                    _AttemptRecordRow.logical_run_id,
+                    _AttemptRecordRow.run_key,
                     desc(_AttemptRecordRow.attempt),
                 )
                 rows = session.scalars(q).all()
@@ -472,7 +530,7 @@ class SQLAlchemyStateStore:
             with Session(self._engine) as session:
                 row = session.scalar(
                     select(_DeadLetterRow).where(
-                        _DeadLetterRow.dead_letter_id == str(dead_letter_id)
+                        _DeadLetterRow.dead_letter_id == dead_letter_id
                     )
                 )
                 return _row_to_dead_letter_record(row) if row is not None else None
@@ -535,16 +593,159 @@ class SQLAlchemyStateStore:
 
     def list_retry_requests(
         self,
-        logical_run_id: str | None = None,
+        run_key: str | None = None,
         requested_by: str | None = None,
     ) -> list[RetryRequest]:
         with self._lock or _nullctx():
             with Session(self._engine) as session:
                 q = select(_RetryRequestRow)
-                if logical_run_id is not None:
-                    q = q.where(_RetryRequestRow.logical_run_id == logical_run_id)
+                if run_key is not None:
+                    q = q.where(_RetryRequestRow.run_key == run_key)
                 if requested_by is not None:
                     q = q.where(_RetryRequestRow.requested_by == requested_by)
                 q = q.order_by(_RetryRequestRow.requested_at.desc())
                 rows = session.scalars(q).all()
                 return [_row_to_retry_request(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # StateStore protocol - Orchestrator Run API
+    # ------------------------------------------------------------------
+
+    def append_orchestrator_run(self, record: OrchestratorRunRecord) -> None:
+        """Insert a new orchestrator run record."""
+        with self._lock or _nullctx():
+            with Session(self._engine) as session:
+                row = _OrchestratorRunRow()
+                _apply_orchestrator_run_record_to_row(record, row)
+                session.add(row)
+                session.commit()
+
+    def get_orchestrator_run(
+        self, orchestrator_run_id: UUID
+    ) -> OrchestratorRunRecord | None:
+        """Retrieve an orchestrator run by its UUID."""
+        with self._lock or _nullctx():
+            with Session(self._engine) as session:
+                row = session.scalar(
+                    select(_OrchestratorRunRow).where(
+                        _OrchestratorRunRow.orchestrator_run_id == orchestrator_run_id
+                    )
+                )
+                return _row_to_orchestrator_run_record(row) if row is not None else None
+
+    def get_orchestrator_run_by_key(
+        self, orchestrator_name: str, run_key: str
+    ) -> OrchestratorRunRecord | None:
+        """Retrieve an orchestrator run by orchestrator name and run key."""
+        with self._lock or _nullctx():
+            with Session(self._engine) as session:
+                row = session.scalar(
+                    select(_OrchestratorRunRow).where(
+                        and_(
+                            _OrchestratorRunRow.orchestrator_name == orchestrator_name,
+                            _OrchestratorRunRow.run_key == run_key,
+                        )
+                    )
+                )
+                return _row_to_orchestrator_run_record(row) if row is not None else None
+
+    def list_orchestrator_runs(
+        self,
+        orchestrator_name: str | None = None,
+        status: OrchestratorRunStatus | None = None,
+        mode: OrchestratorRunMode | None = None,
+    ) -> list[OrchestratorRunRecord]:
+        """
+        List orchestrator runs, optionally filtered by orchestrator name,
+        status, and/or mode. Results sorted by (orchestrator_name, opened_at DESC).
+        """
+        with self._lock or _nullctx():
+            with Session(self._engine) as session:
+                q = select(_OrchestratorRunRow)
+                if orchestrator_name is not None:
+                    q = q.where(
+                        _OrchestratorRunRow.orchestrator_name == orchestrator_name
+                    )
+                if status is not None:
+                    q = q.where(_OrchestratorRunRow.status == status.value)
+                if mode is not None:
+                    q = q.where(_OrchestratorRunRow.mode == mode.value)
+                q = q.order_by(
+                    _OrchestratorRunRow.orchestrator_name,
+                    desc(_OrchestratorRunRow.opened_at),
+                )
+                rows = session.scalars(q).all()
+                return [_row_to_orchestrator_run_record(r) for r in rows]
+
+    def update_orchestrator_run(self, record: OrchestratorRunRecord) -> None:
+        """
+        Update an existing orchestrator run record by orchestrator_run_id.
+        Used when changing status, updating checkpoint, or recording activation/closure.
+        """
+        with self._lock or _nullctx():
+            with Session(self._engine) as session:
+                existing = session.scalar(
+                    select(_OrchestratorRunRow).where(
+                        _OrchestratorRunRow.orchestrator_run_id
+                        == record.orchestrator_run_id
+                    )
+                )
+                if existing is not None:
+                    _apply_orchestrator_run_record_to_row(record, existing)
+                    session.commit()
+
+    # ------------------------------------------------------------------
+    # StateStore protocol - Event API
+    # ------------------------------------------------------------------
+
+    def set_event(self, event: Event) -> None:
+        """Upsert an event by (name, run_key). Last write wins."""
+        with self._lock or _nullctx():
+            with Session(self._engine) as session:
+                row = session.scalar(
+                    select(_EventRow).where(
+                        and_(
+                            _EventRow.name == event.name,
+                            _EventRow.run_key == event.run_key,
+                        )
+                    )
+                )
+                if row is None:
+                    row = _EventRow(
+                        name=event.name,
+                        run_key=event.run_key,
+                        status=event.status.value,
+                        occurred_at=event.occurred_at,
+                        trace=event.trace,
+                    )
+                    session.add(row)
+                else:
+                    row.status = event.status.value
+                    row.occurred_at = event.occurred_at
+                    row.trace = event.trace
+                session.commit()
+
+    def get_event(self, name: str, run_key: str) -> Event | None:
+        """Return the event for (name, run_key), or None."""
+        with self._lock or _nullctx():
+            with Session(self._engine) as session:
+                row = session.scalar(
+                    select(_EventRow).where(
+                        and_(
+                            _EventRow.name == name,
+                            _EventRow.run_key == run_key,
+                        )
+                    )
+                )
+                return _row_to_event(row) if row is not None else None
+
+    def list_events(self, run_key: str | None = None) -> list[Event]:
+        """List all events, optionally filtered by run_key."""
+        with self._lock or _nullctx():
+            with Session(self._engine) as session:
+                q = select(_EventRow)
+                if run_key is not None:
+                    q = q.where(_EventRow.run_key == run_key)
+                q = q.order_by(_EventRow.name, _EventRow.run_key)
+                rows = session.scalars(q).all()
+                return [_row_to_event(r) for r in rows]

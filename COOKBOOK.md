@@ -104,7 +104,7 @@ def goodbye_world(run_id: str) -> None:
 
 ## Subprocess Jobs
 
-> Demonstrates SubprocessJob — the executor type for running external processes or scripts. Key difference from PythonJob: the worker script must call run_job() explicitly, and the job's env config must inject DISPATCHIO_RUN_ID and DISPATCHIO_DROP_DIR so completion can be reported back. Includes a job that deliberately fails to show retry behaviour and the final ERROR state.
+> Demonstrates SubprocessJob — the executor type for running external processes or scripts. Key difference from PythonJob: the worker script must call run_job() explicitly, and the job's env config must inject DISPATCHIO_JOB_RUN_KEY and DISPATCHIO_DROP_DIR so completion can be reported back. Includes a job that deliberately fails to show retry behaviour and the final ERROR state.
 
 **Tags:** `SubprocessJob` · `retries` · `error-handling`
 
@@ -123,7 +123,7 @@ Two jobs:
 Key difference from PythonJob:
   SubprocessJob does not get the dispatchio harness automatically. The worker
   script must call run_job() itself, and the job's `env` config must inject
-  DISPATCHIO_RUN_ID and DISPATCHIO_DROP_DIR so run_job() can report completion
+  DISPATCHIO_JOB_RUN_KEY and DISPATCHIO_DROP_DIR so run_job() can report completion
   back to the orchestrator.
 
   sys.executable is used instead of "python" so the subprocess inherits the
@@ -146,7 +146,7 @@ BASE = Path(__file__).parent
 # Injected into each subprocess so run_job() can auto-configure FilesystemReporter.
 DROP_DIR = str(BASE / ".dispatchio" / "completions")
 
-ENV = {"DISPATCHIO_RUN_ID": "{run_id}", "DISPATCHIO_DROP_DIR": DROP_DIR}
+ENV = {"DISPATCHIO_JOB_RUN_KEY": "{run_id}", "DISPATCHIO_DROP_DIR": DROP_DIR}
 
 generate = Job.create(
     "generate",
@@ -338,14 +338,14 @@ a faster job (daily) must wait for a slower job (monthly) to finish for
 the same logical period before it can proceed.
 
 Each job resolves its own run_id independently from the reference_time:
-  monthly_ledger  → "202501"   (current calendar month)
-  daily_reconcile → "20250115" (current calendar day)
-  weekly_summary  → "20250113" (Monday of current week)
-  yesterday_load  → "20250114" (previous calendar day)
+  monthly_ledger  → "M202501"   (current calendar month)
+  daily_reconcile → "D20250115" (current calendar day)
+  weekly_summary  → "W20250113" (Monday of current week)
+  yesterday_load  → "D20250114" (previous calendar day)
 
 Cross-cadence dependency:
   daily_reconcile and weekly_summary both carry a Dependency with
-  cadence=MONTHLY, so they wait for monthly_ledger/202501 to be DONE
+  cadence=MONTHLY, so they wait for monthly_ledger/M202501 to be DONE
   before they submit — regardless of their own (daily / weekly) run_ids.
 
 YESTERDAY shorthand:
@@ -374,7 +374,7 @@ from dispatchio import (
 BASE = Path(__file__).parent
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))
 
-# One run per calendar month — run_id = "202501", "202502", …
+# One run per calendar month — run_id = "M202501", "M202502", …
 monthly_ledger = Job.create(
     "monthly_ledger",
     PythonJob(script=str(BASE / "my_work.py"), function="monthly_ledger"),
@@ -382,8 +382,8 @@ monthly_ledger = Job.create(
 )
 
 # Daily job that blocks until the current month's ledger is ready.
-# This job's run_id is "20250115"; the dependency resolves separately to
-# the MONTHLY run_id "202501" and waits for monthly_ledger/202501 to be DONE.
+# This job's run_id is "D20250115"; the dependency resolves separately to
+# the MONTHLY run_id "M202501" and waits for monthly_ledger/M202501 to be DONE.
 daily_reconcile = Job.create(
     "daily_reconcile",
     PythonJob(script=str(BASE / "my_work.py"), function="daily_reconcile"),
@@ -399,7 +399,7 @@ weekly_summary = Job.create(
     depends_on=[Dependency(job_name="monthly_ledger", cadence=MONTHLY)],
 )
 
-# YESTERDAY cadence — run_id always resolves to the previous day ("20250114").
+# YESTERDAY cadence — run_id always resolves to the previous day ("D20250114").
 # Runs independently; no dependency on the monthly ledger.
 yesterday_load = Job.create(
     "yesterday_load",
@@ -685,7 +685,7 @@ from examples.dependency_modes.jobs import orchestrator
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 REF = datetime(2025, 1, 15, 9, 0, tzinfo=timezone.utc)
-RUN_ID = REF.strftime("%Y%m%d")  # "20250115"
+RUN_ID = f"D{REF.strftime('%Y%m%d')}"  # "D20250115"
 
 # Seed the state store to simulate entity results without running the jobs.
 orchestrator.state.put(
@@ -1078,7 +1078,7 @@ def _submitted(rows: list[tuple[str, str]], job_name: str) -> bool:
 
 if __name__ == "__main__":
     reference_time = datetime(2025, 1, 15, 9, 0, tzinfo=timezone.utc)
-    run_id = reference_time.strftime("%Y%m%d")
+    run_id = f"D{reference_time.strftime('%Y%m%d')}"
 
     # Tick 1: nothing submitted yet (no events received).
     tick1 = _tick("Tick 1 - no events", reference_time)
@@ -1201,7 +1201,7 @@ from dispatchio import (
     WEEKLY,
     run_loop,
     orchestrator_from_config,
-    resolve_run_id,
+    resolve_job_run_key,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -1263,7 +1263,7 @@ print(f"  Orchestrator: {weekly.name}  (reference: {REFERENCE_TIME.date()})")
 print(f"{'─' * 60}\n")
 # run_loop() uses a daily run_id by default; supply the correct weekly stop condition
 # so it exits once both weekly jobs are done.
-weekly_run_id = resolve_run_id(WEEKLY, REFERENCE_TIME)
+weekly_run_id = resolve_job_run_key(WEEKLY, REFERENCE_TIME)
 run_loop(
     weekly,
     reference_time=REFERENCE_TIME,

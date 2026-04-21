@@ -1,7 +1,7 @@
 """
 Executor protocol.
 
-An Executor takes a Job and a resolved logical_run_id and actually
+An Executor takes a Job and a resolved run_key and actually
 runs the job. It is fire-and-forget: submit() kicks the job off and
 returns immediately. The job reports completion separately via the
 receiver layer.
@@ -35,7 +35,7 @@ class Executor(Protocol):
 
         job: Job definition including executor config
         attempt: the AttemptRecord for this execution (contains job_name,
-                 logical_run_id, attempt number, dispatchio_attempt_id)
+                 run_key, attempt number, correlation_id)
         reference_time: the tick's reference time
         timeout: per-submission deadline in seconds. Not yet enforced by
                  local executors; reserved for cloud executors (e.g. ECS)

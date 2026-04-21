@@ -47,9 +47,9 @@ def _handle_stepfunctions_event(event: dict[str, Any]) -> dict[str, Any]:
         "status": "ok",
         "source": "aws.states",
         "job_name": record.job_name,
-        "logical_run_id": record.logical_run_id,
+        "run_key": record.run_key,
         "attempt": record.attempt,
-        "dispatchio_attempt_id": str(record.dispatchio_attempt_id),
+        "correlation_id": str(record.correlation_id),
     }
 
 
@@ -67,9 +67,9 @@ def _handle_athena_event(event: dict[str, Any]) -> dict[str, Any]:
         "status": "ok",
         "source": "aws.athena",
         "job_name": record.job_name,
-        "logical_run_id": record.logical_run_id,
+        "run_key": record.run_key,
         "attempt": record.attempt,
-        "dispatchio_attempt_id": str(record.dispatchio_attempt_id),
+        "correlation_id": str(record.correlation_id),
     }
 
 
@@ -103,12 +103,8 @@ def _report_completion_from_record(record: AttemptRecord, status: Status) -> Non
         region=_optional_env("DISPATCHIO_RECEIVER__REGION", "DISPATCHIO_SQS_REGION"),
     )
     reporter.report(
-        job_name=record.job_name,
-        run_id=record.logical_run_id,
+        correlation_id=record.correlation_id,
         status=status,
-        logical_run_id=record.logical_run_id,
-        attempt=record.attempt,
-        dispatchio_attempt_id=record.dispatchio_attempt_id,
     )
 
 

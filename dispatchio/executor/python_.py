@@ -10,7 +10,7 @@ the job harness (run_job) picks them up without any Dispatchio-specific argument
 parsing in the job itself.
 
 Environment variables injected at submit time:
-    DISPATCHIO_RUN_ID          the resolved run_id for this tick
+    DISPATCHIO_RUN_KEY          the resolved run_key for this tick
     DISPATCHIO_DROP_DIR        filesystem completions dir (when receiver is filesystem)
     ... any other reporter_env entries (e.g. SQS queue URL)
     PYTHONPATH              prepended with PythonJob.pythonpath entries (if any)
@@ -60,8 +60,8 @@ class PythonJobExecutor:
         self._data_env: dict[str, str] = data_env or {}
         self._processes: dict[
             str, subprocess.Popen
-        ] = {}  # keyed by str(dispatchio_attempt_id)
-        self._references: dict[str, dict] = {}  # keyed by str(dispatchio_attempt_id)
+        ] = {}  # keyed by str(correlation_id)
+        self._references: dict[str, dict] = {}  # keyed by str(correlation_id)
 
     def submit(
         self,
@@ -93,9 +93,9 @@ class PythonJobExecutor:
             **self._reporter_env,
             **self._data_env,
             "DISPATCHIO_JOB_NAME": job.name,
-            "DISPATCHIO_RUN_ID": attempt.logical_run_id,
+            "DISPATCHIO_RUN_KEY": attempt.run_key,
             "DISPATCHIO_ATTEMPT": str(attempt.attempt),
-            "DISPATCHIO_ATTEMPT_ID": str(attempt.dispatchio_attempt_id),
+            "DISPATCHIO_CORRELATION_ID": str(attempt.correlation_id),
         }
 
         if cfg.pythonpath:
@@ -110,7 +110,7 @@ class PythonJobExecutor:
             stderr=subprocess.DEVNULL,
             close_fds=True,
         )
-        attempt_id_str = str(attempt.dispatchio_attempt_id)
+        attempt_id_str = str(attempt.correlation_id)
         self._processes[attempt_id_str] = proc
         self._references[attempt_id_str] = {
             "pid": proc.pid,
@@ -129,14 +129,14 @@ class PythonJobExecutor:
         trace.executor is available (survived orchestrator restart),
         looks up the process by PID.
         """
-        attempt_id_str = str(record.dispatchio_attempt_id)
+        correlation_id_str = str(record.correlation_id)
         # Hot path: check in-memory process table
-        proc = self._processes.get(attempt_id_str)
+        proc = self._processes.get(correlation_id_str)
         if proc is not None:
             returncode = proc.poll()
             if returncode is None:
                 return Status.RUNNING
-            del self._processes[attempt_id_str]
+            del self._processes[correlation_id_str]
             return Status.DONE if returncode == 0 else Status.ERROR
 
         # Cold path: lookup by PID from trace.executor (after restart)
@@ -162,7 +162,7 @@ class PythonJobExecutor:
                         "PID %d reused or stale for %s/%s/%d (start time mismatch)",
                         pid,
                         record.job_name,
-                        record.logical_run_id,
+                        record.run_key,
                         record.attempt,
                     )
                     return Status.ERROR
@@ -176,10 +176,10 @@ class PythonJobExecutor:
             # Process doesn't exist or can't be accessed — it's dead
             return Status.ERROR
 
-    def get_executor_reference(self, dispatchio_attempt_id: UUID) -> dict | None:
+    def get_executor_reference(self, correlation_id: UUID) -> dict | None:
         """
         Retrieve the executor reference for an attempt UUID.
         Used by orchestrator to populate AttemptRecord.trace.executor.
         Returns {"pid": ..., "start_time": ...} or None if not tracked.
         """
-        return self._references.get(str(dispatchio_attempt_id))
+        return self._references.get(str(correlation_id))

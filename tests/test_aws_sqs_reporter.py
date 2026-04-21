@@ -16,28 +16,21 @@ def test_report_posts_event_to_sqs() -> None:
     sqs = boto3.client("sqs", region_name="eu-west-1")
     queue_url = sqs.create_queue(QueueName="dispatchio-completions")["QueueUrl"]
 
-    attempt_id = uuid4()
+    correlation_id = uuid4()
     reporter = SQSReporter(queue_url=queue_url, region="eu-west-1")
     reporter.report(
-        "ingest",
-        "20260414",
-        Status.DONE,
+        correlation_id=correlation_id,
+        status=Status.DONE,
         metadata={"rows": 42},
-        logical_run_id="20260414",
-        attempt=0,
-        dispatchio_attempt_id=attempt_id,
     )
 
     receiver = SQSReceiver(queue_url=queue_url, region="eu-west-1")
     events = receiver.drain()
 
     assert len(events) == 1
-    assert events[0].job_name == "ingest"
-    assert events[0].run_id == "20260414"
     assert events[0].status == Status.DONE
     assert events[0].metadata["rows"] == 42
-    assert events[0].attempt == 0
-    assert events[0].dispatchio_attempt_id == attempt_id
+    assert events[0].correlation_id == correlation_id
 
 
 @mock_aws
@@ -47,15 +40,17 @@ def test_run_job_auto_detects_sqs_reporter_from_env(monkeypatch) -> None:
 
     monkeypatch.setenv("DISPATCHIO_RECEIVER__QUEUE_URL", queue_url)
     monkeypatch.setenv("DISPATCHIO_RECEIVER__REGION", "eu-west-1")
+    correlation_id = uuid4()
+    monkeypatch.setenv("DISPATCHIO_CORRELATION_ID", str(correlation_id))
 
-    def _work(run_id: str) -> None:
-        assert run_id == "20260414"
+    def _work(run_key: str) -> None:
+        assert run_key == "20260414"
 
-    run_job("ingest", _work, run_id="20260414", reporter=None)
+    run_job("ingest", _work, run_key="20260414", reporter=None)
 
     receiver = SQSReceiver(queue_url=queue_url, region="eu-west-1")
     events = receiver.drain()
 
     assert len(events) == 1
-    assert events[0].job_name == "ingest"
+    assert events[0].correlation_id == correlation_id
     assert events[0].status == Status.DONE

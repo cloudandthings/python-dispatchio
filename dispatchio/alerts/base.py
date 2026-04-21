@@ -27,7 +27,7 @@ class AlertEvent(BaseModel):
 
     alert_on: AlertOn
     job_name: str
-    run_id: str
+    run_key: str
     channels: list[str]
     detail: str | None = None
     occurred_at: datetime
@@ -49,10 +49,10 @@ class LogAlertHandler:
 
     def handle(self, event: AlertEvent) -> None:
         logger.warning(
-            "ALERT [%s] job=%s run_id=%s channels=%s detail=%s",
+            "ALERT [%s] job=%s run_key=%s channels=%s detail=%s",
             event.alert_on.value,
             event.job_name,
-            event.run_id,
+            event.run_key,
             event.channels,
             event.detail,
         )

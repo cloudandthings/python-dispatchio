@@ -7,11 +7,11 @@ so submit() returns immediately.
 
 Template variables available in command strings and env values:
     {job_name}       — the job's name
-    {run_id}         — the resolved run_id for this tick
+    {run_key}         — the resolved run_key for this tick
     {reference_time} — ISO-8601 reference datetime string
 
 Example config:
-    SubprocessConfig(command=["python", "etl.py", "--date", "{run_id}"])
+    SubprocessConfig(command=["python", "etl.py", "--date", "{run_key}"])
 """
 
 from __future__ import annotations
@@ -50,8 +50,8 @@ class SubprocessExecutor:
         self._data_env: dict[str, str] = data_env or {}
         self._processes: dict[
             str, subprocess.Popen
-        ] = {}  # keyed by str(dispatchio_attempt_id)
-        self._references: dict[str, dict] = {}  # keyed by str(dispatchio_attempt_id)
+        ] = {}  # keyed by str(correlation_id)
+        self._references: dict[str, dict] = {}  # keyed by str(correlation_id)
 
     def submit(
         self,
@@ -68,8 +68,7 @@ class SubprocessExecutor:
 
         ctx = {
             "job_name": job.name,
-            "run_id": attempt.logical_run_id,
-            "logical_run_id": attempt.logical_run_id,
+            "run_key": attempt.run_key,
             "attempt": str(attempt.attempt),
             "reference_time": reference_time.isoformat(),
         }
@@ -81,9 +80,9 @@ class SubprocessExecutor:
             env[k] = v.format(**ctx)
         # Inject attempt identity for Phase 2 completion correlation
         env["DISPATCHIO_JOB_NAME"] = job.name
-        env["DISPATCHIO_RUN_ID"] = attempt.logical_run_id
+        env["DISPATCHIO_RUN_KEY"] = attempt.run_key
         env["DISPATCHIO_ATTEMPT"] = str(attempt.attempt)
-        env["DISPATCHIO_ATTEMPT_ID"] = str(attempt.dispatchio_attempt_id)
+        env["DISPATCHIO_CORRELATION_ID"] = str(attempt.correlation_id)
 
         # Detach: we do not wait for completion.
         # The child process is responsible for posting a completion event.
@@ -94,7 +93,7 @@ class SubprocessExecutor:
             stderr=subprocess.DEVNULL,
             close_fds=True,
         )
-        attempt_id_str = str(attempt.dispatchio_attempt_id)
+        attempt_id_str = str(attempt.correlation_id)
         self._processes[attempt_id_str] = proc
         self._references[attempt_id_str] = {
             "pid": proc.pid,
@@ -113,7 +112,7 @@ class SubprocessExecutor:
         trace.executor is available (survived orchestrator restart),
         looks up the process by PID.
         """
-        attempt_id_str = str(record.dispatchio_attempt_id)
+        attempt_id_str = str(record.correlation_id)
         # Hot path: check in-memory process table
         proc = self._processes.get(attempt_id_str)
         if proc is not None:
@@ -146,7 +145,7 @@ class SubprocessExecutor:
                         "PID %d reused or stale for %s/%s/%d (start time mismatch)",
                         pid,
                         record.job_name,
-                        record.logical_run_id,
+                        record.run_key,
                         record.attempt,
                     )
                     return Status.ERROR
@@ -160,10 +159,10 @@ class SubprocessExecutor:
             # Process doesn't exist or can't be accessed — it's dead
             return Status.ERROR
 
-    def get_executor_reference(self, dispatchio_attempt_id: UUID) -> dict | None:
+    def get_executor_reference(self, correlation_id: UUID) -> dict | None:
         """
         Retrieve the executor reference for an attempt UUID.
         Used by orchestrator to populate AttemptRecord.trace.executor.
         Returns {"pid": ..., "start_time": ...} or None if not tracked.
         """
-        return self._references.get(str(dispatchio_attempt_id))
+        return self._references.get(str(correlation_id))

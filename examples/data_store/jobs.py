@@ -13,7 +13,7 @@ extra configuration.
 import os
 from pathlib import Path
 
-from dispatchio import DAILY, Dependency, Job, PythonJob, orchestrator_from_config
+from dispatchio import DAILY, JobDependency, Job, PythonJob, orchestrator_from_config
 
 BASE = Path(__file__).parent
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))
@@ -34,7 +34,7 @@ process = Job(
         script=str(BASE / "workers.py"),
         function="process",
     ),
-    depends_on=[Dependency(job_name="discover", cadence=DAILY)],
+    depends_on=[JobDependency(job_name="discover", cadence=DAILY)],
 )
 
 orchestrator = orchestrator_from_config([discover, process], config=CONFIG_FILE)

@@ -37,11 +37,11 @@ def store() -> SQLAlchemyStateStore:
 def _invoke_record_set(
     store: SQLAlchemyStateStore,
     job_name: str,
-    run_id: str,
+    run_key: str,
     status: str,
     reason: str | None = None,
 ):
-    args = ["record", "set", job_name, run_id, status, "--yes"]
+    args = ["record", "set", job_name, run_key, status, "--yes"]
     if reason:
         args += ["--reason", reason]
     with patch("dispatchio.cli.record.load_store_from_context", return_value=store):
@@ -58,7 +58,7 @@ class TestRecordSet:
         assert record is not None
         assert record.status == Status.DONE
         assert record.attempt == 0
-        assert record.dispatchio_attempt_id is not None
+        assert record.correlation_id is not None
 
     def test_updates_existing_record(self, store: SQLAlchemyStateStore):
         """record set updates status when a record already exists."""
@@ -67,9 +67,9 @@ class TestRecordSet:
 
         existing = AttemptRecord(
             job_name="my_job",
-            logical_run_id="20250115",
+            run_key="20250115",
             attempt=0,
-            dispatchio_attempt_id=uuid4(),
+            correlation_id=uuid4(),
             status=Status.RUNNING,
         )
         store.append_attempt(existing)
@@ -78,6 +78,7 @@ class TestRecordSet:
 
         assert result.exit_code == 0, result.output
         record = store.get_latest_attempt("my_job", "20250115")
+        assert record is not None
         assert record.status == Status.DONE
 
     def test_sets_reason_on_new_record(self, store: SQLAlchemyStateStore):
@@ -87,6 +88,7 @@ class TestRecordSet:
 
         assert result.exit_code == 0, result.output
         record = store.get_latest_attempt("my_job", "20250115")
+        assert record is not None
         assert record.status == Status.ERROR
         assert record.reason == "disk full"
 
@@ -106,8 +108,60 @@ def test_help_lists_expected_top_level_commands() -> None:
         "retry",
         "context",
         "graph",
+        "run-list",
+        "run-show",
+        "run-resume",
+        "run-cancel",
+        "backfill-plan",
+        "backfill-enqueue",
+        "replay-enqueue",
     ]:
         assert command_name in result.output
+
+
+def test_backfill_plan_prints_run_keys(rich_output) -> None:
+    fake_orch = type("FakeOrchestrator", (), {})()
+    fake_orch.plan_backfill = lambda start, end: ["20250101", "20250102"]
+
+    with patch("dispatchio.cli.root.load_orchestrator", return_value=fake_orch):
+        result = runner.invoke(
+            app,
+            [
+                "backfill-plan",
+                "--orchestrator",
+                "a:b",
+                "--start",
+                "2025-01-01T00:00:00+00:00",
+                "--end",
+                "2025-01-02T00:00:00+00:00",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    out = rich_output.export_text()
+    assert "Planned 2 run key(s)" in out
+    assert "20250101" in out
+
+
+def test_run_list_prints_rows(rich_output) -> None:
+    class _Run:
+        def __init__(self):
+            self.orchestrator_run_id = "id-1"
+            self.run_key = "20250101"
+            self.status = type("S", (), {"value": "pending"})()
+            self.mode = type("M", (), {"value": "backfill"})()
+            self.priority = 10
+
+    fake_orch = type("FakeOrchestrator", (), {})()
+    fake_orch.list_runs = lambda status=None, mode=None: [_Run()]
+
+    with patch("dispatchio.cli.root.load_orchestrator", return_value=fake_orch):
+        result = runner.invoke(app, ["run-list", "--orchestrator", "a:b"])
+
+    assert result.exit_code == 0, result.output
+    out = rich_output.export_text()
+    assert "20250101" in out
+    assert "pending" in out
 
 
 def test_tick_requires_orchestrator(rich_error_output) -> None:
@@ -173,7 +227,7 @@ def test_record_set_subcommand_help() -> None:
 
     assert result.exit_code == 0, result.output
     assert "JOB_NAME" in result.output
-    assert "RUN_ID" in result.output
+    assert "RUN_KEY" in result.output
     assert "STATUS" in result.output
 
 
@@ -203,7 +257,7 @@ def test_tick_dry_run_plans_without_submission(rich_output) -> None:
             results=[
                 JobTickResult(
                     job_name="job_a",
-                    run_id="20250115",
+                    run_key="20250115",
                     action=JobAction.WOULD_SUBMIT,
                 )
             ],
@@ -272,7 +326,7 @@ def test_tick_dry_run_renders_would_defer(rich_output) -> None:
         results=[
             JobTickResult(
                 job_name="job_a",
-                run_id="20250115",
+                run_key="20250115",
                 action=JobAction.WOULD_DEFER,
                 detail="deferred_submit_limit submit_jobs_this_tick=1/1",
             )
@@ -292,9 +346,9 @@ def test_status_renders_rich_table(
 ) -> None:
     record = AttemptRecord(
         job_name="job_a",
-        logical_run_id="20250115",
+        run_key="20250115",
         attempt=0,
-        dispatchio_attempt_id=uuid4(),
+        correlation_id=uuid4(),
         status=Status.DONE,
     )
     store.append_attempt(record)
@@ -305,7 +359,7 @@ def test_status_renders_rich_table(
     assert result.exit_code == 0, result.output
     out = rich_output.export_text()
     assert "JOB" in out
-    assert "RUN_ID" in out
+    assert "RUN_KEY" in out
     assert "job_a" in out
 
 
@@ -315,9 +369,9 @@ def test_retry_list_attempts_renders_rich_table(
 ) -> None:
     record = AttemptRecord(
         job_name="job_a",
-        logical_run_id="20250115",
+        run_key="20250115",
         attempt=1,
-        dispatchio_attempt_id=uuid4(),
+        correlation_id=uuid4(),
         status=Status.ERROR,
     )
     store.append_attempt(record)
@@ -338,7 +392,7 @@ def test_retry_list_requests_renders_rich_table(
     request = RetryRequest(
         requested_at=datetime.now(tz=timezone.utc),
         requested_by="cli",
-        logical_run_id="20250115",
+        run_key="20250115",
         selected_jobs=["job_a", "job_b"],
     )
     store.append_retry_request(request)
@@ -459,9 +513,9 @@ def test_record_set_yes_skips_prompt(store: SQLAlchemyStateStore) -> None:
 def test_cancel_prompts_without_yes(store: SQLAlchemyStateStore) -> None:
     record = AttemptRecord(
         job_name="job_a",
-        logical_run_id="20250115",
+        run_key="20250115",
         attempt=0,
-        dispatchio_attempt_id=uuid4(),
+        correlation_id=uuid4(),
         status=Status.RUNNING,
     )
     store.append_attempt(record)
@@ -471,7 +525,7 @@ def test_cancel_prompts_without_yes(store: SQLAlchemyStateStore) -> None:
             "dispatchio.cli.root.output.confirm", return_value=True
         ) as confirm_mock:
             result = runner.invoke(
-                app, ["cancel", "--run-id", "20250115", "--job", "job_a"]
+                app, ["cancel", "--run-key", "20250115", "--job", "job_a"]
             )
 
     assert result.exit_code == 0, result.output
@@ -481,9 +535,9 @@ def test_cancel_prompts_without_yes(store: SQLAlchemyStateStore) -> None:
 def test_cancel_yes_skips_prompt(store: SQLAlchemyStateStore) -> None:
     record = AttemptRecord(
         job_name="job_a",
-        logical_run_id="20250115",
+        run_key="20250115",
         attempt=0,
-        dispatchio_attempt_id=uuid4(),
+        correlation_id=uuid4(),
         status=Status.RUNNING,
     )
     store.append_attempt(record)
@@ -492,7 +546,7 @@ def test_cancel_yes_skips_prompt(store: SQLAlchemyStateStore) -> None:
         with patch("dispatchio.cli.root.output.confirm") as confirm_mock:
             result = runner.invoke(
                 app,
-                ["cancel", "--run-id", "20250115", "--job", "job_a", "--yes"],
+                ["cancel", "--run-key", "20250115", "--job", "job_a", "--yes"],
             )
 
     assert result.exit_code == 0, result.output

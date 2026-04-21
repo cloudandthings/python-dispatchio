@@ -45,16 +45,14 @@ ReferenceTimeOption = Annotated[
     ),
 ]
 
-RunIdOption = Annotated[
+RunKeyOption = Annotated[
     str | None,
-    typer.Option(
-        "--run-id", "-r", help="Filter by logical run ID.", show_default=False
-    ),
+    typer.Option("--run-key", "-r", help="Filter by run key.", show_default=False),
 ]
 
-RunIdRequiredOption = Annotated[
+RunKeyRequiredOption = Annotated[
     str,
-    typer.Option("--run-id", "-r", help="Logical run ID."),
+    typer.Option("--run-key", "-r", help="Run key."),
 ]
 
 JobOption = Annotated[

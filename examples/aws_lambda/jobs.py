@@ -16,7 +16,7 @@ JOBS = [
             function_name=os.getenv(
                 "DISPATCHIO_LAMBDA_FUNCTION_NAME", "dispatchio-ingest"
             ),
-            payload_template={"run_id": "{run_id}", "job_name": "{job_name}"},
+            payload_template={"run_key": "{run_key}", "job_name": "{job_name}"},
         ),
     ),
 ]

@@ -31,7 +31,7 @@ from examples.dependency_modes.jobs import orchestrator
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 REF = datetime(2025, 1, 15, 9, 0, tzinfo=timezone.utc)
-RUN_ID = REF.strftime("%Y%m%d")  # "20250115"
+RUN_KEY = REF.strftime("%Y%m%d")  # "20250115"
 
 
 # Seed the state store to simulate entity results without running the jobs.
@@ -39,9 +39,9 @@ def _seed(job_name: str, status: Status, reason: str | None = None) -> None:
     orchestrator.state.append_attempt(
         AttemptRecord(
             job_name=job_name,
-            logical_run_id=RUN_ID,
+            run_key=RUN_KEY,
             attempt=0,
-            dispatchio_attempt_id=uuid4(),
+            correlation_id=uuid4(),
             status=status,
             reason=reason,
             trigger_type=TriggerType.SCHEDULED,
@@ -60,11 +60,12 @@ run_loop(
 )
 
 print("\nAttempt history with trigger metadata:")
-for attempt_record in orchestrator.state.list_attempts(logical_run_id=RUN_ID):
+for attempt_record in orchestrator.state.list_attempts(run_key=RUN_KEY):
     print(
         f"- {attempt_record.job_name} "
         f"attempt={attempt_record.attempt} "
         f"status={attempt_record.status.value} "
+        f"reason={attempt_record.reason} "
         f"trigger={attempt_record.trigger_type.value} "
-        f"reason={attempt_record.trigger_reason}"
+        f"trigger_reason={attempt_record.trigger_reason}"
     )
