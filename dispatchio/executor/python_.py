@@ -10,10 +10,8 @@ the job harness (run_job) picks them up without any Dispatchio-specific argument
 parsing in the job itself.
 
 Environment variables injected at submit time:
-    DISPATCHIO_RUN_KEY          the resolved run_key for this tick
-    DISPATCHIO_DROP_DIR        filesystem completions dir (when receiver is filesystem)
-    ... any other reporter_env entries (e.g. SQS queue URL)
-    PYTHONPATH              prepended with PythonJob.pythonpath entries (if any)
+    DISPATCHIO_RUN_KEY      the resolved run_key for this tick
+    DISPATCHIO_CONFIG       optional global config location for worker-side loading
 """
 
 from __future__ import annotations
@@ -45,19 +43,15 @@ class PythonJobExecutor:
     orchestrator can detect crashed jobs via active polling.
 
     Args:
-        reporter_env: Env vars that configure the reporter inside the
-                      spawned subprocess. Built by orchestrator_from_config
-                      from the receiver settings (e.g. DISPATCHIO_DROP_DIR
-                      for FilesystemReceiver, SQS vars for SQSReceiver).
+        env: Env vars that configure the subprocess. This now primarily includes
+             DISPATCHIO_CONFIG so workers can load receiver settings from shared config.
     """
 
     def __init__(
         self,
-        reporter_env: dict[str, str] | None = None,
-        data_env: dict[str, str] | None = None,
+        env: dict[str, str] | None = None,
     ) -> None:
-        self._reporter_env: dict[str, str] = reporter_env or {}
-        self._data_env: dict[str, str] = data_env or {}
+        self._env: dict[str, str] = env or {}
         self._processes: dict[
             str, subprocess.Popen
         ] = {}  # keyed by str(correlation_id)
@@ -89,9 +83,7 @@ class PythonJobExecutor:
             ]
 
         env = {
-            **os.environ,
-            **self._reporter_env,
-            **self._data_env,
+            **self._env,
             "DISPATCHIO_JOB_NAME": job.name,
             "DISPATCHIO_RUN_KEY": attempt.run_key,
             "DISPATCHIO_ATTEMPT": str(attempt.attempt),

@@ -1,10 +1,11 @@
 """
 Tests for dispatchio.config — settings loading, priority ordering, and
-orchestrator_from_config factory.
+orchestrator factory.
 """
 
 from __future__ import annotations
 
+import json
 import textwrap
 from pathlib import Path
 
@@ -16,9 +17,10 @@ from dispatchio.config.settings import (
     StateSettings,
 )
 from dispatchio.config.loader import (
+    _CONFIG_INLINE_ENV_VAR,
     _find_config_file,
     load_config,
-    orchestrator_from_config,
+    orchestrator,
 )
 from dispatchio.models import Job, SubprocessJob
 from dispatchio.orchestrator import Orchestrator
@@ -278,7 +280,7 @@ class TestPriority:
 
 
 # ---------------------------------------------------------------------------
-# orchestrator_from_config
+# orchestrator
 # ---------------------------------------------------------------------------
 
 
@@ -290,7 +292,7 @@ class TestOrchestratorFromConfig:
             ),
             receiver=ReceiverSettings(backend="none"),
         )
-        orch = orchestrator_from_config([simple_job], config=settings)
+        orch = orchestrator([simple_job], config=settings)
         assert isinstance(orch, Orchestrator)
 
     def test_sqlalchemy_state_backend(self, simple_job, tmp_path):
@@ -300,7 +302,7 @@ class TestOrchestratorFromConfig:
             ),
             receiver=ReceiverSettings(backend="none"),
         )
-        orch = orchestrator_from_config([simple_job], config=settings)
+        orch = orchestrator([simple_job], config=settings)
         assert isinstance(orch.state, SQLAlchemyStateStore)
 
     def test_filesystem_receiver(self, simple_job, tmp_path):
@@ -313,7 +315,7 @@ class TestOrchestratorFromConfig:
                 drop_dir=str(tmp_path / "completions"),
             ),
         )
-        orch = orchestrator_from_config([simple_job], config=settings)
+        orch = orchestrator([simple_job], config=settings)
         assert isinstance(orch.receiver, FilesystemReceiver)
 
     def test_no_receiver_when_none(self, simple_job):
@@ -323,7 +325,7 @@ class TestOrchestratorFromConfig:
             ),
             receiver=ReceiverSettings(backend="none"),
         )
-        orch = orchestrator_from_config([simple_job], config=settings)
+        orch = orchestrator([simple_job], config=settings)
         assert orch.receiver is None
 
     def test_accepts_path_to_toml(self, simple_job, tmp_path):
@@ -337,7 +339,7 @@ class TestOrchestratorFromConfig:
         """,
             tmp_path / "dispatchio.toml",
         )
-        orch = orchestrator_from_config([simple_job], config=f)
+        orch = orchestrator([simple_job], config=f)
         assert isinstance(orch, Orchestrator)
 
     def test_jobs_are_passed_through(self, simple_job):
@@ -347,7 +349,7 @@ class TestOrchestratorFromConfig:
             ),
             receiver=ReceiverSettings(backend="none"),
         )
-        orch = orchestrator_from_config([simple_job], config=settings)
+        orch = orchestrator([simple_job], config=settings)
         assert len(orch.jobs) == 1
         assert orch.jobs[0].name == "j"
 
@@ -358,7 +360,7 @@ class TestOrchestratorFromConfig:
             ),
             receiver=ReceiverSettings(backend="none"),
         )
-        orch = orchestrator_from_config(config=settings)
+        orch = orchestrator(config=settings)
         assert len(orch.jobs) == 0
 
     def test_orchestrator_kwargs_forwarded(self, simple_job):
@@ -371,9 +373,7 @@ class TestOrchestratorFromConfig:
             ),
             receiver=ReceiverSettings(backend="none"),
         )
-        orch = orchestrator_from_config(
-            [simple_job], config=settings, alert_handler=handler
-        )
+        orch = orchestrator([simple_job], config=settings, alert_handler=handler)
         assert orch.alert_handler is handler
 
     def test_unknown_state_backend_raises(self, simple_job):
@@ -384,7 +384,7 @@ class TestOrchestratorFromConfig:
         )  # type: ignore
         object.__setattr__(settings, "receiver", ReceiverSettings(backend="none"))
         with pytest.raises(ValueError, match="Unknown state backend"):
-            orchestrator_from_config([simple_job], config=settings)
+            orchestrator([simple_job], config=settings)
 
     def test_dynamodb_backend_without_aws_raises(self, simple_job):
         settings = DispatchioSettings(
@@ -392,7 +392,7 @@ class TestOrchestratorFromConfig:
             receiver=ReceiverSettings(backend="none"),
         )
         with pytest.raises(ImportError, match="dispatchio\\[aws\\]"):
-            orchestrator_from_config([simple_job], config=settings)
+            orchestrator([simple_job], config=settings)
 
     def test_sqs_backend_builds_receiver(self, simple_job):
         settings = DispatchioSettings(
@@ -405,5 +405,62 @@ class TestOrchestratorFromConfig:
                 region="eu-west-1",
             ),
         )
-        orch = orchestrator_from_config([simple_job], config=settings)
+        orch = orchestrator([simple_job], config=settings)
         assert isinstance(orch.receiver, SQSReceiver)
+
+    def test_executors_receive_inline_config(self):
+        settings = DispatchioSettings(
+            state=StateSettings(
+                backend="sqlalchemy", connection_string="sqlite:///:memory:"
+            ),
+            receiver=ReceiverSettings(backend="filesystem", drop_dir="/tmp/drops"),
+        )
+        orch = orchestrator([], config=settings)
+        for name, executor in orch.executors.items():
+            assert _CONFIG_INLINE_ENV_VAR in executor._env, (
+                f"{name} executor missing inline config"
+            )
+            data = json.loads(executor._env[_CONFIG_INLINE_ENV_VAR])
+            assert data["receiver"]["backend"] == "filesystem"
+            assert data["receiver"]["drop_dir"] == "/tmp/drops"
+
+
+# ---------------------------------------------------------------------------
+# Inline config (DISPATCHIO_CONFIG_INLINE)
+# ---------------------------------------------------------------------------
+
+
+class TestInlineConfig:
+    def test_inline_loads_settings(self, monkeypatch):
+        data = {"receiver": {"backend": "filesystem", "drop_dir": "/tmp/drops"}}
+        monkeypatch.setenv(_CONFIG_INLINE_ENV_VAR, json.dumps(data))
+        s = load_config()
+        assert s.receiver.backend == "filesystem"
+        assert s.receiver.drop_dir == "/tmp/drops"
+
+    def test_inline_takes_priority_over_config_file(self, tmp_path, monkeypatch):
+        f = _toml('log_level = "DEBUG"', tmp_path / "dispatchio.toml")
+        monkeypatch.setenv("DISPATCHIO_CONFIG", str(f))
+        monkeypatch.setenv(_CONFIG_INLINE_ENV_VAR, json.dumps({"log_level": "WARNING"}))
+        s = load_config()
+        assert s.log_level == "WARNING"
+
+    def test_env_vars_override_inline(self, monkeypatch):
+        monkeypatch.setenv(_CONFIG_INLINE_ENV_VAR, json.dumps({"log_level": "WARNING"}))
+        monkeypatch.setenv("DISPATCHIO_LOG_LEVEL", "ERROR")
+        s = load_config()
+        assert s.log_level == "ERROR"
+
+    def test_settings_roundtrip_via_inline(self, monkeypatch):
+        original = DispatchioSettings(
+            receiver=ReceiverSettings(backend="filesystem", drop_dir="/roundtrip"),
+        )
+        monkeypatch.setenv(_CONFIG_INLINE_ENV_VAR, original.model_dump_json())
+        recovered = load_config()
+        assert recovered.receiver.backend == "filesystem"
+        assert recovered.receiver.drop_dir == "/roundtrip"
+
+    def test_invalid_inline_json_raises(self, monkeypatch):
+        monkeypatch.setenv(_CONFIG_INLINE_ENV_VAR, "not-valid-json{{{")
+        with pytest.raises(Exception):
+            load_config()

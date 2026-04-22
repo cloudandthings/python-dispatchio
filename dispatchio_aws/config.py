@@ -4,7 +4,7 @@ from pathlib import Path
 
 from beartype import beartype
 
-from dispatchio.config.loader import orchestrator_from_config
+from dispatchio.config.loader import orchestrator
 from dispatchio.config.settings import DispatchioSettings
 from dispatchio.models import Job
 from dispatchio.orchestrator import Orchestrator
@@ -14,22 +14,22 @@ from dispatchio_aws.executor.stepfunctions import StepFunctionsExecutor
 
 
 @beartype
-def aws_orchestrator_from_config(
+def aws_orchestrator(
     jobs: list[Job] | None = None,
     config: str | Path | DispatchioSettings | None = None,
     **orchestrator_kwargs,
 ) -> Orchestrator:
     """Build an Orchestrator with both core and AWS executors enabled."""
-    orchestrator = orchestrator_from_config(
+    o = orchestrator(
         jobs=jobs,
         config=config,
         **orchestrator_kwargs,
     )
-    orchestrator.executors.update(
+    o.executors.update(
         {
             "lambda": LambdaExecutor(),
             "stepfunctions": StepFunctionsExecutor(),
             "athena": AthenaExecutor(),
         }
     )
-    return orchestrator
+    return o

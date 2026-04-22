@@ -199,23 +199,23 @@ def orchestrator_from_graph(
 
     Args:
         spec:   A loaded GraphSpec (from load_graph or model_validate).
-        config: Forwarded to orchestrator_from_config (path, settings object,
+        config: Forwarded to orchestrator (path, settings object,
                 or None for auto-discovery).
         **orchestrator_kwargs:
                 Forwarded to Orchestrator (e.g. alert_handler=...).
     """
-    from dispatchio.config.loader import orchestrator_from_config
+    from dispatchio.config.loader import orchestrator
 
     validate_graph(spec)
 
     if spec.external_dependencies and "strict_dependencies" not in orchestrator_kwargs:
         orchestrator_kwargs["strict_dependencies"] = False
 
-    # Pass name via kwargs; orchestrator_from_config pops it before building
+    # Pass name via kwargs; orchestrator pops it before building
     # the Orchestrator so there is no duplicate-keyword conflict.
     orchestrator_kwargs["name"] = spec.orchestrator_name
 
-    return orchestrator_from_config(
+    return orchestrator(
         jobs=spec.jobs,
         config=config,
         **orchestrator_kwargs,

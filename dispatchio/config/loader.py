@@ -2,16 +2,18 @@
 Config loader and orchestrator factory.
 
 load_config()            — resolve a config file, merge with env vars, return DispatchioSettings.
-orchestrator_from_config() — build a fully-wired Orchestrator from settings.
+orchestrator() — build a fully-wired Orchestrator from settings.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import tomllib
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 from dispatchio.config.settings import (
     DataStoreSettings,
@@ -30,6 +32,7 @@ from dispatchio.tick_log import FilesystemTickLogStore
 logger = logging.getLogger(__name__)
 
 _CONFIG_ENV_VAR = "DISPATCHIO_CONFIG"
+_CONFIG_INLINE_ENV_VAR = "DISPATCHIO_CONFIG_INLINE"
 _SEARCH_PATHS = ["dispatchio.toml", "~/.dispatchio.toml"]
 
 
@@ -41,30 +44,23 @@ _SEARCH_PATHS = ["dispatchio.toml", "~/.dispatchio.toml"]
 def _find_config_file(path: str | Path | None) -> Path | None:
     """
     Resolve a config file path using the lookup chain:
-      1. Explicit `path` argument
-      2. DISPATCHIO_CONFIG environment variable
-      3. ./dispatchio.toml
-      4. ~/.dispatchio.toml
+    1. Explicit `path` argument
+    2. DISPATCHIO_CONFIG environment variable
+    3. ./dispatchio.toml
+    4. ~/.dispatchio.toml
 
     Returns None if no file is found and no explicit path was given.
     Raises FileNotFoundError if an explicit path was given but doesn't exist.
     """
     if path is not None:
-        p = Path(path).expanduser()
+        p = _path_from_config_ref(path, source="explicit path")
         if not p.exists():
             raise FileNotFoundError(f"Dispatchio config file not found: {p}")
         return p
 
     env_val = os.environ.get(_CONFIG_ENV_VAR)
     if env_val:
-        if env_val.startswith("ssm://"):
-            # SSM paths are handled by dispatchio[aws] — signal to caller
-            raise NotImplementedError(
-                "SSM config sources require dispatchio[aws]. "
-                "Set DISPATCHIO_CONFIG to a local file path, or install "
-                "dispatchio[aws] for SSM support."
-            )
-        p = Path(env_val).expanduser()
+        p = _path_from_config_ref(env_val, source=_CONFIG_ENV_VAR)
         if not p.exists():
             raise FileNotFoundError(
                 f"Config file from {_CONFIG_ENV_VAR}={env_val!r} not found: {p}"
@@ -77,6 +73,57 @@ def _find_config_file(path: str | Path | None) -> Path | None:
             return p
 
     return None
+
+
+def _path_from_config_ref(value: str | Path, *, source: str) -> Path:
+    """
+    Resolve a config reference into a local file path.
+
+    Supports:
+      - plain paths
+      - file:// URIs
+
+    ssm:// URIs are intentionally not implemented in this package yet.
+    """
+    if isinstance(value, Path):
+        return value.expanduser()
+
+    if value.startswith("ssm://"):
+        raise NotImplementedError(
+            "SSM config sources require dispatchio[aws]. "
+            f"Set {_CONFIG_ENV_VAR} to a local file path, or install "
+            "dispatchio[aws] for SSM support."
+        )
+
+    if value.startswith("file://"):
+        parsed = urlparse(value)
+        if parsed.scheme != "file":
+            raise ValueError(f"Unsupported config URI scheme in {source}: {value!r}")
+        if parsed.netloc not in ("", "localhost"):
+            raise ValueError(
+                "Only local file:// URIs are supported "
+                f"for {source}; got netloc={parsed.netloc!r}"
+            )
+        decoded_path = unquote(parsed.path)
+        if not decoded_path:
+            raise ValueError(f"Invalid file URI for {source}: {value!r}")
+        return Path(decoded_path).expanduser()
+
+    if "://" in value:
+        raise ValueError(f"Unsupported config URI in {source}: {value!r}")
+
+    return Path(value).expanduser()
+
+
+def _resolve_config_uri(config: str | Path | DispatchioSettings | None) -> str | None:
+    """Resolve the config URI to inject into worker environments."""
+    if isinstance(config, DispatchioSettings):
+        return os.environ.get(_CONFIG_ENV_VAR)
+
+    resolved = _find_config_file(config)
+    if resolved is None:
+        raise NotImplementedError("No config file found.")
+    return str(resolved.resolve())
 
 
 def _read_toml(path: Path) -> dict[str, Any]:
@@ -119,6 +166,28 @@ def _resolve_relative_paths(data: dict[str, Any], base_dir: Path) -> dict[str, A
     return data
 
 
+# TODO refactor into DispatchioSettings method
+# Build a one-shot subclass that injects the TOML data as a settings source.
+# Priority stack: env vars (auto) > TOML > defaults.
+class _Settings(DispatchioSettings):
+    _data = {}  # type: ignore[assignment]
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls,
+        init_settings,
+        env_settings,
+        dotenv_settings,
+        file_secret_settings,
+    ):
+        return (
+            init_settings,
+            env_settings,
+            TomlSource(settings_cls, cls._data),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Public: load_config
 # ---------------------------------------------------------------------------
@@ -136,9 +205,10 @@ def load_config(path: str | Path | None = None) -> DispatchioSettings:
 
     Config file lookup order (first match wins):
       1. Explicit `path` argument
-      2. DISPATCHIO_CONFIG environment variable (local path or ssm:// with dispatchio[aws])
-      3. ./dispatchio.toml
-      4. ~/.dispatchio.toml
+      2. DISPATCHIO_CONFIG_INLINE environment variable (raw TOML content)
+      3. DISPATCHIO_CONFIG environment variable (local path or ssm:// with dispatchio[aws])
+      4. ./dispatchio.toml
+      5. ~/.dispatchio.toml
 
     If no config file is found, settings come from env vars and defaults only
     — this is perfectly valid for container-based deployments that use only
@@ -149,44 +219,33 @@ def load_config(path: str | Path | None = None) -> DispatchioSettings:
         settings = load_config("config/prod.toml")   # explicit file
         settings = load_config(Path("/etc/dispatchio/dispatchio.toml"))
     """
-    config_path = _find_config_file(path)
-    toml_data: dict[str, Any] = {}
-
-    if config_path is not None:
-        toml_data = _read_toml(config_path)
-        logger.debug("Loaded Dispatchio config from %s", config_path)
+    inline = os.environ.get(_CONFIG_INLINE_ENV_VAR)
+    if inline:
+        data = json.loads(inline)
     else:
-        logger.debug("No Dispatchio config file found — using env vars and defaults")
+        config_path = _find_config_file(path)
+        toml_data: dict[str, Any] = {}
 
-    # Build a one-shot subclass that injects the TOML data as a settings source.
-    # Priority stack: env vars (auto) > TOML > defaults.
-    _data = toml_data
-
-    class _Settings(DispatchioSettings):
-        @classmethod
-        def settings_customise_sources(
-            cls,
-            settings_cls,
-            init_settings,
-            env_settings,
-            dotenv_settings,
-            file_secret_settings,
-        ):
-            return (
-                init_settings,
-                env_settings,
-                TomlSource(settings_cls, _data),
+        if config_path is not None:
+            toml_data = _read_toml(config_path)
+            logger.debug("Loaded Dispatchio config from %s", config_path)
+        else:
+            logger.debug(
+                "No Dispatchio config file found — using env vars and defaults"
             )
 
+        data = toml_data
+
+    _Settings._data = data
     return _Settings()
 
 
 # ---------------------------------------------------------------------------
-# Public: orchestrator_from_config
+# Public: orchestrator
 # ---------------------------------------------------------------------------
 
 
-def orchestrator_from_config(
+def orchestrator(
     jobs: list[Job] | None = None,
     config: str | Path | DispatchioSettings | None = None,
     **orchestrator_kwargs,
@@ -203,22 +262,22 @@ def orchestrator_from_config(
             If omitted, an empty orchestrator is created and jobs can be
             added later via Orchestrator.add_job(s).
         config: One of:
-                  - None            auto-discover config file (see load_config)
-                  - str / Path      explicit path to a TOML config file
-                  - DispatchioSettings pre-built settings object (skips file loading)
+            - None            auto-discover config file (see load_config)
+            - str / Path      explicit path to a TOML config file
+            - DispatchioSettings pre-built settings object (skips file loading)
         **orchestrator_kwargs:
-                Forwarded directly to Orchestrator (e.g. alert_handler=...).
+            Forwarded directly to Orchestrator (e.g. alert_handler=...).
 
     Example — minimal jobs.py:
 
         from dispatchio import Job, SubprocessConfig
-        from dispatchio.config import orchestrator_from_config
+        from dispatchio.config import orchestrator
 
         JOBS = [Job(name="etl", executor=SubprocessConfig(...))]
-        orchestrator = orchestrator_from_config(JOBS)   # reads dispatchio.toml
+        orchestrator = orchestrator(JOBS)   # reads dispatchio.toml
 
         # Orchestrator-first flow (dynamic registration):
-        # orchestrator = orchestrator_from_config()
+        # orchestrator = orchestrator()
         # orchestrator.add_jobs(JOBS)
     """
     if isinstance(config, DispatchioSettings):
@@ -234,15 +293,18 @@ def orchestrator_from_config(
         "name", getattr(settings, "name", "default")
     )
 
-    reporter_env = _build_reporter_env(settings.receiver)
     data_store = _build_data_store(getattr(settings, "data_store", None))
-    data_env = data_store.worker_env() if data_store is not None else {}
+
+    executor_env: dict[str, str] = {
+        "DISPATCHIO_CONFIG_INLINE": json.dumps(settings.model_dump(mode="json")),
+    }
+
     return Orchestrator(
         jobs=jobs or [],
         state=_build_state(settings.state),
         executors={
-            "subprocess": SubprocessExecutor(data_env=data_env),
-            "python": PythonJobExecutor(reporter_env=reporter_env, data_env=data_env),
+            "subprocess": SubprocessExecutor(env=executor_env),
+            "python": PythonJobExecutor(env=executor_env),
         },
         receiver=_build_receiver(settings.receiver),
         admission_policy=settings.admission,
@@ -292,44 +354,6 @@ def _build_state(cfg: StateSettings):
             )
 
     raise ValueError(f"Unknown state backend: {cfg.backend!r}")
-
-
-def _build_reporter_env(cfg: ReceiverSettings) -> dict[str, str]:
-    """
-    Build the env vars that PythonJobExecutor injects into spawned subprocesses
-    so jobs can auto-configure the correct reporter.
-
-    Environment variables follow DISPATCHIO_RECEIVER__* convention:
-      - DISPATCHIO_RECEIVER__BACKEND: receiver backend type
-      - DISPATCHIO_RECEIVER__DROP_DIR: for filesystem backend
-      - DISPATCHIO_RECEIVER__QUEUE_URL: for SQS backend
-      - DISPATCHIO_RECEIVER__REGION: for SQS backend
-
-    Also emits legacy DISPATCHIO_DROP_DIR for backward compatibility.
-    """
-    env: dict[str, str] = {}
-
-    # Emit backend type
-    env["DISPATCHIO_RECEIVER__BACKEND"] = cfg.backend
-
-    if cfg.backend == "filesystem":
-        drop_dir = str(cfg.drop_dir)
-        env["DISPATCHIO_RECEIVER__DROP_DIR"] = drop_dir
-        # Backward compatibility
-        env["DISPATCHIO_DROP_DIR"] = drop_dir
-
-    elif cfg.backend == "sqs":
-        if cfg.queue_url:
-            env["DISPATCHIO_RECEIVER__QUEUE_URL"] = cfg.queue_url
-        if cfg.region:
-            env["DISPATCHIO_RECEIVER__REGION"] = cfg.region
-        # Backward compatibility
-        if cfg.queue_url:
-            env["DISPATCHIO_SQS_QUEUE_URL"] = cfg.queue_url
-        if cfg.region:
-            env["DISPATCHIO_SQS_REGION"] = cfg.region
-
-    return env
 
 
 def _build_data_store(cfg: DataStoreSettings | None):

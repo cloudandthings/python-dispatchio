@@ -26,6 +26,7 @@ import os
 from typing import Any
 from uuid import UUID
 
+from dispatchio.config.loader import load_config
 from dispatchio.config.settings import ReceiverSettings
 from dispatchio.models import Status
 from dispatchio.worker.reporter import BaseReporter
@@ -110,8 +111,14 @@ def build_reporter(
 
 
 def _reporter_from_env() -> Reporter | None:
-    """Create a Reporter using DISPATCHIO_RECEIVER__* environment variables."""
-    backend = os.environ.get("DISPATCHIO_RECEIVER__BACKEND", "filesystem").lower()
+    """Create a Reporter from config URI first, then legacy env fallbacks."""
+    if os.environ.get("DISPATCHIO_CONFIG_INLINE") or os.environ.get(
+        "DISPATCHIO_CONFIG"
+    ):
+        settings = load_config()
+        return build_reporter(settings.receiver)
+
+    backend = os.environ.get("DISPATCHIO_RECEIVER__BACKEND", "none").lower()
 
     if backend == "none":
         return None
@@ -143,7 +150,7 @@ def get_reporter(correlation_id: str | UUID) -> Reporter:
     Get a Reporter for the current job, auto-configured from environment.
 
     This is the main entry point for job code. It reads environment variables
-    set by orchestrator_from_config() and builds the appropriate reporter.
+    set by orchestrator() and builds the appropriate reporter.
 
     If the orchestrator is not configured to use a receiver (backend="none"),
     returns a no-op reporter that logs warnings.

@@ -22,6 +22,7 @@ Quick start (worker side — inside a job function):
 
 import os
 
+from dispatchio.config.loader import load_config
 from dispatchio.datastore.base import DataStore
 from dispatchio.datastore.memory import MemoryDataStore
 from dispatchio.datastore.filesystem import FilesystemDataStore
@@ -44,13 +45,26 @@ def get_data_store(namespace: str | None = None) -> DataStore:
     Raises:
         RuntimeError: If DISPATCHIO_DATA_DIR is not set.
     """
+    if os.environ.get("DISPATCHIO_CONFIG_INLINE") or os.environ.get(
+        "DISPATCHIO_CONFIG"
+    ):
+        settings = load_config()
+        ds_cfg = settings.data_store
+        ns = namespace or ds_cfg.namespace or "default"
+        if ds_cfg.backend == "filesystem":
+            return FilesystemDataStore(ds_cfg.base_dir, namespace=ns)
+        raise RuntimeError(
+            f"Unsupported data_store backend in config: {ds_cfg.backend!r}"
+        )
+
+    # Legacy fallback
     ns = namespace or os.environ.get("DISPATCHIO_DATA_NAMESPACE", "default")
     data_dir = os.environ.get("DISPATCHIO_DATA_DIR")
     if data_dir:
         return FilesystemDataStore(data_dir, namespace=ns)
     raise RuntimeError(
         "Cannot create DataStore: DISPATCHIO_DATA_DIR is not set. "
-        "Configure data_store on the orchestrator or set DISPATCHIO_DATA_DIR manually."
+        "Set DISPATCHIO_CONFIG_INLINE, DISPATCHIO_CONFIG, or DISPATCHIO_DATA_DIR."
     )
 
 

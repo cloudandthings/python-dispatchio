@@ -15,6 +15,7 @@ def test_dispatchio_handler_posts_done_event(monkeypatch) -> None:
     sqs = boto3.client("sqs", region_name="eu-west-1")
     queue_url = sqs.create_queue(QueueName="dispatchio-completions")["QueueUrl"]
 
+    monkeypatch.setenv("DISPATCHIO_RECEIVER__BACKEND", "sqs")
     monkeypatch.setenv("DISPATCHIO_RECEIVER__QUEUE_URL", queue_url)
     monkeypatch.setenv("DISPATCHIO_RECEIVER__REGION", "eu-west-1")
 

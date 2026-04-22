@@ -10,7 +10,7 @@ from dispatchio.datastore.base import _resolve_job, _resolve_run_key
 class MemoryDataStore:
     """DataStore backed by an in-process dict.
 
-    State is not shared across process boundaries, so worker_env() returns {}.
+    State is not shared across process boundaries.
     Suitable for unit tests and simulations that run in a single process.
     """
 
@@ -41,6 +41,3 @@ class MemoryDataStore:
         key: str = "return_value",
     ) -> Any | None:
         return self._store.get(self._key(job, _resolve_run_key(run_key), key))
-
-    def worker_env(self) -> dict[str, str]:
-        return {}

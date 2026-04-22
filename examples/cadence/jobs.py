@@ -36,7 +36,7 @@ from dispatchio import (
     JobDependency,
     Job,
     PythonJob,
-    orchestrator_from_config,
+    orchestrator,
 )
 
 BASE = Path(__file__).parent
@@ -76,4 +76,4 @@ yesterday_load = Job.create(
 )
 
 JOBS = [monthly_ledger, daily_reconcile, weekly_summary, yesterday_load]
-orchestrator = orchestrator_from_config(JOBS, config=CONFIG_FILE)
+orchestrator = orchestrator(JOBS, config=CONFIG_FILE)

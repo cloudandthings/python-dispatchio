@@ -5,9 +5,7 @@ Unlike PythonJob, SubprocessJob does NOT get the dispatchio harness
 automatically — the worker script must call run_job() itself.
 
 The orchestrator injects receiver configuration as env vars:
-  - DISPATCHIO_RECEIVER__BACKEND
-  - DISPATCHIO_RECEIVER__DROP_DIR (for filesystem)
-  - etc.
+  - DISPATCHIO_CONFIG
 
 run_job() uses these to auto-configure the reporter. You can also manually
 use get_reporter() for explicit control:

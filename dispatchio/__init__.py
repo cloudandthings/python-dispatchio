@@ -75,7 +75,7 @@ from dispatchio.run_key_resolution import resolve_run_key
 from dispatchio.state import SQLAlchemyStateStore
 from dispatchio.executor import SubprocessExecutor, PythonJobExecutor
 from dispatchio.receiver import FilesystemReceiver
-from dispatchio.config import DispatchioSettings, load_config, orchestrator_from_config
+from dispatchio.config import DispatchioSettings, load_config, orchestrator
 from dispatchio.reporter import (
     Reporter,
     build_reporter,
@@ -133,20 +133,18 @@ def local_orchestrator(
     """
     from dispatchio.tick_log import FilesystemTickLogStore
 
+    # TODO DISPATCHIO_CONFIG
+
     base = Path(base_dir)
     events = base / "events"
     db_path = base / "dispatchio.db"
-    data_env = data_store.worker_env() if data_store is not None else {}
     return Orchestrator(
         jobs=jobs,
         name=name,
         state=SQLAlchemyStateStore(f"sqlite:///{db_path}"),
         executors={
-            "subprocess": SubprocessExecutor(data_env=data_env),
-            "python": PythonJobExecutor(
-                reporter_env={"DISPATCHIO_DROP_DIR": str(events)},
-                data_env=data_env,
-            ),
+            "subprocess": SubprocessExecutor(),
+            "python": PythonJobExecutor(),
         },
         receiver=FilesystemReceiver(events),
         tick_log=FilesystemTickLogStore(base / "tick_log.jsonl"),
@@ -210,7 +208,7 @@ __all__ = [
     # Config
     "DispatchioSettings",
     "load_config",
-    "orchestrator_from_config",
+    "orchestrator",
     # Reporters
     "Reporter",
     "get_reporter",

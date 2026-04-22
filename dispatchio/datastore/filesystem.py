@@ -17,9 +17,6 @@ class FilesystemDataStore:
 
     Write is idempotent: writing the same (job, run_key, key) twice overwrites
     the previous value.
-
-    worker_env() returns DISPATCHIO_DATA_DIR and DISPATCHIO_DATA_NAMESPACE so
-    worker subprocesses can reconstruct this store via get_data_store().
     """
 
     def __init__(self, base_dir: str | Path, namespace: str = "default") -> None:
@@ -53,9 +50,3 @@ class FilesystemDataStore:
         if not p.exists():
             return None
         return json.loads(p.read_text())
-
-    def worker_env(self) -> dict[str, str]:
-        return {
-            "DISPATCHIO_DATA_DIR": str(self.base_dir),
-            "DISPATCHIO_DATA_NAMESPACE": self.namespace,
-        }

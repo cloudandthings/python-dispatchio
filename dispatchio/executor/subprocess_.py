@@ -17,7 +17,6 @@ Example config:
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 import time
 from datetime import datetime
@@ -41,13 +40,11 @@ class SubprocessExecutor:
     orchestrator can detect crashed jobs via active polling.
 
     Args:
-        data_env: Env vars that configure the DataStore inside spawned
-                  subprocesses. Built from DataStore.worker_env() by the
-                  orchestrator factory when a data_store is configured.
+        env: Env vars to inject into the subprocess environment.
     """
 
-    def __init__(self, data_env: dict[str, str] | None = None) -> None:
-        self._data_env: dict[str, str] = data_env or {}
+    def __init__(self, env: dict[str, str] | None = None) -> None:
+        self._env: dict[str, str] = env or {}
         self._processes: dict[
             str, subprocess.Popen
         ] = {}  # keyed by str(correlation_id)
@@ -75,7 +72,7 @@ class SubprocessExecutor:
 
         command = [part.format(**ctx) for part in cfg.command]
 
-        env = {**os.environ, **self._data_env}
+        env = {**self._env}
         for k, v in cfg.env.items():
             env[k] = v.format(**ctx)
         # Inject attempt identity for Phase 2 completion correlation
