@@ -8,5 +8,5 @@ reported back. Includes a job that deliberately fails to show retry \
 behaviour and the final ERROR state.\
 """
 tags     = ["SubprocessJob", "retries", "error-handling"]
-order    = 3
+order    = 2
 show_files = ["jobs.py", "my_work.py"]

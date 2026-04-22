@@ -1,33 +1,31 @@
 # Dispatchio
 
-A lightweight, tick-based batch job orchestrator for Python.
+A lightweight, tick-based job orchestrator for Python.
 
-Dispatchio is designed for teams running daily/monthly ETL and batch jobs who want
+Dispatchio is designed for teams running daily/monthly/event-driven jobs who want
 something simpler than Airflow or Prefect, without giving up dependency management,
 retry logic, or observability.
 
 ## How it works
 
-A short-lived **orchestrator process** runs on a schedule (every 5 minutes via cron
-or EventBridge). Each run — called a **tick** — evaluates all your job definitions,
+There are different ways to use dispatchio. Below is a simple illustrative pattern.
+
+A short-lived **orchestrator process** runs on a schedule (such as every 5 minutes via cron).
+Each run — called a **tick** — evaluates all your job definitions,
 submits any that are ready, and exits. There is no long-running daemon.
 
-Jobs run independently and signal completion by posting a **completion event**
-(a small JSON payload). The next tick picks this up and unblocks any waiting
-downstream jobs.
+Jobs run independently and signal their status (error, done, etc) by posting an **event**.
+The next tick picks this up and unblocks any waiting downstream jobs.
 
-```
-cron (every 5 min)
+```text
+cron (eg every 5 min)
     └─► Orchestrator.tick()
-            ├─ drain completion events from queue/filesystem
-            ├─ detect lost jobs (via poke or timeout)
-            └─ for each job:
-                  ├─ skip if already active or done
-                  ├─ check time condition  (after="01:00")
-                  ├─ check dependencies   (job_a[day0] == DONE?)
-                  └─ submit if ready ──► ECS / Lambda / subprocess / HTTP
-                                              │
-                                              └─► posts CompletionEvent when done
+        └─ for each job:
+            ├─ skip if running or done
+            ├─ check if dependencies are done
+            └─ if ready, submit ──► Python / subprocess / HTTP / etc
+                                    │
+                                    └─► report back when done
 ```
 
 ## Installation
@@ -46,7 +44,7 @@ core scheduling, SQLAlchemy state, filesystem receiver, and local executors.
 AWS receivers/executors are available only when `dispatchio[aws]` is installed.
 
 The command-line interface is also optional. Install `dispatchio[cli]` if you
-want the `dispatchio` command, shell completion, and the Typer-powered operator
+want the `dispatchio` command, shell completion, and the Typer-powered user
 workflow shown later in this README.
 
 ## Features
@@ -72,9 +70,7 @@ across local and cloud environments.
 ### Inter-job DataStore
 
 Data produced by one job can be persisted and consumed by downstream jobs via
-`DataStore` (`MemoryDataStore` / `FilesystemDataStore`). For Python workers,
-`dispatchio_write_results` can auto-persist function return values with minimal
-boilerplate.
+`DataStore`. For Python workers, `dispatchio_write_results` can auto-persist function return values with minimal boilerplate.
 
 ### JSON Graph pipelines
 
@@ -82,6 +78,38 @@ Pipelines can be defined as JSON graph artifacts and loaded/validated at
 runtime. This supports decoupled graph publishing and promotion flows where the
 orchestrator consumes a versioned graph artifact instead of in-code DAG wiring.
 See [JSON Graph Decoupling](docs/json_graph_decoupling.md).
+
+## Compared to Airflow and Prefect
+
+| | Dispatchio | Apache Airflow | Prefect |
+|---|---|---|---|
+| **Architecture** | Serverless tick (cron-driven) | Long-running scheduler daemon | Agent + API server (cloud or self-hosted) |
+| **Infra footprint** | Python + database | Scheduler/s + webserver/s + worker/s + database | Prefect server or Prefect Cloud + agents |
+| **Database Backend** | Various | Various | Various |
+| **DAG definition** | Python code or JSON artifact | Python code | Python code with `@flow` decorator |
+| **Cross-cadence deps** | Built-in (daily job waits on monthly) | ExternalTaskSensor | Custom polling / triggers |
+| **Retries** | Per-job, with `retry_on` substring matching | Per-task | Per-task |
+| **CLI** | yes | yes | yes |
+| **Web UI** | no | Full web UI | Full web UI |
+| **Learning curve** | Low — plain Python | High — operators, XComs, Connections | Medium — flows, blocks, deployments |
+| **Best for** | Simple batch jobs on AWS or a single host | Complex multi-team DAG workflows | Cloud-native task orchestration with observability |
+
+### Choose Dispatchio when
+
+- You run daily / monthly / hourly batch jobs and don't need a web UI or scheduler daemon.
+- You want **minimal infrastructure** to operate — the orchestrator is just a Python function invoked by cron, with a backend database.
+- Your jobs are dispatched to run, outside of the orchestrator environment
+- You're on AWS and want native Lambda / StepFunction / other wiring without Airflow operators.
+- You need **cross-cadence dependencies** — for example, a monthly rollup that waits on 30 individual daily jobs.
+- You want a basic, single orchestration approach across multiple workflows and teams.
+
+### Choose Airflow or Prefect when
+
+- Dozens of teams share pipelines and you need a shared web UI, fine-grained access control, and a rich operator ecosystem.
+- Your DAGs require complex branching, XCom passing, or dynamic task mapping.
+- You're already invested in the Airflow / Prefect ecosystem of providers, operators, and blocks.
+
+---
 
 ## Quick start
 
@@ -133,7 +161,8 @@ For more backends (DynamoDB, SQS, etc.) see [Configuration](#configuration).
 ### 2. Tick on a schedule
 
 **Cron** (every 5 minutes):
-```
+
+```text
 */5 * * * * cd /app && python -c "
 from jobs import orchestrator
 orchestrator.tick()
@@ -141,11 +170,13 @@ orchestrator.tick()
 ```
 
 **Or run a live tick manually** (reads state, submits ready jobs, drains completion events):
+
 ```bash
 DISPATCHIO_ORCHESTRATOR=jobs:orchestrator dispatchio tick
 ```
 
 **Preview what a tick would do without touching anything:**
+
 ```bash
 DISPATCHIO_ORCHESTRATOR=jobs:orchestrator dispatchio tick --dry-run
 ```
@@ -330,7 +361,7 @@ Dependency(job_name="daily_load", run_id_expr="mon0")
 
 ### Job status lifecycle
 
-```
+```text
 PENDING → SUBMITTED → RUNNING → DONE
                     ↘          ↘
                      ERROR       (retry → SUBMITTED)
@@ -378,7 +409,7 @@ RetryPolicy(max_attempts=3, retry_on=["timeout", "503"])  # only retry on matchi
 `retry_on` matches substrings of the completion `reason` field.
 If `retry_on` is empty, any error triggers a retry (up to `max_attempts`).
 
-### Operator retries and attempt inspection
+### User retries and attempt inspection
 
 The orchestrator exposes manual retry/cancel operations with audit metadata:
 
@@ -386,14 +417,14 @@ The orchestrator exposes manual retry/cancel operations with audit metadata:
 new_attempt = orchestrator.manual_retry(
     job_name="ingest",
     job_run_key="D20260418",
-    operator_name="oncall-alice",
-    operator_reason="upstream partition repaired",
+    requested_by="oncall-alice",
+    request_reason="upstream partition repaired",
 )
 
 cancelled = orchestrator.manual_cancel(
     dispatchio_attempt_id=new_attempt.dispatchio_attempt_id,
-    operator_name="oncall-alice",
-    operator_reason="paused for investigation",
+    requested_by="oncall-alice",
+    request_reason="paused for investigation",
 )
 ```
 
@@ -421,6 +452,7 @@ Job(
 ```
 
 Alert conditions:
+
 - `ERROR` — fired when retries are exhausted
 - `LOST` — fired when a job is detected as lost (via poke or timeout)
 - `NOT_STARTED_BY` — fired when the job hasn't been submitted by a given time
@@ -598,9 +630,10 @@ reporting based on the receiver backend in your config file. Jobs use the
 `get_reporter()` function to report their completion — the job code remains
 **backend-agnostic**.
 
-**Example: swap backends without changing job code**
+#### Example: swap backends without changing job code
 
 Local development (filesystem):
+
 ```toml
 [dispatchio.receiver]
 backend = "filesystem"
@@ -608,6 +641,7 @@ drop_dir = ".dispatchio/completions"
 ```
 
 AWS deployment (SQS) — same code works!
+
 ```toml
 [dispatchio.receiver]
 backend = "sqs"
@@ -616,6 +650,7 @@ region = "us-east-1"
 ```
 
 Your job code:
+
 ```python
 from dispatchio.completion import get_reporter
 
@@ -629,6 +664,87 @@ For event-driven pipelines, see [Event Dependencies](docs/external_events.md)
 for single-event and two-event fan-in patterns using the existing receiver queue.
 
 For operator runbooks, see [Retries, Attempts, and Audit Workflows](docs/retries_attempts_audit.md).
+
+---
+
+## Deployment
+
+### Local / single host
+
+The simplest setup: SQLite state, a filesystem drop directory for completion events, and subprocess workers — all on one machine, driven by cron.
+
+```mermaid
+flowchart LR
+    CRON["cron\n*/5 * * * *"] -->|"tick()"| ORC["Orchestrator\nPython process"]
+    ORC <-->|"read / write"| SQLITE[("SQLite\ndispatchio.db")]
+    ORC <-->|"drain / drop"| FS["Filesystem\n.dispatchio/completions"]
+    ORC -->|"spawn"| PROC["subprocess\nworkers"]
+    PROC -->|"write CompletionEvent"| FS
+```
+
+```toml
+[dispatchio.state]
+backend           = "sqlalchemy"
+connection_string = "sqlite:///dispatchio.db"
+
+[dispatchio.receiver]
+backend  = "filesystem"
+drop_dir = ".dispatchio/completions"
+```
+
+### AWS (EventBridge + Lambda / ECS)
+
+Production-grade setup on AWS. The orchestrator tick runs as a Lambda function on an EventBridge schedule; workers can be Lambda functions, ECS Fargate tasks, or Athena queries; completion events flow through SQS; state lives in DynamoDB. Requires `dispatchio[aws]`.
+
+```mermaid
+flowchart LR
+    EB["EventBridge\nScheduler\n*/5 * * * *"] -->|"invoke"| LORC["Lambda\norchestrator-tick"]
+    LORC <-->|"read / write"| DDB[("DynamoDB\ndispatchio-state")]
+    SQS["SQS\ndispatchio-completions"] -->|"drain"| LORC
+    LORC -->|"invoke"| LW["Lambda\njob workers"]
+    LORC -->|"run task"| ECS["ECS Fargate\njob containers"]
+    LW -->|"drop"| SQS
+    ECS -->|"drop"| SQS
+```
+
+```toml
+[dispatchio.state]
+backend    = "dynamodb"
+table_name = "dispatchio-state"
+region     = "eu-west-1"
+
+[dispatchio.receiver]
+backend   = "sqs"
+queue_url = "https://sqs.eu-west-1.amazonaws.com/123456789/dispatchio-completions"
+region    = "eu-west-1"
+```
+
+See `examples/aws_lambda/` for a complete working example.
+
+### Docker / Kubernetes
+
+The orchestrator runs as a `CronJob`; workers run as short-lived `Job` pods; a shared `PersistentVolumeClaim` carries completion event files between the orchestrator and workers. Swap the filesystem receiver for SQS if you prefer message-based transport.
+
+```mermaid
+flowchart LR
+    CRONJ["Kubernetes\nCronJob\n*/5 * * * *"] -->|"runs"| POD["orchestrator Pod\nPython process"]
+    POD <-->|"read / write"| PG[("PostgreSQL\ndispatchio-state")]
+    POD <-->|"drain / drop"| VOL[("Shared PVC\n/dispatchio/completions")]
+    POD -->|"create"| JOBS["Job Pods\n(one per job run)"]
+    JOBS -->|"write CompletionEvent"| VOL
+```
+
+```toml
+[dispatchio.state]
+backend           = "sqlalchemy"
+connection_string = "postgresql+psycopg://user:pass@postgres/dispatchio"
+
+[dispatchio.receiver]
+backend  = "filesystem"
+drop_dir = "/dispatchio/completions"
+```
+
+Mount the PVC to both the orchestrator pod and job pods so completion files written by workers are visible to the next tick.
 
 ---
 
