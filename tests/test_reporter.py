@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 from pathlib import Path
 from uuid import uuid4
@@ -59,8 +60,8 @@ class TestGetReporter:
         files = list(tmp_path.glob("*.json"))
         assert len(files) == 1
 
-    def test_defaults_to_filesystem(self, tmp_path: Path, monkeypatch):
-        """get_reporter should default to filesystem if backend not set."""
+    def test_defaults_to_none(self, tmp_path: Path, monkeypatch):
+        """get_reporter should default to none if backend not set."""
         monkeypatch.setenv("DISPATCHIO_RECEIVER__DROP_DIR", str(tmp_path))
         # Don't set DISPATCHIO_RECEIVER__BACKEND
 
@@ -68,9 +69,9 @@ class TestGetReporter:
         reporter = get_reporter(str(correlation_id))
         reporter.report_success()
 
-        # Verify status event was written
+        # Verify status event was not written
         files = list(tmp_path.glob("*.json"))
-        assert len(files) == 1
+        assert len(files) == 0
 
     def test_handles_none_backend(self, monkeypatch):
         """get_reporter should return no-op adapter for backend=none."""
@@ -82,6 +83,20 @@ class TestGetReporter:
         reporter.report_success()
         reporter.report_error("test error")
         reporter.report_running()
+
+    def test_uses_config(self, tmp_path: Path, monkeypatch):
+        config_file = tmp_path / "dispatchio.toml"
+        config_file.write_text(
+            '[receiver]\nbackend = "filesystem"\ndrop_dir = "completions"\n'
+        )
+        monkeypatch.setenv("DISPATCHIO_CONFIG", str(config_file))
+
+        correlation_id = uuid4()
+        reporter = get_reporter(str(correlation_id))
+        reporter.report_success()
+
+        files = list((tmp_path / "completions").glob("*.json"))
+        assert len(files) == 1
 
     def test_report_success_writes_done_event(self, tmp_path: Path):
         """Adapter should write DONE completion event."""
@@ -139,8 +154,8 @@ class TestReporterIntegration:
     """Integration tests for the reporter abstraction."""
 
     def test_orchestrator_injects_receiver_config(self):
-        """orchestrator_from_config should inject receiver settings as env vars."""
-        from dispatchio.config import orchestrator_from_config
+        """orchestrator should inject receiver settings as env vars."""
+        from dispatchio.config import orchestrator
         from dispatchio.config.settings import DispatchioSettings, ReceiverSettings
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -151,7 +166,49 @@ class TestReporterIntegration:
                     drop_dir=str(Path(tmp_dir) / "drops"),
                 )
             )
-            orch = orchestrator_from_config([], config=settings)
+            orch = orchestrator([], config=settings)
 
             # The orchestrator's executor should have injected the config
             assert orch.executors is not None
+
+
+# ---------------------------------------------------------------------------
+# get_reporter with inline config
+# ---------------------------------------------------------------------------
+
+
+class TestGetReporterWithInline:
+    def test_inline_config_used(self, tmp_path, monkeypatch):
+        data = {"receiver": {"backend": "filesystem", "drop_dir": str(tmp_path)}}
+        monkeypatch.setenv("DISPATCHIO_CONFIG_INLINE", json.dumps(data))
+        reporter = get_reporter(str(uuid4()))
+        reporter.report_success()
+        assert len(list(tmp_path.glob("*.json"))) == 1
+
+    def test_env_var_overrides_inline_receiver(self, tmp_path, monkeypatch):
+        # Inline says "none" but DISPATCHIO_RECEIVER__BACKEND overrides to filesystem.
+        # Verifies env vars beat inline (same priority order as env vs TOML).
+        monkeypatch.setenv(
+            "DISPATCHIO_CONFIG_INLINE",
+            json.dumps({"receiver": {"backend": "none"}}),
+        )
+        monkeypatch.setenv("DISPATCHIO_RECEIVER__BACKEND", "filesystem")
+        monkeypatch.setenv("DISPATCHIO_RECEIVER__DROP_DIR", str(tmp_path))
+        reporter = get_reporter(str(uuid4()))
+        reporter.report_success()
+        assert len(list(tmp_path.glob("*.json"))) == 1
+
+    def test_inline_takes_priority_over_config_file(self, tmp_path, monkeypatch):
+        config_file = tmp_path / "dispatchio.toml"
+        config_file.write_text(
+            '[receiver]\nbackend = "filesystem"\ndrop_dir = "completions"\n'
+        )
+        monkeypatch.setenv("DISPATCHIO_CONFIG", str(config_file))
+        monkeypatch.setenv(
+            "DISPATCHIO_CONFIG_INLINE",
+            json.dumps({"receiver": {"backend": "none"}}),
+        )
+        reporter = get_reporter(str(uuid4()))
+        reporter.report_success()
+        # Inline "none" won, so no file written
+        assert not (tmp_path / "completions").exists()

@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dispatchio import Job, PythonJob, orchestrator_from_config
+from dispatchio import Job, PythonJob, orchestrator
 
 BASE = Path(__file__).parent
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))
@@ -35,4 +35,4 @@ JOBS = [
     ),
 ]
 
-orchestrator = orchestrator_from_config(JOBS, config=CONFIG_FILE)
+orchestrator = orchestrator(JOBS, config=CONFIG_FILE)

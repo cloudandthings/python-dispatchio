@@ -12,12 +12,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dispatchio import DAILY, Job, JobDependency, PythonJob, orchestrator_from_config
+from dispatchio import DAILY, Job, JobDependency, PythonJob, orchestrator
 
 BASE = Path(__file__).parent
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))
 
-orchestrator = orchestrator_from_config(
+orchestrator = orchestrator(
     config=CONFIG_FILE,
     allow_runtime_mutation=True,
 )

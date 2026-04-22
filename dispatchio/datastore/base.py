@@ -57,9 +57,6 @@ class DataStore(Protocol):
 
     write:      Store a JSON-serialisable value keyed by (job, run_key, key).
     read:       Retrieve a stored value, or None if not found.
-    worker_env: Return the env vars that worker subprocesses need to reach
-                this store instance. Injected by executors at submit time.
-                Returns {} for in-process stores (e.g. MemoryDataStore).
     """
 
     namespace: str
@@ -80,5 +77,3 @@ class DataStore(Protocol):
         run_key: str | None = None,
         key: str = "return_value",
     ) -> Any | None: ...
-
-    def worker_env(self) -> dict[str, str]: ...

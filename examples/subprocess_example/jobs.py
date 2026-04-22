@@ -23,7 +23,7 @@ import os
 import sys
 from pathlib import Path
 
-from dispatchio import Job, RetryPolicy, SubprocessJob, orchestrator_from_config
+from dispatchio import Job, RetryPolicy, SubprocessJob, orchestrator
 
 BASE = Path(__file__).parent
 
@@ -51,4 +51,4 @@ summarize = Job.create(
 JOBS = [generate, summarize]
 
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))
-orchestrator = orchestrator_from_config(JOBS, config=CONFIG_FILE)
+orchestrator = orchestrator(JOBS, config=CONFIG_FILE)

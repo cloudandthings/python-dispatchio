@@ -169,6 +169,20 @@ class TestNoReporter:
         finally:
             sys.argv = orig_argv
 
+    def test_uses_config_uri_for_reporter(self, tmp_path, monkeypatch):
+        completions = tmp_path / "completions"
+        config_file = tmp_path / "dispatchio.toml"
+        config_file.write_text(
+            '[receiver]\nbackend = "filesystem"\ndrop_dir = "completions"\n'
+        )
+        monkeypatch.setenv("DISPATCHIO_CONFIG", str(config_file))
+        monkeypatch.setenv("DISPATCHIO_CORRELATION_ID", str(uuid4()))
+
+        run_job("test_job", _noop, run_key="20250115", reporter=None)
+
+        files = list(completions.glob("*.json"))
+        assert len(files) == 1
+
 
 # ---------------------------------------------------------------------------
 # FilesystemReporter

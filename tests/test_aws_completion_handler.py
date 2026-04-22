@@ -19,6 +19,7 @@ def test_stepfunctions_completion_handler_posts_to_sqs(monkeypatch, tmp_path) ->
     sqs = boto3.client("sqs", region_name="eu-west-1")
     queue_url = sqs.create_queue(QueueName="dispatchio-completions")["QueueUrl"]
 
+    monkeypatch.setenv("DISPATCHIO_RECEIVER__BACKEND", "sqs")
     monkeypatch.setenv("DISPATCHIO_RECEIVER__QUEUE_URL", queue_url)
     monkeypatch.setenv("DISPATCHIO_RECEIVER__REGION", "eu-west-1")
 
@@ -80,6 +81,7 @@ def test_athena_completion_handler_resolves_context_from_state(
     sqs = boto3.client("sqs", region_name="eu-west-1")
     queue_url = sqs.create_queue(QueueName="dispatchio-completions")["QueueUrl"]
 
+    monkeypatch.setenv("DISPATCHIO_RECEIVER__BACKEND", "sqs")
     monkeypatch.setenv("DISPATCHIO_RECEIVER__QUEUE_URL", queue_url)
     monkeypatch.setenv("DISPATCHIO_RECEIVER__REGION", "eu-west-1")
 

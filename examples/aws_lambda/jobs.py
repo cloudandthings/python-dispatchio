@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from dispatchio import Job, LambdaJob
-from dispatchio_aws.config import aws_orchestrator_from_config
+from dispatchio_aws.config import aws_orchestrator
 
 BASE = Path(__file__).parent
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))
@@ -21,4 +21,4 @@ JOBS = [
     ),
 ]
 
-orchestrator = aws_orchestrator_from_config(JOBS, config=CONFIG_FILE)
+orchestrator = aws_orchestrator(JOBS, config=CONFIG_FILE)

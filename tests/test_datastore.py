@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 
 import pytest
 
@@ -101,9 +102,6 @@ class TestMemoryDataStore:
         store.write("val", job="j", run_key="20260419")
         assert store.read(job="j") == "val"
 
-    def test_worker_env_returns_empty(self):
-        assert MemoryDataStore().worker_env() == {}
-
     def test_satisfies_protocol(self):
         assert isinstance(MemoryDataStore(), DataStore)
 
@@ -157,12 +155,6 @@ class TestFilesystemDataStore:
             store.write(value, job="j", run_key="r", key="k")
             assert store.read(job="j", run_key="r", key="k") == value
 
-    def test_worker_env_contains_data_dir_and_namespace(self, tmp_path):
-        store = FilesystemDataStore(tmp_path, namespace="my-ns")
-        env = store.worker_env()
-        assert env["DISPATCHIO_DATA_DIR"] == str(tmp_path)
-        assert env["DISPATCHIO_DATA_NAMESPACE"] == "my-ns"
-
     def test_satisfies_protocol(self, tmp_path):
         assert isinstance(FilesystemDataStore(tmp_path), DataStore)
 
@@ -207,6 +199,60 @@ class TestGetDataStore:
         monkeypatch.delenv("DISPATCHIO_DATA_DIR", raising=False)
         with pytest.raises(RuntimeError, match="DISPATCHIO_DATA_DIR"):
             get_data_store()
+
+
+# ---------------------------------------------------------------------------
+# get_data_store with inline config
+# ---------------------------------------------------------------------------
+
+
+class TestGetDataStoreWithInline:
+    def test_returns_filesystem_store_from_inline(self, tmp_path, monkeypatch):
+        data = {"data_store": {"backend": "filesystem", "base_dir": str(tmp_path)}}
+        monkeypatch.setenv("DISPATCHIO_CONFIG_INLINE", json.dumps(data))
+        store = get_data_store()
+        assert isinstance(store, FilesystemDataStore)
+
+    def test_namespace_from_inline(self, tmp_path, monkeypatch):
+        data = {
+            "data_store": {
+                "backend": "filesystem",
+                "base_dir": str(tmp_path),
+                "namespace": "my-ns",
+            }
+        }
+        monkeypatch.setenv("DISPATCHIO_CONFIG_INLINE", json.dumps(data))
+        store = get_data_store()
+        assert store.namespace == "my-ns"
+
+    def test_namespace_arg_overrides_inline(self, tmp_path, monkeypatch):
+        data = {
+            "data_store": {
+                "backend": "filesystem",
+                "base_dir": str(tmp_path),
+                "namespace": "inline-ns",
+            }
+        }
+        monkeypatch.setenv("DISPATCHIO_CONFIG_INLINE", json.dumps(data))
+        store = get_data_store(namespace="explicit-ns")
+        assert store.namespace == "explicit-ns"
+
+    def test_none_backend_raises(self, monkeypatch):
+        monkeypatch.setenv(
+            "DISPATCHIO_CONFIG_INLINE",
+            json.dumps({"data_store": {"backend": "none"}}),
+        )
+        with pytest.raises(RuntimeError, match="Unsupported data_store backend"):
+            get_data_store()
+
+    def test_config_file_path_also_works(self, tmp_path, monkeypatch):
+        config_file = tmp_path / "dispatchio.toml"
+        config_file.write_text(
+            f'[data_store]\nbackend = "filesystem"\nbase_dir = "{tmp_path}/data"\n'
+        )
+        monkeypatch.setenv("DISPATCHIO_CONFIG", str(config_file))
+        store = get_data_store()
+        assert isinstance(store, FilesystemDataStore)
 
 
 # ---------------------------------------------------------------------------
@@ -364,20 +410,3 @@ class TestOrchestratorDataStoreWiring:
             base_dir=tmp_path,
         )
         assert orch.data_store is None
-
-    def test_subprocess_executor_receives_data_env(self, tmp_path):
-        from dispatchio import local_orchestrator, Job, SubprocessJob
-        from dispatchio.executor.subprocess_ import SubprocessExecutor
-
-        state_dir = tmp_path / "state"
-        state_dir.mkdir()
-        store = FilesystemDataStore(tmp_path / "data", namespace="test")
-        orch = local_orchestrator(
-            [Job(name="j", executor=SubprocessJob(command=["echo"]))],
-            base_dir=state_dir,
-            data_store=store,
-        )
-        sub_exec = orch.executors["subprocess"]
-        assert isinstance(sub_exec, SubprocessExecutor)
-        assert sub_exec._data_env["DISPATCHIO_DATA_DIR"] == str(tmp_path / "data")
-        assert sub_exec._data_env["DISPATCHIO_DATA_NAMESPACE"] == "test"

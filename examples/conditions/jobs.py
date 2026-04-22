@@ -33,7 +33,7 @@ from dispatchio import (
     Job,
     PythonJob,
     TimeOfDayCondition,
-    orchestrator_from_config,
+    orchestrator,
 )
 
 BASE = Path(__file__).parent
@@ -75,4 +75,4 @@ after_hours_batch = Job.create(
 )
 
 JOBS = [daily_ingest, morning_report, weekday_digest, after_hours_batch]
-orchestrator = orchestrator_from_config(JOBS, config=CONFIG_FILE)
+orchestrator = orchestrator(JOBS, config=CONFIG_FILE)

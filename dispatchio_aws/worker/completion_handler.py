@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from beartype import beartype
 
-from dispatchio.config.settings import DispatchioSettings
+from dispatchio.config.loader import load_config
 from dispatchio.models import AttemptRecord, Status
+from dispatchio.reporter import build_reporter
 from dispatchio.state.sqlalchemy_ import SQLAlchemyStateStore
-from dispatchio_aws.reporter.sqs import SQSReporter
 
 # Module-level singleton — reused across warm Lambda invocations so the
 # SQLAlchemy connection pool is not recreated on every event.
@@ -18,7 +17,7 @@ _store: SQLAlchemyStateStore | None = None
 def _get_store() -> SQLAlchemyStateStore:
     global _store
     if _store is None:
-        cfg = DispatchioSettings().state
+        cfg = load_config().state
         _store = SQLAlchemyStateStore(connection_string=cfg.connection_string)
     return _store
 
@@ -96,29 +95,16 @@ def _lookup_attempt_by_query_execution_id(query_execution_id: str) -> AttemptRec
 
 
 def _report_completion_from_record(record: AttemptRecord, status: Status) -> None:
-    reporter = SQSReporter(
-        queue_url=_required_env(
-            "DISPATCHIO_RECEIVER__QUEUE_URL", "DISPATCHIO_SQS_QUEUE_URL"
-        ),
-        region=_optional_env("DISPATCHIO_RECEIVER__REGION", "DISPATCHIO_SQS_REGION"),
-    )
+    reporter = build_reporter(load_config().receiver)
+    if reporter is None:
+        raise RuntimeError(
+            "No reporter configured in dispatchio settings. "
+            "Set receiver.backend to filesystem or sqs."
+        )
     reporter.report(
         correlation_id=record.correlation_id,
         status=status,
     )
-
-
-def _required_env(primary: str, fallback: str) -> str:
-    value = os.environ.get(primary) or os.environ.get(fallback)
-    if not value:
-        raise RuntimeError(
-            f"Missing required environment variable: {primary} (or {fallback})"
-        )
-    return value
-
-
-def _optional_env(primary: str, fallback: str) -> str | None:
-    return os.environ.get(primary) or os.environ.get(fallback)
 
 
 def _stepfunctions_status_to_dispatchio(status: str) -> Status:

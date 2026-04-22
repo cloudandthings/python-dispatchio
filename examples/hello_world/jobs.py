@@ -17,7 +17,7 @@ Run with:
 import os
 from pathlib import Path
 
-from dispatchio import Job, PythonJob, orchestrator_from_config
+from dispatchio import Job, PythonJob, orchestrator
 
 BASE = Path(__file__).parent
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))
@@ -44,4 +44,4 @@ goodbye_world = Job.create(
 )
 
 JOBS = [hello_world, goodbye_world]
-orchestrator = orchestrator_from_config(JOBS, config=CONFIG_FILE)
+orchestrator = orchestrator(JOBS, config=CONFIG_FILE)

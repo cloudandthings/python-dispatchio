@@ -34,7 +34,7 @@ from dispatchio import (
     PythonJob,
     WEEKLY,
     run_loop,
-    orchestrator_from_config,
+    orchestrator,
     resolve_run_key,
 )
 
@@ -58,7 +58,7 @@ transform = Job.create(
     depends_on=ingest,
 )
 
-daily = orchestrator_from_config(
+daily = orchestrator(
     [ingest, transform],
     config=str(BASE / "daily.toml"),
 )
@@ -78,7 +78,7 @@ report = Job.create(
     depends_on=aggregate,
 )
 
-weekly = orchestrator_from_config(
+weekly = orchestrator(
     [aggregate, report],
     config=str(BASE / "weekly.toml"),
 )

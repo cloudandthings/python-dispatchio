@@ -40,6 +40,7 @@ Override via explicit arguments or env vars for testing.
 
 Environment variables (all optional):
     DISPATCHIO_RUN_KEY          fallback if --run-key not in argv
+    DISPATCHIO_CONFIG           global config location used to build reporter
     DISPATCHIO_DROP_DIR         fallback if --drop-dir not in argv (filesystem reporter)
     DISPATCHIO_CORRELATION_ID   attempt UUID injected by executor
 """
@@ -54,6 +55,7 @@ from collections.abc import Callable
 from typing import Any
 from uuid import UUID
 
+from dispatchio.config.loader import load_config
 from dispatchio.models import Status
 from dispatchio.worker.reporter.base import BaseReporter
 from dispatchio.worker.reporter.filesystem import FilesystemReporter
@@ -97,6 +99,13 @@ def _resolve_reporter(reporter: BaseReporter | None) -> BaseReporter | None:
     if reporter is not None:
         return reporter
 
+    if os.environ.get("DISPATCHIO_CONFIG_INLINE") or os.environ.get(
+        "DISPATCHIO_CONFIG"
+    ):
+        from dispatchio.reporter import build_reporter
+
+        return build_reporter(load_config().receiver)
+
     drop_dir = _arg_from_argv("--drop-dir") or os.environ.get("DISPATCHIO_DROP_DIR")
     if drop_dir:
         return FilesystemReporter(drop_dir)
@@ -120,7 +129,8 @@ def _resolve_reporter(reporter: BaseReporter | None) -> BaseReporter | None:
 
     logger.warning(
         "No reporter configured. Status events will NOT be sent to Dispatchio. "
-        "Pass a reporter to run_job(), use --drop-dir, or set DISPATCHIO_DROP_DIR."
+        "Pass a reporter to run_job(), set DISPATCHIO_CONFIG, use --drop-dir, "
+        "or set DISPATCHIO_DROP_DIR."
     )
     return None
 

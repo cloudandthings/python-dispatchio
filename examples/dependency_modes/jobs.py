@@ -31,7 +31,7 @@ from dispatchio import (
     DependencyMode,
     Job,
     PythonJob,
-    orchestrator_from_config,
+    orchestrator,
 )
 
 BASE = Path(__file__).parent
@@ -82,4 +82,4 @@ majority_collector = Job.create(
 )
 
 JOBS = [entity_a, entity_b, entity_c, best_effort_collector, majority_collector]
-orchestrator = orchestrator_from_config(JOBS, config=CONFIG_FILE)
+orchestrator = orchestrator(JOBS, config=CONFIG_FILE)

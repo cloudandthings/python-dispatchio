@@ -19,7 +19,7 @@ from dispatchio import (
     Job,
     PythonJob,
     event_dependency,
-    orchestrator_from_config,
+    orchestrator,
 )
 
 BASE = Path(__file__).parent
@@ -46,7 +46,7 @@ activate_paid_features = Job.create(
 JOBS = [send_welcome_email, activate_paid_features]
 
 # strict_dependencies=False allows dependencies that are not local executable jobs.
-orchestrator = orchestrator_from_config(
+orchestrator = orchestrator(
     JOBS,
     config=CONFIG_FILE,
 )
