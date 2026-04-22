@@ -431,10 +431,16 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+all = [
+    { name = "boto3" },
+    { name = "rich" },
+    { name = "typer" },
+]
 aws = [
     { name = "boto3" },
 ]
 cli = [
+    { name = "rich" },
     { name = "typer" },
 ]
 dev = [
@@ -442,6 +448,7 @@ dev = [
     { name = "moto", extra = ["awslambda", "stepfunctions"] },
     { name = "pytest" },
     { name = "pytest-cov" },
+    { name = "rich" },
     { name = "typer" },
 ]
 
@@ -454,6 +461,7 @@ dev = [
 requires-dist = [
     { name = "beartype", specifier = ">=0.19" },
     { name = "boto3", marker = "extra == 'aws'", specifier = ">=1.26" },
+    { name = "dispatchio", extras = ["cli", "aws"], marker = "extra == 'all'" },
     { name = "freezegun", marker = "extra == 'dev'", specifier = ">=1.2" },
     { name = "moto", extras = ["sqs", "awslambda", "stepfunctions", "athena"], marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "psutil", specifier = ">=5.9" },
@@ -461,11 +469,13 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
+    { name = "rich", marker = "extra == 'cli'", specifier = ">=13" },
+    { name = "rich", marker = "extra == 'dev'", specifier = ">=13" },
     { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "typer", marker = "extra == 'cli'", specifier = ">=0.24" },
     { name = "typer", marker = "extra == 'dev'", specifier = ">=0.24" },
 ]
-provides-extras = ["cli", "aws", "dev"]
+provides-extras = ["cli", "aws", "all", "dev"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=9.0.2" }]
