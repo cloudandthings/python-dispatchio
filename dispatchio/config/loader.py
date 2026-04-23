@@ -115,17 +115,6 @@ def _path_from_config_ref(value: str | Path, *, source: str) -> Path:
     return Path(value).expanduser()
 
 
-def _resolve_config_uri(config: str | Path | DispatchioSettings | None) -> str | None:
-    """Resolve the config URI to inject into worker environments."""
-    if isinstance(config, DispatchioSettings):
-        return os.environ.get(_CONFIG_ENV_VAR)
-
-    resolved = _find_config_file(config)
-    if resolved is None:
-        raise NotImplementedError("No config file found.")
-    return str(resolved.resolve())
-
-
 def _read_toml(path: Path) -> dict[str, Any]:
     """
     Read a TOML file and return the [dispatchio] section if present,

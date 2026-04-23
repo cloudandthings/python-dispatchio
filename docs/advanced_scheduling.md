@@ -60,7 +60,7 @@ Two constructor flags control strictness:
 This enables an orchestrator-first workflow from config:
 
 ```python
-orchestrator = orchestrator_from_config(
+orchestrator = orchestrator(
         config="dispatchio.toml",
         allow_runtime_mutation=True,
 )
@@ -71,7 +71,7 @@ orchestrator.add_jobs(initial_jobs)
 orchestrator.add_job(dynamic_job)
 ```
 
-`orchestrator_from_config` now also accepts no initial jobs, making this flow
+`orchestrator` now also accepts no initial jobs, making this flow
 natural for pipelines that discover work at runtime.
 
 ### Alternative approach (factory callable)
@@ -88,7 +88,7 @@ instead of replacing it wholesale.
 | Unresolved dependency warnings | Validated before `tick()` when the graph changed; warning or error depending on `strict_dependencies` |
 | Jobs that disappear between ticks | Their existing `RunRecord` in the state store is preserved; they are simply not evaluated that tick |
 | State store | Unchanged — dynamic jobs write the same `RunRecord` format as static jobs |
-| `orchestrator_from_config` | Can now create an empty orchestrator (`jobs` omitted) for orchestrator-first registration |
+| `orchestrator` | Can now create an empty orchestrator (`jobs` omitted) for orchestrator-first registration |
 | Duplicate names | Rejected immediately with `ValueError` |
 
 ### Simple fan-in example (factory alternative)
@@ -123,7 +123,7 @@ orchestrator = Orchestrator(jobs=job_factory, artifact_store=FilesystemArtifactS
 ### Scope of change
 
 - `dispatchio/orchestrator.py` — mutable APIs (`add_job`, `add_jobs`, `remove_job`), duplicate checks, pre-tick graph refresh
-- `dispatchio/config/loader.py` — `orchestrator_from_config` now allows empty initial jobs
+- `dispatchio/config/loader.py` — `orchestrator` now allows empty initial jobs
 - `tests/test_orchestrator.py` — mutation lifecycle, strict dependencies, duplicate-name tests
 - `tests/test_config.py` — empty-jobs factory test
 - `examples/` — new example directory `dynamic_registration`
@@ -221,15 +221,6 @@ base_dir  = ".dispatchio/data"
 namespace = "my-pipeline"
 ```
 
-Or in Python:
-
-```python
-from dispatchio import local_orchestrator
-from dispatchio.datastore import FilesystemDataStore
-
-store = FilesystemDataStore(".dispatchio/data", namespace="my-pipeline")
-orchestrator = local_orchestrator(jobs, data_store=store)
-```
 
 ### Backends (v1)
 
@@ -260,7 +251,7 @@ backend (distributed deployments).
 - `dispatchio/orchestrator.py` — `data_store` param (stored for future factory use)
 - `dispatchio/config/settings.py` — `DataStoreSettings` + `[dispatchio.data_store]` section
 - `dispatchio/config/loader.py` — `_build_data_store`, relative path resolution for `base_dir`
-- `dispatchio/__init__.py` — re-export `DataStore`, `FilesystemDataStore`, `MemoryDataStore`, `get_data_store`; `local_orchestrator` accepts `data_store`
+- `dispatchio/__init__.py` — re-export `DataStore`, `FilesystemDataStore`, `MemoryDataStore`, `get_data_store`; `orchestrator` accepts `data_store`
 - `examples/data_store/` — discover → DataStore → process example
 
 ---

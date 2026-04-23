@@ -36,7 +36,6 @@ class AdmissionPlan:
 
 
 def build_admission_plan(
-    *,
     candidates: list[AdmissionCandidate],
     active_attempts: list[AttemptRecord],
     job_pool_by_name: dict[str, str],

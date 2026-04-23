@@ -1,6 +1,6 @@
 # Dispatchio configuration — hello_world example (local dev)
 #
-# This file is auto-discovered by load_config() / orchestrator_from_config()
+# This file is auto-discovered by load_config() / orchestrator()
 # when present in the working directory, or pointed to via DISPATCHIO_CONFIG.
 #
 # Any value here can be overridden by an environment variable.
