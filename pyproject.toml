@@ -56,7 +56,7 @@ dev = [
 ]
 
 [project.scripts]
-dispatchio = "dispatchio.cli.app:app"
+dispatchio = "dispatchio.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["dispatchio", "dispatchio_aws"]
