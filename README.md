@@ -117,7 +117,7 @@ See [JSON Graph Decoupling](docs/json_graph_decoupling.md).
 
 ```python
 # jobs.py
-from dispatchio import Job, SubprocessJob, Dependency, TimeCondition, orchestrator_from_config
+from dispatchio import Job, SubprocessJob, Dependency, TimeCondition, orchestrator
 
 JOBS = [
     # Run a data ingest script every day after 1am
@@ -136,7 +136,7 @@ JOBS = [
 ]
 
 # Auto-discovers dispatchio.toml in current directory; env vars override config file
-orchestrator = orchestrator_from_config(JOBS)
+orchestrator = orchestrator(JOBS)
 ```
 
 ### 1a. Create a config file
@@ -299,7 +299,7 @@ Entry-point workers use `dispatchio run MODULE:FUNCTION`; script-backed workers 
 ### AWS executors (`dispatchio[aws]` only)
 
 AWS-backed executors are provided by the optional package and are configured
-through `dispatchio_aws.config.aws_orchestrator_from_config`.
+through `dispatchio_aws.config.aws_orchestrator`.
 
 Supported executor configs:
 
@@ -311,7 +311,7 @@ Example (optional package):
 
 ```python
 from dispatchio import Job, LambdaJob
-from dispatchio_aws.config import aws_orchestrator_from_config
+from dispatchio_aws.config import aws_orchestrator
 
 JOBS = [
     Job.create(
@@ -320,7 +320,7 @@ JOBS = [
     )
 ]
 
-orchestrator = aws_orchestrator_from_config(JOBS, config="dispatchio.toml")
+orchestrator = aws_orchestrator(JOBS, config="dispatchio.toml")
 ```
 
 See `examples/aws_lambda/README.md` for a complete optional AWS setup.
@@ -537,10 +537,10 @@ directory. This ensures consistent behaviour regardless of where you invoke Disp
 
 ### Config file discovery
 
-`load_config()` and `orchestrator_from_config()` find the config file in this
+`load_config()` and `orchestrator()` find the config file in this
 order (first match wins):
 
-1. Explicit `config=` argument: `orchestrator_from_config(JOBS, config="prod.toml")`
+1. Explicit `config=` argument: `orchestrator(JOBS, config="prod.toml")`
 2. `DISPATCHIO_CONFIG` environment variable (local path or `ssm://` with `dispatchio[aws]`)
 3. `./dispatchio.toml` in the current working directory
 4. `~/.dispatchio.toml` user-level fallback
@@ -566,13 +566,13 @@ nested fields:
 
 Environment variables always win over the config file.
 
-### Using `orchestrator_from_config`
+### Using `orchestrator`
 
 This is the recommended way to build an Orchestrator for anything beyond local dev:
 
 ```python
 # jobs.py
-from dispatchio import Job, SubprocessJob, Dependency, orchestrator_from_config
+from dispatchio import Job, SubprocessJob, Dependency, orchestrator
 
 JOBS = [
     Job(
@@ -587,13 +587,13 @@ JOBS = [
 ]
 
 # Auto-discovers dispatchio.toml; env vars override config file values
-orchestrator = orchestrator_from_config(JOBS)
+orchestrator = orchestrator(JOBS)
 ```
 
 Or load settings programmatically and pass them directly:
 
 ```python
-from dispatchio import DispatchioSettings, orchestrator_from_config
+from dispatchio import DispatchioSettings, orchestrator
 from dispatchio.config import StateSettings, ReceiverSettings
 
 settings = DispatchioSettings(
@@ -601,7 +601,7 @@ settings = DispatchioSettings(
     state=StateSettings(backend="memory"),        # useful in tests
     receiver=ReceiverSettings(backend="none"),
 )
-orchestrator = orchestrator_from_config(JOBS, config=settings)
+orchestrator = orchestrator(JOBS, config=settings)
 ```
 
 ### AWS Parameter Store (SSM)
@@ -625,7 +625,7 @@ overridden via environment variables after the SSM config is loaded.
 
 ### Completion Event Abstraction
 
-The `orchestrator_from_config()` function automatically configures job completion
+The `orchestrator()` function automatically configures job completion
 reporting based on the receiver backend in your config file. Jobs use the
 `get_reporter()` function to report their completion — the job code remains
 **backend-agnostic**.

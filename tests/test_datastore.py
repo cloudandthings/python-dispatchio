@@ -383,30 +383,3 @@ class TestDispatchioReadResults:
             @dispatchio_read_results(param="entities", job="discover")
             def process() -> None:
                 return None
-
-
-# ---------------------------------------------------------------------------
-# Orchestrator integration — data_store wired through local_orchestrator
-# ---------------------------------------------------------------------------
-
-
-class TestOrchestratorDataStoreWiring:
-    def test_local_orchestrator_stores_data_store(self, tmp_path):
-        from dispatchio import local_orchestrator, Job, SubprocessJob
-
-        store = MemoryDataStore()
-        orch = local_orchestrator(
-            [Job(name="j", executor=SubprocessJob(command=["echo"]))],
-            base_dir=tmp_path,
-            data_store=store,
-        )
-        assert orch.data_store is store
-
-    def test_local_orchestrator_no_data_store_is_none(self, tmp_path):
-        from dispatchio import local_orchestrator, Job, SubprocessJob
-
-        orch = local_orchestrator(
-            [Job(name="j", executor=SubprocessJob(command=["echo"]))],
-            base_dir=tmp_path,
-        )
-        assert orch.data_store is None

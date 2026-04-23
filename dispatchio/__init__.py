@@ -1,29 +1,6 @@
 """
 Dispatchio — lightweight, tick-based batch job orchestrator.
-
-Quick start (local):
-    from dispatchio import Job, PythonJob, Dependency, DAILY, local_orchestrator
-    from pathlib import Path
-
-    JOBS = [
-        Job(
-            name="ingest",
-            cadence=DAILY,
-            executor=PythonJob(entry_point="myproject.jobs:run_ingest"),
-        ),
-        Job(
-            name="transform",
-            cadence=DAILY,
-            depends_on=[JobDependency(job_name="ingest", cadence=DAILY)],
-            executor=PythonJob(entry_point="myproject.jobs:run_transform"),
-        ),
-    ]
-
-    orchestrator = local_orchestrator(JOBS, base_dir=Path("/var/dispatchio"))
-    orchestrator.tick()
 """
-
-from pathlib import Path
 
 from dispatchio.cadence import (
     Cadence,
@@ -103,56 +80,6 @@ from dispatchio.datastore import (
     get_data_store,
 )
 
-
-def local_orchestrator(
-    jobs: list[Job],
-    base_dir: str | Path = Path(".dispatchio"),
-    name: str = "default",
-    data_store: "DataStore | None" = None,
-    **orchestrator_kwargs,
-) -> Orchestrator:
-    """
-    Create an Orchestrator wired for local use with filesystem-backed state,
-    subprocess and python executors, and a file-drop status receiver.
-
-    Directory layout under base_dir:
-        state/          AttemptRecord JSON files
-        events/         Status event drop directory
-        tick_log.jsonl  Append-only tick audit log
-
-    Args:
-        jobs:               List of Jobs to evaluate each tick.
-        base_dir:           Root directory for state and status events.
-                            Created if it doesn't exist. Defaults to .dispatchio/
-        name:               Orchestrator name, used in tick log and context registry.
-        data_store:         Optional DataStore for inter-job data passing.
-                            If provided, workers can call get_data_store() to
-                            read and write structured values.
-        **orchestrator_kwargs:
-                            Forwarded to Orchestrator (e.g. alert_handler=...).
-    """
-    from dispatchio.tick_log import FilesystemTickLogStore
-
-    # TODO DISPATCHIO_CONFIG
-
-    base = Path(base_dir)
-    events = base / "events"
-    db_path = base / "dispatchio.db"
-    return Orchestrator(
-        jobs=jobs,
-        name=name,
-        state=SQLAlchemyStateStore(f"sqlite:///{db_path}"),
-        executors={
-            "subprocess": SubprocessExecutor(),
-            "python": PythonJobExecutor(),
-        },
-        receiver=FilesystemReceiver(events),
-        tick_log=FilesystemTickLogStore(base / "tick_log.jsonl"),
-        data_store=data_store,
-        **orchestrator_kwargs,
-    )
-
-
 __all__ = [
     # Cadence
     "Cadence",
@@ -199,7 +126,6 @@ __all__ = [
     "TickResult",
     # Orchestrator
     "Orchestrator",
-    "local_orchestrator",
     # Common concrete classes (no submodule import needed for basic use)
     "SQLAlchemyStateStore",
     "SubprocessExecutor",

@@ -1,11 +1,5 @@
 """dispatchio.datastore — inter-job data passing.
 
-Quick start (orchestrator side):
-    from dispatchio.datastore import FilesystemDataStore
-
-    store = FilesystemDataStore(".dispatchio/data", namespace="my-pipeline")
-    orchestrator = local_orchestrator(jobs, data_store=store)
-
 Quick start (worker side — inside a job function):
     from dispatchio.datastore import get_data_store
 
