@@ -62,12 +62,12 @@ def resolve_run_key(cadence: Cadence, reference_time: datetime) -> str:
     """
     from dispatchio.cadence import (
         DateCadence,
-        FixedCadence,
+        LiteralCadence,
         Frequency,
         IncrementalCadence,
     )
 
-    if isinstance(cadence, FixedCadence):
+    if isinstance(cadence, LiteralCadence):
         return cadence.value
 
     if isinstance(cadence, IncrementalCadence):
@@ -99,9 +99,9 @@ def resolve_run_key(cadence: Cadence, reference_time: datetime) -> str:
 
 def describe_cadence(cadence: Cadence) -> str:
     """Human-readable description of a cadence (used in CLI/log output)."""
-    from dispatchio.cadence import DateCadence, FixedCadence, IncrementalCadence
+    from dispatchio.cadence import DateCadence, LiteralCadence, IncrementalCadence
 
-    if isinstance(cadence, FixedCadence):
+    if isinstance(cadence, LiteralCadence):
         return f"literal '{cadence.value}'"
     if isinstance(cadence, IncrementalCadence):
         return f"incremental[{cadence.key!r}]"
@@ -166,13 +166,13 @@ def resolve_orchestrator_run_key(
     """
     from dispatchio.cadence import (
         DateCadence,
-        FixedCadence,
+        LiteralCadence,
         Frequency,
         IncrementalCadence,
     )
 
-    # Fixed cadences return their literal value
-    if isinstance(orchestrator_cadence, FixedCadence):
+    # Literal cadences return their value directly
+    if isinstance(orchestrator_cadence, LiteralCadence):
         return orchestrator_cadence.value
 
     # Incremental cadences require metadata store (future)
@@ -234,13 +234,13 @@ def resolve_run_key_from_orchestrator(
     """
     from dispatchio.cadence import (
         DateCadence,
-        FixedCadence,
+        LiteralCadence,
         Frequency,
         IncrementalCadence,
     )
 
-    # Fixed cadences always return their literal value, regardless of orchestrator context
-    if isinstance(job_cadence, FixedCadence):
+    # Literal cadences always return their value, regardless of orchestrator context
+    if isinstance(job_cadence, LiteralCadence):
         return job_cadence.value
 
     # Incremental cadences require metadata store (future)

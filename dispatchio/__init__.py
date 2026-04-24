@@ -5,7 +5,7 @@ Dispatchio — lightweight, tick-based batch job orchestrator.
 from dispatchio.cadence import (
     Cadence,
     DateCadence,
-    FixedCadence,
+    LiteralCadence,
     Frequency,
     IncrementalCadence,
     # Constants
@@ -17,6 +17,7 @@ from dispatchio.cadence import (
     WEEKLY,
     YESTERDAY,
 )
+from dispatchio.decorator import job
 from dispatchio.conditions import (
     AllOf,
     AnyCondition,
@@ -84,9 +85,11 @@ __all__ = [
     # Cadence
     "Cadence",
     "DateCadence",
-    "FixedCadence",
+    "LiteralCadence",
     "Frequency",
     "IncrementalCadence",
+    # Decorator
+    "job",
     "DAILY",
     "HOURLY",
     "LAST_MONTH",

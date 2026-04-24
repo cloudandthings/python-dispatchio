@@ -65,6 +65,7 @@ class TriggerType(str, Enum):
     SCHEDULED = "scheduled"  # triggered by scheduler/cadence
     AUTO_RETRY = "auto_retry"  # triggered by automatic retry policy
     MANUAL_RETRY = "manual_retry"  # triggered by user/manual request
+    ADHOC = "adhoc"  # triggered by an explicit run-file --run-key submission
 
 
 class DeadLetterReasonCode(str, Enum):

@@ -24,7 +24,7 @@ run = "uv pip install -r requirements.txt"
 
 [tasks.test]
 description = "Run tests"
-run = "pytest tests/"
+run = "uv pip install -e '.[dev]' && uv run pytest tests/"
 
 [tasks.lint]
 description = "Lint the code"

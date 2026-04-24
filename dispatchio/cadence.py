@@ -4,7 +4,7 @@ Cadence — the run_key resolution strategy for a job or dependency.
 Public API (re-exported from dispatchio):
     Frequency           — HOURLY / DAILY / WEEKLY / MONTHLY
     DateCadence         — one run per calendar period, optional signed offset
-    FixedCadence        — static run_key (ad-hoc / event-driven)
+    LiteralCadence      — static run_key (event-driven / explicit key)
     IncrementalCadence  — batch-triggered
     Cadence             — Annotated union (Pydantic discriminator)
 
@@ -37,8 +37,12 @@ class DateCadence(BaseModel):
     # Positive values reference future periods (rare).
 
 
-class FixedCadence(BaseModel):
-    """Fixed run_key — for ad-hoc / event-driven jobs."""
+class LiteralCadence(BaseModel):
+    """Literal run_key — the value is used as-is, regardless of reference time.
+
+    Use this when the run_key comes from outside the scheduler: an event ID,
+    a user-supplied key, or an explicit date string like "D20260423".
+    """
 
     type: Literal["literal"] = "literal"
     value: str
@@ -54,7 +58,7 @@ class IncrementalCadence(BaseModel):
 
 
 Cadence = Annotated[
-    DateCadence | FixedCadence | IncrementalCadence,
+    DateCadence | LiteralCadence | IncrementalCadence,
     Field(discriminator="type"),
 ]
 

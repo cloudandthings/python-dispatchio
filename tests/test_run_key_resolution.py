@@ -11,7 +11,7 @@ from dispatchio.cadence import (
     LAST_MONTH,
     LAST_WEEK,
     DateCadence,
-    FixedCadence,
+    LiteralCadence,
     Frequency,
     IncrementalCadence,
 )
@@ -89,14 +89,25 @@ class TestWeeklyResolution:
         assert resolve_run_key(WEEKLY, ref) == "W20250113"
 
 
-class TestFixedCadence:
+class TestLiteralCadence:
     def test_value_returned_as_is(self):
-        cad = FixedCadence(value="adhoc-123")
-        assert resolve_run_key(cad, REF) == "adhoc-123"
+        cad = LiteralCadence(value="order-9841")
+        assert resolve_run_key(cad, REF) == "order-9841"
+
+    def test_date_format_key(self):
+        cad = LiteralCadence(value="D20250115")
+        assert resolve_run_key(cad, REF) == "D20250115"
 
     def test_custom_string(self):
-        cad = FixedCadence(value="my-special-run")
+        cad = LiteralCadence(value="my-special-run")
         assert resolve_run_key(cad, REF) == "my-special-run"
+
+    def test_reference_time_ignored(self):
+        # LiteralCadence always returns value regardless of reference_time
+        cad = LiteralCadence(value="fixed-key")
+        ref_a = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        ref_b = datetime(2099, 12, 31, tzinfo=timezone.utc)
+        assert resolve_run_key(cad, ref_a) == resolve_run_key(cad, ref_b) == "fixed-key"
 
 
 class TestIncrementalCadence:
@@ -121,8 +132,8 @@ class TestDescribeCadence:
         desc = describe_cadence(three_ago)
         assert "3" in desc and "day" in desc
 
-    def test_fixed(self):
-        cad = FixedCadence(value="static-id")
+    def test_literal(self):
+        cad = LiteralCadence(value="static-id")
         assert "static-id" in describe_cadence(cad)
 
     def test_incremental(self):
@@ -144,8 +155,8 @@ class TestOrchestratorRunKeyResolution:
     def test_hourly_orchestrator_run_key(self):
         assert resolve_orchestrator_run_key(HOURLY, REF) == "2025011509"
 
-    def test_fixed_orchestrator_run_key(self):
-        cad = FixedCadence(value="event:customer-import-9841")
+    def test_literal_orchestrator_run_key(self):
+        cad = LiteralCadence(value="event:customer-import-9841")
         assert resolve_orchestrator_run_key(cad, REF) == "event:customer-import-9841"
 
 
@@ -170,10 +181,10 @@ class TestResolveRunKeyFromOrchestrator:
     def test_hourly_orchestrator_daily_job(self):
         assert resolve_run_key_from_orchestrator("2025011509", DAILY) == "D20250115"
 
-    def test_event_orchestrator_fixed_job(self):
+    def test_event_orchestrator_literal_job(self):
         assert (
             resolve_run_key_from_orchestrator(
-                "event:customer-import-9841", FixedCadence(value="audit")
+                "event:customer-import-9841", LiteralCadence(value="audit")
             )
             == "audit"
         )
