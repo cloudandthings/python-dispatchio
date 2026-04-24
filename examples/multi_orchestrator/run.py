@@ -33,7 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
-from dispatchio import DAILY, WEEKLY, Job, PythonJob, orchestrator, resolve_run_key, run_loop
+from dispatchio import WEEKLY, Job, PythonJob, orchestrator, resolve_run_key, run_loop
 from dispatchio.events import event_dependency
 from dispatchio.models import Event
 
@@ -146,7 +146,9 @@ for orch in [daily, weekly]:
     print(f"    {len(records)} tick(s), {submitted_total} total submission(s)")
     for r in records:
         n = sum(1 for a in r.actions if a["action"] == "submitted")
-        print(f"    [{r.ticked_at}]  ref={r.reference_time[:10]}  {r.duration_seconds:.2f}s  {n} submitted")
+        print(
+            f"    [{r.ticked_at}]  ref={r.reference_time[:10]}  {r.duration_seconds:.2f}s  {n} submitted"
+        )
 
 # ---------------------------------------------------------------------------
 # CLI usage hints
@@ -163,5 +165,7 @@ print("    dispatchio context use daily-etl")
 print()
 print("    dispatchio status                              # daily-etl jobs")
 print("    dispatchio status --context weekly-reports     # weekly-reports jobs")
-print("    dispatchio status --all-namespaces             # both, with NAMESPACE column")
+print(
+    "    dispatchio status --all-namespaces             # both, with NAMESPACE column"
+)
 print()

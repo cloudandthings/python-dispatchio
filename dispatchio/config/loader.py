@@ -278,9 +278,7 @@ def orchestrator(
 
     # Allow callers (e.g. orchestrator_from_graph) to override the namespace from
     # settings by passing namespace= in orchestrator_kwargs.
-    namespace = orchestrator_kwargs.pop(
-        "namespace", settings.namespace
-    )
+    namespace = orchestrator_kwargs.pop("namespace", settings.namespace)
 
     data_store = _build_data_store(getattr(settings, "data_store", None), namespace)
 
