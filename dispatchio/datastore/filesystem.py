@@ -6,10 +6,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from dispatchio.datastore.base import _resolve_job, _resolve_run_key
+from dispatchio.datastore.base import DataStore, _resolve_job, _resolve_run_key
 
 
-class FilesystemDataStore:
+class FilesystemDataStore(DataStore):
     """DataStore backed by JSON files under a base directory.
 
     Directory layout:
@@ -20,7 +20,7 @@ class FilesystemDataStore:
     """
 
     def __init__(self, base_dir: str | Path, namespace: str = "default") -> None:
-        self.namespace = namespace
+        super().__init__(namespace=namespace)
         self.base_dir = Path(base_dir)
 
     def _path(self, job: str, run_key: str, key: str) -> Path:

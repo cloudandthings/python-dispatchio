@@ -115,13 +115,15 @@ def print_records(records: list[AttemptRecord]) -> None:
         row: list[str] = []
         if show_namespace:
             row.append(record.namespace or "-")
-        row.extend([
-            record.job_name,
-            record.run_key,
-            f"[{status_colour}]{status_value}[/{status_colour}]",
-            str(record.attempt),
-            completed,
-        ])
+        row.extend(
+            [
+                record.job_name,
+                record.run_key,
+                f"[{status_colour}]{status_value}[/{status_colour}]",
+                str(record.attempt),
+                completed,
+            ]
+        )
         table.add_row(*row)
 
     console.print(table)

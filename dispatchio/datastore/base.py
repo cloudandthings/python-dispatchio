@@ -20,7 +20,8 @@ DISPATCHIO_RUN_KEY). This makes the harness API ergonomic:
 from __future__ import annotations
 
 import os
-from typing import Any, Protocol, runtime_checkable
+from abc import ABC, abstractmethod
+from typing import Any
 
 
 def _resolve_job(job: str | None) -> str:
@@ -47,20 +48,22 @@ def _resolve_run_key(run_key: str | None) -> str:
     )
 
 
-@runtime_checkable
-class DataStore(Protocol):
-    """Protocol satisfied by any object with write, read, and worker_env.
+class DataStore(ABC):
+    """Base class for inter-job data stores.
 
     The namespace is set at construction — one instance covers one namespace.
     Multiple orchestrators sharing the same backing store should use distinct
     namespaces to avoid key collisions.
 
-    write:      Store a JSON-serialisable value keyed by (job, run_key, key).
-    read:       Retrieve a stored value, or None if not found.
+    write:  Store a JSON-serialisable value keyed by (job, run_key, key).
+    read:   Retrieve a stored value, or None if not found.
     """
 
-    namespace: str
+    def __init__(self, namespace: str = "default") -> None:
+        super().__init__()
+        self.namespace = namespace
 
+    @abstractmethod
     def write(
         self,
         value: Any,
@@ -70,6 +73,7 @@ class DataStore(Protocol):
         key: str = "return_value",
     ) -> None: ...
 
+    @abstractmethod
     def read(
         self,
         *,

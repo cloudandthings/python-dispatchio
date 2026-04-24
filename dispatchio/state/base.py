@@ -22,10 +22,13 @@ from dispatchio.models import (
     Status,
 )
 
+
 class AmbiguousNamespaceError(Exception):
     """Raised when a state store operation is attempted without a namespace in a multi-orchestrator context."""
 
-    def __init__(self, message: str = "Namespace is required for this operation but is not set.") -> None:
+    def __init__(
+        self, message: str = "Namespace is required for this operation but is not set."
+    ) -> None:
         super().__init__(message)
 
 
@@ -34,7 +37,7 @@ class StateStore(ABC):
 
     def __init__(self, namespace: str | None = "default") -> None:
         """Initialize the state store filtered by namespace for multi-orchestrator support.
-        
+
         If namespace is None, the store operates in a global mode without partitioning.
         """
         super().__init__()
