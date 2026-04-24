@@ -25,16 +25,14 @@ python examples/<name>/run.py
 
 ```python
 """
-Hello World — Two Jobs and a Dependency.
+Hello World — Explicit Job and Orchestrator definitions.
 
-Two jobs:
-  1. hello_world   — runs immediately, prints a greeting.
-  2. goodbye_world — runs after hello_world is done for the same day.
+This is the explicit approach: Job objects are defined here and wired into
+an Orchestrator.  Use this pattern for complex pipelines with cross-file
+dependencies, dynamic registration, or graph loading.
 
-The Job class creates two jobs, and a dependency between them.
-
-Configuration is loaded from dispatchio.toml in this directory.
-For example, default_cadence is set to DAILY so it doesn't have to be specified in the Job definitions.
+For simple cases, see my_work.py which uses the @job decorator instead —
+no separate jobs.py needed.
 
 Run with:
   python examples/hello_world/run.py
@@ -77,24 +75,36 @@ orchestrator = orchestrator(JOBS, config=CONFIG_FILE)
 
 ```python
 """
-Hello World worker functions.
+Hello World worker functions — with @job decorators.
 
-Pure Python callables — no Dispatchio imports needed.
-Dispatchio handles the job lifecycle (run_key resolution, completion events).
-Entry-point jobs run via `dispatchio run`; script-backed jobs run via `dispatchio run-script`.
+Decorating with @job co-locates the job definition with the function, so you
+don't need a separate jobs.py for simple cases.  Run the whole file with:
 
-Each function receives only what its signature declares. Declare `run_key` to
-receive the run key, `job_name` to receive the job name, both, or neither.
+    dispatchio run-file examples/hello_world/my_work.py
+
+To run for an explicit run key (e.g. today's date or an event identifier):
+
+    dispatchio run-file examples/hello_world/my_work.py --run-key D20260423
+
+If a dependency isn't satisfied yet, the downstream job is held back.
+Override that with --ignore-dependencies.
+
+For complex pipelines (cross-file deps, dynamic registration, graph loading)
+the explicit jobs.py approach is still available — see jobs.py in this directory.
 """
 
 import time
 
+from dispatchio import DAILY, job
 
+
+@job(cadence=DAILY)
 def hello_world(run_key: str) -> None:
     print(f"Hello, World! Running for {run_key}.")
     time.sleep(0.3)
 
 
+@job(cadence=DAILY, depends_on=hello_world)
 def goodbye_world(run_key: str) -> None:
     print(f"Goodbye, World! Wrapping up {run_key}.")
     time.sleep(0.3)
@@ -1457,12 +1467,12 @@ weekly = orchestrator(
 # ---------------------------------------------------------------------------
 
 print(f"\n{'─' * 60}")
-print(f"  Orchestrator: {daily.name}  (reference: {REFERENCE_TIME.date()})")
+print(f"  Orchestrator: {daily.namespace}  (reference: {REFERENCE_TIME.date()})")
 print(f"{'─' * 60}\n")
 run_loop(daily, reference_time=REFERENCE_TIME, tick_interval=0.5)
 
 print(f"\n{'─' * 60}")
-print(f"  Orchestrator: {weekly.name}  (reference: {REFERENCE_TIME.date()})")
+print(f"  Orchestrator: {weekly.namespace}  (reference: {REFERENCE_TIME.date()})")
 print(f"{'─' * 60}\n")
 # run_loop() uses a daily run_key by default; supply the correct weekly stop condition
 # so it exits once both weekly jobs are done.
@@ -1471,7 +1481,7 @@ run_loop(
     weekly,
     reference_time=REFERENCE_TIME,
     tick_interval=0.5,
-    stop_when=lambda store, jobs, _: all(
+    stop_when=lambda store, jobs, _, __: all(
         (rec := store.get_latest_attempt(j.name, weekly_run_key)) and rec.is_finished()
         for j in jobs
     ),
@@ -1487,13 +1497,13 @@ print(f"{'─' * 60}\n")
 
 for orch in [daily, weekly]:
     if orch.tick_log is None:
-        print(f"  {orch.name}: no tick log configured")
+        print(f"  {orch.namespace}: no tick log configured")
         continue
     records = orch.tick_log.list(limit=10)
     submitted_total = sum(
         sum(1 for a in r.actions if a["action"] == "submitted") for r in records
     )
-    print(f"  {orch.name}:")
+    print(f"  {orch.namespace}:")
     print(f"    {len(records)} tick(s) recorded, {submitted_total} total submission(s)")
     for r in records:
         n_submitted = sum(1 for a in r.actions if a["action"] == "submitted")

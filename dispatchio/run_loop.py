@@ -39,7 +39,7 @@ def run_loop(
     *,
     tick_interval: float = 2.0,
     max_ticks: int = 20,
-    stop_when: Callable[[StateStore, list[Job], str], bool] | None = None,
+    stop_when: Callable[[StateStore, list[Job], str, str], bool] | None = None,
     reference_time: datetime | None = None,
 ) -> None:
     """
@@ -54,8 +54,8 @@ def run_loop(
         tick_interval:  Seconds to sleep between ticks. Can be overridden by the
                         DISPATCHIO_TICK_INTERVAL environment variable.
         max_ticks:      Hard upper bound on the number of ticks.
-        stop_when:      Callable(store, jobs, run_key) -> bool. Called after
-                        each tick; the loop exits when it returns True.
+        stop_when:      Callable(store, jobs, run_key, namespace) -> bool. Called
+                        after each tick; the loop exits when it returns True.
                         Defaults to stopping once every job is in a finished
                         state (DONE, ERROR, LOST, or SKIPPED).
         reference_time: Logical "now" used for every tick. Defaults to the
@@ -90,7 +90,9 @@ def run_loop(
                 f"  ({r.detail})" if r.detail else "",
             )
 
-        if stop_when(orchestrator.state, orchestrator.jobs, run_key):
+        if stop_when(
+            orchestrator.state, orchestrator.jobs, run_key, orchestrator.namespace
+        ):
             log.info("Stop condition met. Final state:")
             for j in orchestrator.jobs:
                 rec = orchestrator.state.get_latest_attempt(j.name, run_key)
@@ -105,7 +107,9 @@ def run_loop(
     log.warning("Reached max_ticks=%d without the stop condition being met.", max_ticks)
 
 
-def _all_finished(store: StateStore, jobs: list[Job], run_key: str) -> bool:
+def _all_finished(
+    store: StateStore, jobs: list[Job], run_key: str, namespace: str
+) -> bool:
     """Default stop condition: every job has a finished record for run_key."""
     return all(
         (rec := store.get_latest_attempt(j.name, run_key)) and rec.is_finished()

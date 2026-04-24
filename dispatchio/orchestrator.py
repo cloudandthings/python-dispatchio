@@ -135,11 +135,11 @@ class Orchestrator:
         default_cadence: Cadence | None = None,
         strict_dependencies: bool = True,
         allow_runtime_mutation: bool = False,
-        name: str = "default",
+        namespace: str = "default",
         tick_log: TickLogStore | None = None,
         data_store: DataStore | None = None,
     ) -> None:
-        self.name = name
+        self.namespace = namespace
         self.tick_log = tick_log
         self.jobs = jobs
         self.state = state
@@ -350,7 +350,6 @@ class Orchestrator:
     ) -> list[OrchestratorRunRecord]:
         """List orchestrator runs for this orchestrator."""
         return self.state.list_orchestrator_runs(
-            orchestrator_name=self.name,
             status=status,
             mode=mode,
         )
@@ -358,9 +357,9 @@ class Orchestrator:
     def show_run(self, orchestrator_run_id: UUID) -> OrchestratorRunRecord:
         """Get a single run by ID, scoped to this orchestrator."""
         record = self.state.get_orchestrator_run(orchestrator_run_id)
-        if record is None or record.orchestrator_name != self.name:
+        if record is None or record.namespace != self.namespace:
             raise ValueError(
-                f"Run {orchestrator_run_id} not found for orchestrator {self.name!r}"
+                f"Run {orchestrator_run_id} not found for orchestrator {self.namespace!r}"
             )
         return record
 
@@ -411,11 +410,11 @@ class Orchestrator:
         now = datetime.now(tz=timezone.utc)
 
         for run_key in run_keys:
-            existing = self.state.get_orchestrator_run_by_key(self.name, run_key)
+            existing = self.state.get_orchestrator_run_by_key(run_key)
             if existing is not None:
                 if not force:
                     raise ValueError(
-                        f"Run already exists for ({self.name}, {run_key}). Use force=True to requeue."
+                        f"Run already exists for ({self.namespace}, {run_key}). Use force=True to requeue."
                     )
                 updated = existing.model_copy(
                     update={
@@ -433,7 +432,7 @@ class Orchestrator:
                 continue
 
             record = OrchestratorRunRecord(
-                orchestrator_name=self.name,
+                namespace=self.namespace,
                 run_key=run_key,
                 status=OrchestratorRunStatus.PENDING,
                 mode=mode,
@@ -669,7 +668,6 @@ class Orchestrator:
              (persisted as ACTIVE scheduled run unless dry_run)
         """
         active_runs = self.state.list_orchestrator_runs(
-            orchestrator_name=self.name,
             status=OrchestratorRunStatus.ACTIVE,
         )
         if active_runs:
@@ -680,7 +678,6 @@ class Orchestrator:
             return selected.run_key
 
         pending_runs = self.state.list_orchestrator_runs(
-            orchestrator_name=self.name,
             status=OrchestratorRunStatus.PENDING,
         )
         if pending_runs:
@@ -703,7 +700,7 @@ class Orchestrator:
             reference_time=reference_time,
         )
 
-        existing = self.state.get_orchestrator_run_by_key(self.name, scheduled_run_key)
+        existing = self.state.get_orchestrator_run_by_key(scheduled_run_key)
         if existing is not None:
             if existing.status == OrchestratorRunStatus.PENDING and not dry_run:
                 activated = existing.model_copy(
@@ -718,7 +715,7 @@ class Orchestrator:
         if not dry_run:
             self.state.append_orchestrator_run(
                 OrchestratorRunRecord(
-                    orchestrator_name=self.name,
+                    namespace=self.namespace,
                     run_key=scheduled_run_key,
                     status=OrchestratorRunStatus.ACTIVE,
                     mode=OrchestratorRunMode.SCHEDULED,
@@ -860,6 +857,7 @@ class Orchestrator:
             reason_code=reason_code,
             reason_detail=reason_detail,
             status=DeadLetterStatus.OPEN,
+            namespace=self.namespace,
             correlation_id=event.correlation_id,
             raw_payload=event.model_dump(mode="json"),
         )
@@ -1160,6 +1158,7 @@ class Orchestrator:
         now = reference_time
         correlation_id = uuid4()
         record = AttemptRecord(
+            namespace=self.namespace,
             job_name=job.name,
             run_key=run_key,
             attempt=attempt,

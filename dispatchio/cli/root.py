@@ -20,6 +20,7 @@ from dispatchio.cli.loaders import (
     resolve_tick_log_store,
 )
 from dispatchio.cli.options import (
+    AllNamespacesOption,
     AttemptOption,
     ContextOption,
     EntryPointArgument,
@@ -198,7 +199,7 @@ def run_file(
     """
     from dispatchio.cadence import LiteralCadence
     from dispatchio.config import load_config, orchestrator as build_orchestrator
-    from dispatchio.models import JobDependency, TriggerType
+    from dispatchio.models import JobDependency
 
     spec = importlib.util.spec_from_file_location("_dispatchio_script", script_path)
     if spec is None or spec.loader is None:
@@ -251,10 +252,11 @@ def status(
     job: JobOption = None,
     run_key: RunKeyOption = None,
     filter_status: StatusFilterOption = None,
+    all_namespaces: AllNamespacesOption = False,
 ) -> None:
     """Show the status of job runs."""
     with output.console.status("Loading state..."):
-        store = load_store_from_context(context_name)
+        store = load_store_from_context(context_name, all_namespaces=all_namespaces)
 
     records = store.list_attempts(job_name=job, status=filter_status)
     if run_key:
@@ -319,7 +321,8 @@ def cancel(
         candidates = store.list_attempts(job_name=job, run_key=run_key, attempt=attempt)
         rec = candidates[0] if candidates else None
     else:
-        rec = store.get_latest_attempt(job, run_key)
+        all_recs = store.list_attempts(job_name=job, run_key=run_key)
+        rec = max(all_recs, key=lambda r: r.attempt) if all_recs else None
         if rec is not None and rec.is_finished():
             raise CliUserError(
                 f"{job}[{run_key}] latest attempt {rec.attempt} is already {rec.status.value} (terminal). "
@@ -415,7 +418,7 @@ def run_show(
         ) from exc
     run = orch.show_run(run_uuid)
     output.print_info(f"orchestrator_run_id: {run.orchestrator_run_id}")
-    output.print_info(f"orchestrator_name  : {run.orchestrator_name}")
+    output.print_info(f"namespace          : {run.namespace}")
     output.print_info(f"run_key            : {run.run_key}")
     output.print_info(f"status             : {run.status.value}")
     output.print_info(f"mode               : {run.mode.value}")

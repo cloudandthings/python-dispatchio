@@ -37,7 +37,8 @@ def record_set(
     ):
         raise typer.Exit()
 
-    existing = store.get_latest_attempt(job_name, run_key)
+    all_recs = store.list_attempts(job_name=job_name, run_key=run_key)
+    existing = max(all_recs, key=lambda r: r.attempt) if all_recs else None
     if existing is None:
         record = AttemptRecord(
             job_name=job_name,

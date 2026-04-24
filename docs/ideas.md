@@ -1,6 +1,38 @@
 # Suggested features - developer
 
-job renames
+## Namespace / identity migration tooling
+
+Now that all state records are keyed by `namespace` (derived from orchestrator name),
+renaming an orchestrator or a job orphans existing records — the new name can't see
+prior runs.
+
+Two operations are needed (details TBD, implementation deferred):
+
+**Orchestrator rename** (`namespace` migration)
+
+- An operator renames their orchestrator from `"pipeline-v1"` to `"pipeline-v2"`.
+- All `AttemptRecord`, `DeadLetterRecord`, `Event`, and `OrchestratorRunRecord` rows
+  with `namespace = "pipeline-v1"` must be rewritten to `namespace = "pipeline-v2"`.
+- CLI sketch: `dispatchio migrate rename-namespace OLD NEW`
+- Implementation: targeted `UPDATE ... SET namespace = ? WHERE namespace = ?` across
+  all affected tables. Wrap in a transaction.
+
+**Job rename** (within a namespace)
+
+- An operator renames a job from `"ingest_raw"` to `"ingest"` within the same namespace.
+- `AttemptRecord` rows for the old job name must be rewritten to the new name.
+- The `correlation_id` on each row is globally unique and does not change.
+- Downstream `JobDependency` references to the old name also need updating — those live
+  in code, not state, so this is a two-step: rename in code then migrate state.
+- CLI sketch: `dispatchio migrate rename-job NAMESPACE OLD_JOB_NAME NEW_JOB_NAME`
+- Open question: should historical records keep the old name as an audit alias?
+
+Both operations are effectively idempotent `UPDATE` statements. The hard part is
+making the CLI safe to run against a live database (quiesce in-flight attempts first,
+or add optimistic locking).
+
+---
+
 other renames
 
 dependency state caching

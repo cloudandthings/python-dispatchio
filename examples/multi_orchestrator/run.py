@@ -88,12 +88,12 @@ weekly = orchestrator(
 # ---------------------------------------------------------------------------
 
 print(f"\n{'─' * 60}")
-print(f"  Orchestrator: {daily.name}  (reference: {REFERENCE_TIME.date()})")
+print(f"  Orchestrator: {daily.namespace}  (reference: {REFERENCE_TIME.date()})")
 print(f"{'─' * 60}\n")
 run_loop(daily, reference_time=REFERENCE_TIME, tick_interval=0.5)
 
 print(f"\n{'─' * 60}")
-print(f"  Orchestrator: {weekly.name}  (reference: {REFERENCE_TIME.date()})")
+print(f"  Orchestrator: {weekly.namespace}  (reference: {REFERENCE_TIME.date()})")
 print(f"{'─' * 60}\n")
 # run_loop() uses a daily run_key by default; supply the correct weekly stop condition
 # so it exits once both weekly jobs are done.
@@ -102,7 +102,7 @@ run_loop(
     weekly,
     reference_time=REFERENCE_TIME,
     tick_interval=0.5,
-    stop_when=lambda store, jobs, _: all(
+    stop_when=lambda store, jobs, _, __: all(
         (rec := store.get_latest_attempt(j.name, weekly_run_key)) and rec.is_finished()
         for j in jobs
     ),
@@ -118,13 +118,13 @@ print(f"{'─' * 60}\n")
 
 for orch in [daily, weekly]:
     if orch.tick_log is None:
-        print(f"  {orch.name}: no tick log configured")
+        print(f"  {orch.namespace}: no tick log configured")
         continue
     records = orch.tick_log.list(limit=10)
     submitted_total = sum(
         sum(1 for a in r.actions if a["action"] == "submitted") for r in records
     )
-    print(f"  {orch.name}:")
+    print(f"  {orch.namespace}:")
     print(f"    {len(records)} tick(s) recorded, {submitted_total} total submission(s)")
     for r in records:
         n_submitted = sum(1 for a in r.actions if a["action"] == "submitted")

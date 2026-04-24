@@ -34,7 +34,9 @@ def load_orchestrator(path: str) -> Orchestrator:
     return obj
 
 
-def load_store_from_context(context_name: str | None) -> SQLAlchemyStateStore:
+def load_store_from_context(
+    context_name: str | None, *, all_namespaces: bool = False
+) -> SQLAlchemyStateStore:
     from dispatchio.config.loader import _build_state, load_config
     from dispatchio.contexts import ContextStore
 
@@ -42,7 +44,8 @@ def load_store_from_context(context_name: str | None) -> SQLAlchemyStateStore:
     if entry is not None:
         try:
             settings = load_config(entry.config_path)
-            return _build_state(settings.state)  # type: ignore[return-value]
+            namespace = None if all_namespaces else getattr(settings, "namespace", "default")
+            return _build_state(settings.state, namespace=namespace)  # type: ignore[return-value]
         except Exception as exc:
             raise CliUserError(
                 f"Failed loading state for context {entry.name!r}: {exc}"
@@ -51,7 +54,8 @@ def load_store_from_context(context_name: str | None) -> SQLAlchemyStateStore:
     try:
         settings = load_config()
         if settings is not None:
-            return _build_state(settings.state)  # type: ignore[return-value]
+            namespace = None if all_namespaces else getattr(settings, "namespace", "default")
+            return _build_state(settings.state, namespace=namespace)  # type: ignore[return-value]
     except Exception as exc:
         raise CliUserError(f"Failed loading default Dispatchio config: {exc}") from exc
 

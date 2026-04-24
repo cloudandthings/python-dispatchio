@@ -194,8 +194,8 @@ def orchestrator_from_graph(
     external_dependencies, strict_dependencies is set to False automatically
     (unless the caller explicitly passes it).
 
-    The orchestrator is named from spec.orchestrator_name, overriding any
-    name set in the config file.
+    The orchestrator is named from spec.name, overriding any name set in
+    the config file.
 
     Args:
         spec:   A loaded GraphSpec (from load_graph or model_validate).
@@ -211,9 +211,9 @@ def orchestrator_from_graph(
     if spec.external_dependencies and "strict_dependencies" not in orchestrator_kwargs:
         orchestrator_kwargs["strict_dependencies"] = False
 
-    # Pass name via kwargs; orchestrator pops it before building
+    # Pass namespace via kwargs; orchestrator pops it before building
     # the Orchestrator so there is no duplicate-keyword conflict.
-    orchestrator_kwargs["name"] = spec.orchestrator_name
+    orchestrator_kwargs["namespace"] = spec.name
 
     return orchestrator(
         jobs=spec.jobs,

@@ -6,8 +6,6 @@ from datetime import datetime, timezone
 import importlib
 from unittest.mock import patch
 from uuid import uuid4
-
-import pytest
 from typer.testing import CliRunner
 
 from dispatchio.cli import output
@@ -29,11 +27,6 @@ from dispatchio.state.sqlalchemy_ import SQLAlchemyStateStore
 runner = CliRunner()
 
 
-@pytest.fixture()
-def store() -> SQLAlchemyStateStore:
-    return SQLAlchemyStateStore("sqlite:///:memory:")
-
-
 def _invoke_record_set(
     store: SQLAlchemyStateStore,
     job_name: str,
@@ -49,21 +42,21 @@ def _invoke_record_set(
 
 
 class TestRecordSet:
-    def test_creates_new_record_when_none_exists(self, store: SQLAlchemyStateStore):
+    def test_creates_new_record_when_none_exists(
+        self, state_store: SQLAlchemyStateStore
+    ):
         """record set must not crash when no prior record exists (bug: missing required fields)."""
-        result = _invoke_record_set(store, "my_job", "20250115", "done")
+        result = _invoke_record_set(state_store, "my_job", "20250115", "done")
 
         assert result.exit_code == 0, result.output
-        record = store.get_latest_attempt("my_job", "20250115")
+        record = state_store.get_latest_attempt("my_job", "20250115")
         assert record is not None
         assert record.status == Status.DONE
         assert record.attempt == 0
         assert record.correlation_id is not None
 
-    def test_updates_existing_record(self, store: SQLAlchemyStateStore):
+    def test_updates_existing_record(self, state_store: SQLAlchemyStateStore):
         """record set updates status when a record already exists."""
-        from uuid import uuid4
-        from dispatchio.models import AttemptRecord
 
         existing = AttemptRecord(
             job_name="my_job",
@@ -72,22 +65,22 @@ class TestRecordSet:
             correlation_id=uuid4(),
             status=Status.RUNNING,
         )
-        store.append_attempt(existing)
+        state_store.append_attempt(existing)
 
-        result = _invoke_record_set(store, "my_job", "20250115", "done")
+        result = _invoke_record_set(state_store, "my_job", "20250115", "done")
 
         assert result.exit_code == 0, result.output
-        record = store.get_latest_attempt("my_job", "20250115")
+        record = state_store.get_latest_attempt("my_job", "20250115")
         assert record is not None
         assert record.status == Status.DONE
 
-    def test_sets_reason_on_new_record(self, store: SQLAlchemyStateStore):
+    def test_sets_reason_on_new_record(self, state_store: SQLAlchemyStateStore):
         result = _invoke_record_set(
-            store, "my_job", "20250115", "error", reason="disk full"
+            state_store, "my_job", "20250115", "error", reason="disk full"
         )
 
         assert result.exit_code == 0, result.output
-        record = store.get_latest_attempt("my_job", "20250115")
+        record = state_store.get_latest_attempt("my_job", "20250115")
         assert record is not None
         assert record.status == Status.ERROR
         assert record.reason == "disk full"
@@ -171,8 +164,10 @@ def test_tick_requires_orchestrator(rich_error_output) -> None:
     assert "Specify an orchestrator" in rich_error_output.export_text()
 
 
-def test_status_shows_empty_message(store: SQLAlchemyStateStore, rich_output) -> None:
-    with patch("dispatchio.cli.root.load_store_from_context", return_value=store):
+def test_status_shows_empty_message(
+    state_store: SQLAlchemyStateStore, rich_output
+) -> None:
+    with patch("dispatchio.cli.root.load_store_from_context", return_value=state_store):
         result = runner.invoke(app, ["status"])
 
     assert result.exit_code == 0, result.output
@@ -341,7 +336,7 @@ def test_tick_dry_run_renders_would_defer(rich_output) -> None:
 
 
 def test_status_renders_rich_table(
-    store: SQLAlchemyStateStore,
+    state_store: SQLAlchemyStateStore,
     rich_output,
 ) -> None:
     record = AttemptRecord(
@@ -351,9 +346,9 @@ def test_status_renders_rich_table(
         correlation_id=uuid4(),
         status=Status.DONE,
     )
-    store.append_attempt(record)
+    state_store.append_attempt(record)
 
-    with patch("dispatchio.cli.root.load_store_from_context", return_value=store):
+    with patch("dispatchio.cli.root.load_store_from_context", return_value=state_store):
         result = runner.invoke(app, ["status"])
 
     assert result.exit_code == 0, result.output
@@ -364,7 +359,7 @@ def test_status_renders_rich_table(
 
 
 def test_retry_list_attempts_renders_rich_table(
-    store: SQLAlchemyStateStore,
+    state_store: SQLAlchemyStateStore,
     rich_output,
 ) -> None:
     record = AttemptRecord(
@@ -374,9 +369,11 @@ def test_retry_list_attempts_renders_rich_table(
         correlation_id=uuid4(),
         status=Status.ERROR,
     )
-    store.append_attempt(record)
+    state_store.append_attempt(record)
 
-    with patch("dispatchio.cli.retry.load_store_from_context", return_value=store):
+    with patch(
+        "dispatchio.cli.retry.load_store_from_context", return_value=state_store
+    ):
         result = runner.invoke(app, ["retry", "list", "--filter", "attempts"])
 
     assert result.exit_code == 0, result.output
@@ -386,7 +383,7 @@ def test_retry_list_attempts_renders_rich_table(
 
 
 def test_retry_list_requests_renders_rich_table(
-    store: SQLAlchemyStateStore,
+    state_store: SQLAlchemyStateStore,
     rich_output,
 ) -> None:
     request = RetryRequest(
@@ -395,9 +392,9 @@ def test_retry_list_requests_renders_rich_table(
         run_key="20250115",
         selected_jobs=["job_a", "job_b"],
     )
-    store.append_retry_request(request)
+    state_store.append_retry_request(request)
 
-    with patch("dispatchio.cli.retry.load_store_from_context", return_value=store):
+    with patch("dispatchio.cli.retry.load_store_from_context", return_value=state_store):
         result = runner.invoke(app, ["retry", "list", "--filter", "requests"])
 
     assert result.exit_code == 0, result.output
@@ -488,8 +485,8 @@ def test_graph_validate_reports_validation_failure(tmp_path, rich_error_output) 
     assert "graph validation failed" in error_text
 
 
-def test_record_set_prompts_without_yes(store: SQLAlchemyStateStore) -> None:
-    with patch("dispatchio.cli.record.load_store_from_context", return_value=store):
+def test_record_set_prompts_without_yes(state_store: SQLAlchemyStateStore) -> None:
+    with patch("dispatchio.cli.record.load_store_from_context", return_value=state_store):
         with patch(
             "dispatchio.cli.record.output.confirm", return_value=True
         ) as confirm_mock:
@@ -499,8 +496,8 @@ def test_record_set_prompts_without_yes(store: SQLAlchemyStateStore) -> None:
     confirm_mock.assert_called_once()
 
 
-def test_record_set_yes_skips_prompt(store: SQLAlchemyStateStore) -> None:
-    with patch("dispatchio.cli.record.load_store_from_context", return_value=store):
+def test_record_set_yes_skips_prompt(state_store: SQLAlchemyStateStore) -> None:
+    with patch("dispatchio.cli.record.load_store_from_context", return_value=state_store):
         with patch("dispatchio.cli.record.output.confirm") as confirm_mock:
             result = runner.invoke(
                 app, ["record", "set", "job_a", "20250115", "done", "--yes"]
@@ -510,7 +507,7 @@ def test_record_set_yes_skips_prompt(store: SQLAlchemyStateStore) -> None:
     confirm_mock.assert_not_called()
 
 
-def test_cancel_prompts_without_yes(store: SQLAlchemyStateStore) -> None:
+def test_cancel_prompts_without_yes(state_store: SQLAlchemyStateStore) -> None:
     record = AttemptRecord(
         job_name="job_a",
         run_key="20250115",
@@ -518,9 +515,9 @@ def test_cancel_prompts_without_yes(store: SQLAlchemyStateStore) -> None:
         correlation_id=uuid4(),
         status=Status.RUNNING,
     )
-    store.append_attempt(record)
+    state_store.append_attempt(record)
 
-    with patch("dispatchio.cli.root.load_store_from_context", return_value=store):
+    with patch("dispatchio.cli.root.load_store_from_context", return_value=state_store):
         with patch(
             "dispatchio.cli.root.output.confirm", return_value=True
         ) as confirm_mock:
@@ -532,7 +529,7 @@ def test_cancel_prompts_without_yes(store: SQLAlchemyStateStore) -> None:
     confirm_mock.assert_called_once()
 
 
-def test_cancel_yes_skips_prompt(store: SQLAlchemyStateStore) -> None:
+def test_cancel_yes_skips_prompt(state_store: SQLAlchemyStateStore) -> None:
     record = AttemptRecord(
         job_name="job_a",
         run_key="20250115",
@@ -540,9 +537,9 @@ def test_cancel_yes_skips_prompt(store: SQLAlchemyStateStore) -> None:
         correlation_id=uuid4(),
         status=Status.RUNNING,
     )
-    store.append_attempt(record)
+    state_store.append_attempt(record)
 
-    with patch("dispatchio.cli.root.load_store_from_context", return_value=store):
+    with patch("dispatchio.cli.root.load_store_from_context", return_value=state_store):
         with patch("dispatchio.cli.root.output.confirm") as confirm_mock:
             result = runner.invoke(
                 app,
@@ -551,3 +548,134 @@ def test_cancel_yes_skips_prompt(store: SQLAlchemyStateStore) -> None:
 
     assert result.exit_code == 0, result.output
     confirm_mock.assert_not_called()
+
+
+class TestAllNamespacesFlag:
+    """--all-namespaces passes namespace=None so all records are visible."""
+
+    def _make_stores(self):
+        """Return two scoped stores and one unscoped store backed by the same SQLite DB."""
+        ns_a = SQLAlchemyStateStore(
+            connection_string="sqlite:///:memory:", namespace="ns_a"
+        )
+        # Share the underlying engine so all stores hit the same in-memory DB.
+        def _clone(namespace):
+            s = SQLAlchemyStateStore.__new__(SQLAlchemyStateStore)
+            s._engine = ns_a._engine
+            s._Session = ns_a._Session
+            s._lock = ns_a._lock
+            s._namespace = namespace
+            return s
+
+        return ns_a, _clone("ns_b"), _clone(None)
+
+    def test_status_all_namespaces_shows_namespace_column(self, rich_output) -> None:
+        ns_a, ns_b, unscoped = self._make_stores()
+
+        ns_a.append_attempt(
+            AttemptRecord(
+                job_name="job_a", run_key="20250115", attempt=0,
+                correlation_id=uuid4(), status=Status.DONE,
+            )
+        )
+        ns_b.append_attempt(
+            AttemptRecord(
+                job_name="job_b", run_key="20250115", attempt=0,
+                correlation_id=uuid4(), status=Status.ERROR,
+            )
+        )
+
+        with patch("dispatchio.cli.root.load_store_from_context", return_value=unscoped):
+            result = runner.invoke(app, ["status", "--all-namespaces"])
+
+        assert result.exit_code == 0, result.output
+        out = rich_output.export_text()
+        assert "NAMESPACE" in out
+        assert "ns_a" in out
+        assert "ns_b" in out
+        assert "job_a" in out
+        assert "job_b" in out
+
+    def test_status_single_namespace_omits_namespace_column(
+        self, state_store: SQLAlchemyStateStore, rich_output
+    ) -> None:
+        state_store.append_attempt(
+            AttemptRecord(
+                job_name="job_a", run_key="20250115", attempt=0,
+                correlation_id=uuid4(), status=Status.DONE,
+            )
+        )
+
+        with patch("dispatchio.cli.root.load_store_from_context", return_value=state_store):
+            result = runner.invoke(app, ["status"])
+
+        assert result.exit_code == 0, result.output
+        assert "NAMESPACE" not in rich_output.export_text()
+
+    def test_retry_list_all_namespaces_shows_records_from_all(self, rich_output) -> None:
+        ns_a, ns_b, unscoped = self._make_stores()
+
+        ns_a.append_attempt(
+            AttemptRecord(
+                job_name="job_a", run_key="20250115", attempt=0,
+                correlation_id=uuid4(), status=Status.ERROR,
+            )
+        )
+        ns_b.append_attempt(
+            AttemptRecord(
+                job_name="job_b", run_key="20250115", attempt=0,
+                correlation_id=uuid4(), status=Status.ERROR,
+            )
+        )
+
+        with patch(
+            "dispatchio.cli.retry.load_store_from_context", return_value=unscoped
+        ):
+            result = runner.invoke(app, ["retry", "list", "--all-namespaces"])
+
+        assert result.exit_code == 0, result.output
+        out = rich_output.export_text()
+        assert "job_a" in out
+        assert "job_b" in out
+
+    def test_load_store_from_context_passes_namespace_none_when_all_namespaces(
+        self,
+    ) -> None:
+        from dispatchio.cli.loaders import load_store_from_context
+
+        fake_settings = type(
+            "FakeSettings",
+            (),
+            {
+                "state": type("S", (), {"backend": "sqlalchemy", "connection_string": "sqlite:///:memory:", "db_echo": False, "db_pool_size": 5})(),
+                "namespace": "prod",
+            },
+        )()
+
+        with patch("dispatchio.config.loader.load_config", return_value=fake_settings):
+            with patch("dispatchio.contexts.ContextStore") as MockCS:
+                MockCS.return_value.resolve.return_value = None
+                store = load_store_from_context(None, all_namespaces=True)
+
+        assert store.namespace is None
+
+    def test_load_store_from_context_passes_settings_namespace_by_default(
+        self,
+    ) -> None:
+        from dispatchio.cli.loaders import load_store_from_context
+
+        fake_settings = type(
+            "FakeSettings",
+            (),
+            {
+                "state": type("S", (), {"backend": "sqlalchemy", "connection_string": "sqlite:///:memory:", "db_echo": False, "db_pool_size": 5})(),
+                "namespace": "prod",
+            },
+        )()
+
+        with patch("dispatchio.config.loader.load_config", return_value=fake_settings):
+            with patch("dispatchio.contexts.ContextStore") as MockCS:
+                MockCS.return_value.resolve.return_value = None
+                store = load_store_from_context(None)
+
+        assert store.namespace == "prod"

@@ -26,7 +26,7 @@ from dispatchio.orchestrator import Orchestrator
 def _raw(**overrides) -> dict:
     base: dict = {
         "graph_version": "1",
-        "orchestrator_name": "test-pipeline",
+        "name": "test-pipeline",
         "generated_at": "2026-04-19T10:00:00Z",
         "jobs": [
             {
@@ -64,7 +64,7 @@ def _dep(job_name: str) -> dict:
 class TestLoadGraph:
     def test_valid_minimal_graph(self, tmp_path):
         spec = load_graph(_graph_file(tmp_path, _raw()))
-        assert spec.orchestrator_name == "test-pipeline"
+        assert spec.name == "test-pipeline"
         assert spec.graph_version == "1"
         assert len(spec.jobs) == 1
         assert spec.jobs[0].name == "ingest"
@@ -93,7 +93,7 @@ class TestLoadGraph:
 
     def test_missing_required_field_raises(self, tmp_path):
         data = _raw()
-        del data["orchestrator_name"]
+        del data["name"]
         with pytest.raises(GraphValidationError):
             load_graph(_graph_file(tmp_path, data))
 
@@ -125,7 +125,7 @@ class TestLoadGraph:
     def test_all_errors_reported_at_once(self, tmp_path):
         # Two bad fields — both should appear in the error, not just the first
         data = _raw()
-        del data["orchestrator_name"]
+        del data["name"]
         del data["jobs"]
         with pytest.raises(GraphValidationError) as exc_info:
             load_graph(_graph_file(tmp_path, data))
@@ -201,7 +201,7 @@ class TestValidateGraph:
     def test_circular_dependency_two_nodes(self):
         data = {
             "graph_version": "1",
-            "orchestrator_name": "test",
+            "name": "test",
             "generated_at": "2026-04-19T10:00:00Z",
             "jobs": [
                 {
@@ -224,7 +224,7 @@ class TestValidateGraph:
     def test_circular_dependency_three_node_chain(self):
         data = {
             "graph_version": "1",
-            "orchestrator_name": "test",
+            "name": "test",
             "generated_at": "2026-04-19T10:00:00Z",
             "jobs": [
                 {
@@ -253,7 +253,7 @@ class TestValidateGraph:
     def test_linear_chain_passes(self):
         data = {
             "graph_version": "1",
-            "orchestrator_name": "test",
+            "name": "test",
             "generated_at": "2026-04-19T10:00:00Z",
             "jobs": [
                 {"name": "A", "executor": {"type": "subprocess", "command": ["echo"]}},
@@ -275,7 +275,7 @@ class TestValidateGraph:
     def test_multiple_errors_collected_before_raise(self):
         data = {
             "graph_version": "1",
-            "orchestrator_name": "test",
+            "name": "test",
             "generated_at": "2026-04-19T10:00:00Z",
             "jobs": [
                 {
@@ -319,7 +319,7 @@ class TestDumpSchema:
         schema = dump_schema()
         # Top-level required fields should appear somewhere in the schema
         schema_str = json.dumps(schema)
-        for field in ("graph_version", "orchestrator_name", "generated_at", "jobs"):
+        for field in ("graph_version", "name", "generated_at", "jobs"):
             assert field in schema_str
 
 
@@ -335,9 +335,9 @@ class TestOrchestratorFromGraph:
         assert isinstance(orch, Orchestrator)
 
     def test_orchestrator_name_from_spec(self):
-        spec = GraphSpec.model_validate(_raw(orchestrator_name="my-etl"))
+        spec = GraphSpec.model_validate(_raw(name="my-etl"))
         orch = orchestrator_from_graph(spec)
-        assert orch.name == "my-etl"
+        assert orch.namespace == "my-etl"
 
     def test_strict_false_when_external_deps_declared(self):
         data = _raw()

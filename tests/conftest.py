@@ -22,8 +22,10 @@ def ref_time():
 
 
 @pytest.fixture
-def mem_store():
-    return SQLAlchemyStateStore("sqlite:///:memory:")
+def state_store():
+    return SQLAlchemyStateStore(
+        connection_string="sqlite:///:memory:", namespace="test"
+    )
 
 
 @pytest.fixture

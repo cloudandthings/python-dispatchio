@@ -77,7 +77,7 @@ def print_retry_plan(
 def print_graph_summary(
     path: str,
     *,
-    orchestrator_name: str,
+    namespace: str,
     graph_version: str,
     job_count: int,
     external_dependency_count: int,
@@ -85,7 +85,7 @@ def print_graph_summary(
     producer_version: str | None,
 ) -> None:
     print_success(f"Graph {path} is valid.")
-    print_info(f"  orchestrator : {orchestrator_name}")
+    print_info(f"  namespace    : {namespace}")
     print_info(f"  graph_version: {graph_version}")
     print_info(f"  jobs         : {job_count}")
     if external_dependency_count:
@@ -96,6 +96,12 @@ def print_graph_summary(
 
 def print_records(records: list[AttemptRecord]) -> None:
     table = Table(show_header=True, header_style="bold")
+
+    namespaces = {r.namespace for r in records if r.namespace is not None}
+    show_namespace = len(namespaces) > 1
+
+    if show_namespace:
+        table.add_column("NAMESPACE")
     table.add_column("JOB")
     table.add_column("RUN_KEY")
     table.add_column("STATUS")
@@ -106,13 +112,17 @@ def print_records(records: list[AttemptRecord]) -> None:
         status_value = record.status.value
         status_colour = _STATUS_COLOURS.get(status_value, "white")
         completed = record.completed_at.isoformat() if record.completed_at else "-"
-        table.add_row(
+        row: list[str] = []
+        if show_namespace:
+            row.append(record.namespace or "-")
+        row.extend([
             record.job_name,
             record.run_key,
             f"[{status_colour}]{status_value}[/{status_colour}]",
             str(record.attempt),
             completed,
-        )
+        ])
+        table.add_row(*row)
 
     console.print(table)
 
