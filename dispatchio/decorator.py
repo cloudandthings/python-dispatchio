@@ -24,7 +24,8 @@ from __future__ import annotations
 
 import functools
 import inspect
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 from dispatchio.cadence import Cadence
 from dispatchio.models import Job, PythonJob

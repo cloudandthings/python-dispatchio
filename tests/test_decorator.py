@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import pytest
 from typer.testing import CliRunner
 
 from dispatchio import DAILY, MONTHLY
@@ -189,10 +188,13 @@ class TestRunFileCLIErrors:
         assert result.exit_code != 0
 
     def test_no_decorated_functions(self, tmp_path: Path):
-        script = _write_script(tmp_path, """\
+        script = _write_script(
+            tmp_path,
+            """\
             def plain_fn(run_key: str) -> None:
                 pass
-        """)
+        """,
+        )
         result = runner.invoke(app, ["run-file", str(script)])
         assert result.exit_code != 0
         assert "@job" in result.output or "No @job" in result.output
@@ -200,13 +202,16 @@ class TestRunFileCLIErrors:
 
 class TestRunFileCLIDiscovery:
     def test_discovers_decorated_jobs(self, tmp_path: Path):
-        script = _write_script(tmp_path, """\
+        script = _write_script(
+            tmp_path,
+            """\
             from dispatchio import job, DAILY
 
             @job(cadence=DAILY)
             def hello_world(run_key: str) -> None:
                 pass
-        """)
+        """,
+        )
 
         fake_orch = _make_fake_orchestrator()
         with (
@@ -223,7 +228,9 @@ class TestRunFileCLIDiscovery:
         assert jobs_passed[0].name == "hello_world"
 
     def test_discovers_multiple_jobs_in_declaration_order(self, tmp_path: Path):
-        script = _write_script(tmp_path, """\
+        script = _write_script(
+            tmp_path,
+            """\
             from dispatchio import job, DAILY
 
             @job(cadence=DAILY)
@@ -233,12 +240,15 @@ class TestRunFileCLIDiscovery:
             @job(cadence=DAILY, depends_on=first)
             def second(run_key: str) -> None:
                 pass
-        """)
+        """,
+        )
 
         fake_orch = _make_fake_orchestrator()
         with (
             patch("dispatchio.config.load_config", return_value=MagicMock()),
-            patch("dispatchio.config.orchestrator", return_value=fake_orch) as mock_build,
+            patch(
+                "dispatchio.config.orchestrator", return_value=fake_orch
+            ) as mock_build,
         ):
             result = runner.invoke(app, ["run-file", str(script)])
 
@@ -249,18 +259,23 @@ class TestRunFileCLIDiscovery:
 
 class TestRunFileRunKey:
     def test_run_key_overrides_cadence_to_literal(self, tmp_path: Path):
-        script = _write_script(tmp_path, """\
+        script = _write_script(
+            tmp_path,
+            """\
             from dispatchio import job, DAILY
 
             @job(cadence=DAILY)
             def my_job(run_key: str) -> None:
                 pass
-        """)
+        """,
+        )
 
         fake_orch = _make_fake_orchestrator()
         with (
             patch("dispatchio.config.load_config", return_value=MagicMock()),
-            patch("dispatchio.config.orchestrator", return_value=fake_orch) as mock_build,
+            patch(
+                "dispatchio.config.orchestrator", return_value=fake_orch
+            ) as mock_build,
         ):
             result = runner.invoke(
                 app, ["run-file", str(script), "--run-key", "D20250115"]
@@ -272,7 +287,9 @@ class TestRunFileRunKey:
         assert jobs_passed[0].cadence.value == "D20250115"
 
     def test_run_key_overrides_dependency_cadences(self, tmp_path: Path):
-        script = _write_script(tmp_path, """\
+        script = _write_script(
+            tmp_path,
+            """\
             from dispatchio import job, DAILY
 
             @job(cadence=DAILY)
@@ -282,12 +299,15 @@ class TestRunFileRunKey:
             @job(cadence=DAILY, depends_on=upstream)
             def downstream(run_key: str) -> None:
                 pass
-        """)
+        """,
+        )
 
         fake_orch = _make_fake_orchestrator()
         with (
             patch("dispatchio.config.load_config", return_value=MagicMock()),
-            patch("dispatchio.config.orchestrator", return_value=fake_orch) as mock_build,
+            patch(
+                "dispatchio.config.orchestrator", return_value=fake_orch
+            ) as mock_build,
         ):
             result = runner.invoke(
                 app, ["run-file", str(script), "--run-key", "my-event-123"]
@@ -303,7 +323,9 @@ class TestRunFileRunKey:
 
 class TestRunFileIgnoreDependencies:
     def test_strips_all_deps(self, tmp_path: Path):
-        script = _write_script(tmp_path, """\
+        script = _write_script(
+            tmp_path,
+            """\
             from dispatchio import job, DAILY
 
             @job(cadence=DAILY)
@@ -313,12 +335,15 @@ class TestRunFileIgnoreDependencies:
             @job(cadence=DAILY, depends_on=upstream)
             def downstream(run_key: str) -> None:
                 pass
-        """)
+        """,
+        )
 
         fake_orch = _make_fake_orchestrator()
         with (
             patch("dispatchio.config.load_config", return_value=MagicMock()),
-            patch("dispatchio.config.orchestrator", return_value=fake_orch) as mock_build,
+            patch(
+                "dispatchio.config.orchestrator", return_value=fake_orch
+            ) as mock_build,
         ):
             result = runner.invoke(
                 app, ["run-file", str(script), "--ignore-dependencies"]
@@ -329,7 +354,9 @@ class TestRunFileIgnoreDependencies:
             assert j.depends_on == []
 
     def test_run_key_and_ignore_dependencies_combined(self, tmp_path: Path):
-        script = _write_script(tmp_path, """\
+        script = _write_script(
+            tmp_path,
+            """\
             from dispatchio import job, DAILY
 
             @job(cadence=DAILY)
@@ -339,12 +366,15 @@ class TestRunFileIgnoreDependencies:
             @job(cadence=DAILY, depends_on=upstream)
             def downstream(run_key: str) -> None:
                 pass
-        """)
+        """,
+        )
 
         fake_orch = _make_fake_orchestrator()
         with (
             patch("dispatchio.config.load_config", return_value=MagicMock()),
-            patch("dispatchio.config.orchestrator", return_value=fake_orch) as mock_build,
+            patch(
+                "dispatchio.config.orchestrator", return_value=fake_orch
+            ) as mock_build,
         ):
             result = runner.invoke(
                 app,

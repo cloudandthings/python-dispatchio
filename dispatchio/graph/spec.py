@@ -63,7 +63,7 @@ class GraphSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     graph_version: Literal["1"]
-    orchestrator_name: str
+    name: str
     generated_at: datetime
     producer: ProducerInfo | None = None
     jobs: list[Job]

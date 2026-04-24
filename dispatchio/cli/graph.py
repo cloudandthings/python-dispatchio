@@ -33,7 +33,7 @@ def graph_validate(path: GraphPathArgument) -> None:
 
     output.print_graph_summary(
         str(path),
-        orchestrator_name=spec.orchestrator_name,
+        namespace=spec.name,
         graph_version=str(spec.graph_version),
         job_count=len(spec.jobs),
         external_dependency_count=len(spec.external_dependencies or []),

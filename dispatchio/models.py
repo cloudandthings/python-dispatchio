@@ -131,6 +131,7 @@ class AttemptRecord(BaseModel):
     Operator context fields track manual operations (retry, cancel).
     """
 
+    namespace: str = "default"  # orchestrator name; partitions records across pipelines
     job_name: str
     run_key: str  # e.g. "20250115", "202501", "2025011502"
     attempt: int  # 0-indexed; incremented for each retry/re-execution
@@ -175,6 +176,7 @@ class DeadLetterRecord(BaseModel):
     reason_code: DeadLetterReasonCode
     reason_detail: str | None = None
     status: DeadLetterStatus = DeadLetterStatus.OPEN
+    namespace: str = "default"  # orchestrator namespace that produced this dead letter
     # Event identity fields (attempted correlation)
     job_name: str | None = None
     run_key: str | None = None
@@ -634,7 +636,7 @@ class OrchestratorRunRecord(BaseModel):
     """
 
     orchestrator_run_id: UUID = Field(default_factory=uuid4)
-    orchestrator_name: str  # e.g. "myjobs:orchestrator"
+    namespace: str  # orchestrator name; partitions runs across pipelines
     run_key: str  # identity of this orchestrator run, e.g. "20250115" or "event:12345"
     status: OrchestratorRunStatus
     mode: OrchestratorRunMode

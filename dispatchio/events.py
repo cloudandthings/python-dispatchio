@@ -38,5 +38,7 @@ def emit_event(
     from dispatchio.config.settings import DispatchioSettings
 
     settings = DispatchioSettings()
-    state = _build_state(settings.state)
+    state = _build_state(
+        settings.state, namespace=getattr(settings, "namespace", "default")
+    )
     state.set_event(Event(name=name, run_key=run_key, status=status))

@@ -195,10 +195,10 @@ class TestOrchestratorCadenceDefaults:
 class TestOrchestratorRunSelection:
     def test_promotes_pending_run_and_uses_its_run_key(self):
         j = _job("simple")
-        orch, store, _ = _make_orch([j], name="test_orchestrator")
+        orch, store, _ = _make_orch([j])
 
         run = OrchestratorRunRecord(
-            orchestrator_name="test_orchestrator",
+            namespace="default",
             run_key="20250114",
             status=OrchestratorRunStatus.PENDING,
             mode=OrchestratorRunMode.BACKFILL,
@@ -219,10 +219,10 @@ class TestOrchestratorRunSelection:
 
     def test_dry_run_does_not_promote_pending_run(self):
         j = _job("simple")
-        orch, store, _ = _make_orch([j], name="test_orchestrator")
+        orch, store, _ = _make_orch([j])
 
         run = OrchestratorRunRecord(
-            orchestrator_name="test_orchestrator",
+            namespace="default",
             run_key="20250114",
             status=OrchestratorRunStatus.PENDING,
             mode=OrchestratorRunMode.BACKFILL,
@@ -244,7 +244,7 @@ class TestOrchestratorRunSelection:
 
 class TestOrchestratorRunApi:
     def test_plan_backfill_daily_inclusive(self):
-        orch, _, _ = _make_orch([_job("simple")], name="test_orchestrator")
+        orch, _, _ = _make_orch([_job("simple")])
 
         keys = orch.plan_backfill(
             datetime(2025, 1, 1, tzinfo=timezone.utc),
@@ -254,7 +254,7 @@ class TestOrchestratorRunApi:
         assert keys == ["20250101", "20250102", "20250103"]
 
     def test_enqueue_backfill_creates_pending_runs(self):
-        orch, store, _ = _make_orch([_job("simple")], name="test_orchestrator")
+        orch, store, _ = _make_orch([_job("simple")])
 
         runs = orch.enqueue_backfill(
             start=datetime(2025, 1, 1, tzinfo=timezone.utc),
@@ -264,13 +264,13 @@ class TestOrchestratorRunApi:
         )
 
         assert len(runs) == 2
-        listed = store.list_orchestrator_runs(orchestrator_name="test_orchestrator")
+        listed = store.list_orchestrator_runs()
         assert len(listed) == 2
         assert all(r.status == OrchestratorRunStatus.PENDING for r in listed)
         assert all(r.mode == OrchestratorRunMode.BACKFILL for r in listed)
 
     def test_enqueue_replay_and_resume_cancel(self):
-        orch, _, _ = _make_orch([_job("simple")], name="test_orchestrator")
+        orch, _, _ = _make_orch([_job("simple")])
 
         runs = orch.enqueue_replay(
             run_keys=["event:1", "event:2"],

@@ -133,3 +133,13 @@ GraphPathArgument = Annotated[
         callback=_validate_existing_path, help="Path to graph artifact file."
     ),
 ]
+
+AllNamespacesOption = Annotated[
+    bool,
+    typer.Option(
+        "--all-namespaces",
+        "-A",
+        help="Show records from all namespaces instead of the context's configured namespace.",
+        show_default=False,
+    ),
+]

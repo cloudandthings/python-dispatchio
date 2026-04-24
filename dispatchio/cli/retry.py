@@ -10,6 +10,7 @@ from dispatchio.cli.errors import handle_cli_errors
 from dispatchio.cli.errors import CliUserError
 from dispatchio.cli.loaders import load_orchestrator, load_store_from_context
 from dispatchio.cli.options import (
+    AllNamespacesOption,
     AttemptOption,
     ContextOption,
     JobOption,
@@ -122,9 +123,10 @@ def retry_list(
         ),
     ] = RetryListView.ATTEMPTS,
     limit: LimitOption = 50,
+    all_namespaces: AllNamespacesOption = False,
 ) -> None:
     """List attempt history or manual retry requests."""
-    store = load_store_from_context(context_name)
+    store = load_store_from_context(context_name, all_namespaces=all_namespaces)
 
     if view == RetryListView.REQUESTS:
         requests = store.list_retry_requests(run_key=run_key)

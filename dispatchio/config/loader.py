@@ -276,13 +276,13 @@ def orchestrator(
 
     _configure_logging(settings.log_level)
 
-    # Allow callers (e.g. orchestrator_from_graph) to override the name from
-    # settings by passing name= in orchestrator_kwargs.
-    effective_name = orchestrator_kwargs.pop(
-        "name", getattr(settings, "name", "default")
+    # Allow callers (e.g. orchestrator_from_graph) to override the namespace from
+    # settings by passing namespace= in orchestrator_kwargs.
+    namespace = orchestrator_kwargs.pop(
+        "namespace", getattr(settings, "namespace", "default")
     )
 
-    data_store = _build_data_store(getattr(settings, "data_store", None))
+    data_store = _build_data_store(getattr(settings, "data_store", None), namespace)
 
     executor_env: dict[str, str] = {
         "DISPATCHIO_CONFIG_INLINE": json.dumps(settings.model_dump(mode="json")),
@@ -290,7 +290,7 @@ def orchestrator(
 
     return Orchestrator(
         jobs=jobs or [],
-        state=_build_state(settings.state),
+        state=_build_state(settings.state, namespace=namespace),
         executors={
             "subprocess": SubprocessExecutor(env=executor_env),
             "python": PythonJobExecutor(env=executor_env),
@@ -298,7 +298,7 @@ def orchestrator(
         receiver=_build_receiver(settings.receiver),
         admission_policy=settings.admission,
         default_cadence=settings.default_cadence,
-        name=effective_name,
+        namespace=namespace,
         tick_log=_build_tick_log(settings.state),
         data_store=data_store,
         **orchestrator_kwargs,
@@ -323,9 +323,10 @@ def _build_tick_log(cfg: StateSettings) -> FilesystemTickLogStore:
     return FilesystemTickLogStore(Path(cfg.tick_log_path))
 
 
-def _build_state(cfg: StateSettings):
+def _build_state(cfg: StateSettings, namespace: str | None = "default"):
     if cfg.backend == "sqlalchemy":
         return SQLAlchemyStateStore(
+            namespace=namespace,
             connection_string=cfg.connection_string,
             echo=cfg.db_echo,
             pool_size=cfg.db_pool_size,
@@ -345,13 +346,16 @@ def _build_state(cfg: StateSettings):
     raise ValueError(f"Unknown state backend: {cfg.backend!r}")
 
 
-def _build_data_store(cfg: DataStoreSettings | None):
+def _build_data_store(
+    cfg: DataStoreSettings | None, default_namespace: str = "default"
+):
     if cfg is None or cfg.backend == "none":
         return None
     if cfg.backend == "filesystem":
         from dispatchio.datastore import FilesystemDataStore
 
-        return FilesystemDataStore(cfg.base_dir, namespace=cfg.namespace)
+        ns = cfg.namespace if cfg.namespace != "default" else default_namespace
+        return FilesystemDataStore(cfg.base_dir, namespace=ns)
     raise ValueError(f"Unknown data_store backend: {cfg.backend!r}")
 
 

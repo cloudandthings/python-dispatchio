@@ -54,6 +54,7 @@ from dispatchio.models import (
     DeadLetterStatus,
     DeadLetterSourceBackend,
 )
+from dispatchio.state.base import StateStore, AmbiguousNamespaceError
 
 # ---------------------------------------------------------------------------
 # Custom type: always returns UTC-aware datetimes (SQLite drops tz info)
@@ -98,10 +99,10 @@ class _AttemptRecordRow(_Base):
 
     __tablename__ = "run_attempts"
 
-    # TODO: Maybe add another ID?
     # PK: correlation_id as UUID string
     correlation_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
-    # Identity key: (job_name, run_key, attempt)
+    # Identity key: (namespace, job_name, run_key, attempt)
+    namespace: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     job_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     run_key: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     attempt: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -127,7 +128,9 @@ class _AttemptRecordRow(_Base):
     requested_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("job_name", "run_key", "attempt", name="uq_run_key_attempt"),
+        UniqueConstraint(
+            "namespace", "job_name", "run_key", "attempt", name="uq_run_key_attempt"
+        ),
     )
 
 
@@ -157,6 +160,7 @@ class _DeadLetterRow(_Base):
     __tablename__ = "dead_letters"
 
     dead_letter_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    namespace: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     occurred_at: Mapped[datetime] = mapped_column(
         _UTCDateTime, nullable=False, index=True
     )
@@ -185,9 +189,8 @@ class _OrchestratorRunRow(_Base):
     __tablename__ = "orchestrator_runs"
 
     orchestrator_run_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
-    orchestrator_name: Mapped[str] = mapped_column(
-        String(255), nullable=False, index=True
-    )
+    # Identity key: (namespace, run_key)
+    namespace: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     run_key: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     mode: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -199,16 +202,12 @@ class _OrchestratorRunRow(_Base):
     checkpoint: Mapped[dict[str, Any]] = mapped_column(
         JSON, nullable=False, default=dict
     )
-    opened_at: Mapped[datetime] = mapped_column(
-        _UTCDateTime, nullable=False, index=True
-    )
+    opened_at: Mapped[datetime] = mapped_column(_UTCDateTime, nullable=False)
     activated_at: Mapped[datetime | None] = mapped_column(_UTCDateTime, nullable=True)
     closed_at: Mapped[datetime | None] = mapped_column(_UTCDateTime, nullable=True)
 
     __table_args__ = (
-        UniqueConstraint(
-            "orchestrator_name", "run_key", name="uq_orchestrator_run_key"
-        ),
+        UniqueConstraint("namespace", "run_key", name="uq_orchestrator_run_key"),
     )
 
 
@@ -236,6 +235,7 @@ def _row_to_attempt_record(row: _AttemptRecordRow) -> AttemptRecord:
     if isinstance(attempt_id, str):
         attempt_id = UUID(attempt_id)
     return AttemptRecord(
+        namespace=row.namespace or "default",
         job_name=row.job_name,
         run_key=row.run_key,
         attempt=row.attempt,
@@ -256,6 +256,7 @@ def _row_to_attempt_record(row: _AttemptRecordRow) -> AttemptRecord:
 def _apply_attempt_record_to_row(record: AttemptRecord, row: _AttemptRecordRow) -> None:
     """Write all AttemptRecord fields onto an existing (or new) ORM row in-place."""
     row.correlation_id = record.correlation_id
+    row.namespace = record.namespace
     row.job_name = record.job_name
     row.run_key = record.run_key
     row.attempt = record.attempt
@@ -305,6 +306,7 @@ def _row_to_dead_letter_record(row: _DeadLetterRow) -> DeadLetterRecord:
         reason_code=DeadLetterReasonCode(row.reason_code),
         reason_detail=row.reason_detail,
         status=DeadLetterStatus(row.status),
+        namespace=row.namespace or "default",
         job_name=row.job_name,
         run_key=row.run_key,
         attempt=row.attempt,
@@ -325,6 +327,7 @@ def _apply_dead_letter_record_to_row(
     row.reason_code = record.reason_code.value
     row.reason_detail = record.reason_detail
     row.status = record.status.value
+    row.namespace = record.namespace
     row.job_name = record.job_name
     row.run_key = record.run_key
     row.attempt = record.attempt
@@ -340,7 +343,7 @@ def _row_to_orchestrator_run_record(
     """Convert ORM row to OrchestratorRunRecord model."""
     return OrchestratorRunRecord(
         orchestrator_run_id=row.orchestrator_run_id,
-        orchestrator_name=row.orchestrator_name,
+        namespace=row.namespace,
         run_key=row.run_key,
         status=OrchestratorRunStatus(row.status),
         mode=OrchestratorRunMode(row.mode),
@@ -361,7 +364,7 @@ def _apply_orchestrator_run_record_to_row(
 ) -> None:
     """Write all OrchestratorRunRecord fields onto an existing (or new) ORM row in-place."""
     row.orchestrator_run_id = record.orchestrator_run_id
-    row.orchestrator_name = record.orchestrator_name
+    row.namespace = record.namespace
     row.run_key = record.run_key
     row.status = record.status.value
     row.mode = record.mode.value
@@ -397,21 +400,24 @@ def _nullctx() -> Iterator[None]:
 # ---------------------------------------------------------------------------
 
 
-class SQLAlchemyStateStore:
+class SQLAlchemyStateStore(StateStore):
     """StateStore backed by any SQLAlchemy-compatible database."""
 
     def __init__(
         self,
         connection_string: str,
+        namespace: str | None = "default",
         echo: bool = False,
         pool_size: int = 5,
     ) -> None:
         """
         Args:
             connection_string: SQLAlchemy database URL.
+            namespace: Scope all reads/writes to this namespace (orchestrator name).
             echo: If True, log all emitted SQL statements (useful for debugging).
             pool_size: Connection pool size (ignored for SQLite).
         """
+        super().__init__(namespace=namespace)
         is_sqlite = connection_string.startswith("sqlite")
         is_memory = ":memory:" in connection_string
 
@@ -434,17 +440,21 @@ class SQLAlchemyStateStore:
         # Protect in-memory SQLite's StaticPool from concurrent threads
         self._lock: threading.Lock | None = threading.Lock() if is_memory else None
 
+
     # ------------------------------------------------------------------
     # StateStore protocol - Attempt API
     # ------------------------------------------------------------------
 
     def get_latest_attempt(self, job_name: str, run_key: str) -> AttemptRecord | None:
+        if self._namespace is None:
+            raise AmbiguousNamespaceError("Namespace must be set to get the latest attempt.")
         with self._lock or _nullctx():
             with Session(self._engine) as session:
                 row = session.scalar(
                     select(_AttemptRecordRow)
                     .where(
                         and_(
+                            _AttemptRecordRow.namespace == self._namespace,
                             _AttemptRecordRow.job_name == job_name,
                             _AttemptRecordRow.run_key == run_key,
                         )
@@ -466,10 +476,13 @@ class SQLAlchemyStateStore:
 
     def append_attempt(self, record: AttemptRecord) -> None:
         """Insert a new attempt row."""
+        if self._namespace is None:
+            raise AmbiguousNamespaceError("Namespace must be set to append an attempt.")
         with self._lock or _nullctx():
             with Session(self._engine) as session:
                 row = _AttemptRecordRow()
                 _apply_attempt_record_to_row(record, row)
+                row.namespace = self._namespace  # enforce store namespace
                 session.add(row)
                 session.commit()
 
@@ -496,6 +509,8 @@ class SQLAlchemyStateStore:
         with self._lock or _nullctx():
             with Session(self._engine) as session:
                 q = select(_AttemptRecordRow)
+                if self._namespace is not None:
+                    q = q.where(_AttemptRecordRow.namespace == self._namespace)
                 if job_name is not None:
                     q = q.where(_AttemptRecordRow.job_name == job_name)
                 if run_key is not None:
@@ -505,6 +520,7 @@ class SQLAlchemyStateStore:
                 if status is not None:
                     q = q.where(_AttemptRecordRow.status == status.value)
                 q = q.order_by(
+                    _AttemptRecordRow.namespace,
                     _AttemptRecordRow.job_name,
                     _AttemptRecordRow.run_key,
                     desc(_AttemptRecordRow.attempt),
@@ -518,10 +534,13 @@ class SQLAlchemyStateStore:
 
     def append_dead_letter(self, record: DeadLetterRecord) -> None:
         """Record a rejected completion event."""
+        if self._namespace is None:
+            raise AmbiguousNamespaceError("Namespace must be set to append a dead letter.")
         with self._lock or _nullctx():
             with Session(self._engine) as session:
                 row = _DeadLetterRow()
                 _apply_dead_letter_record_to_row(record, row)
+                row.namespace = self._namespace  # enforce store namespace
                 session.add(row)
                 session.commit()
 
@@ -563,13 +582,13 @@ class SQLAlchemyStateStore:
                 return None
 
     def list_dead_letters(
-        self,
-        job_name: str | None = None,
-        status: str | None = None,
+        self, job_name: str | None = None, status: str | None = None
     ) -> list[DeadLetterRecord]:
         with self._lock or _nullctx():
             with Session(self._engine) as session:
                 q = select(_DeadLetterRow)
+                if self._namespace is not None:
+                    q = q.where(_DeadLetterRow.namespace == self._namespace)
                 if job_name is not None:
                     q = q.where(_DeadLetterRow.job_name == job_name)
                 if status is not None:
@@ -613,10 +632,13 @@ class SQLAlchemyStateStore:
 
     def append_orchestrator_run(self, record: OrchestratorRunRecord) -> None:
         """Insert a new orchestrator run record."""
+        if self._namespace is None:
+            raise AmbiguousNamespaceError("Namespace must be set to append an orchestrator run.")
         with self._lock or _nullctx():
             with Session(self._engine) as session:
                 row = _OrchestratorRunRow()
                 _apply_orchestrator_run_record_to_row(record, row)
+                row.namespace = self._namespace  # enforce store namespace
                 session.add(row)
                 session.commit()
 
@@ -633,16 +655,16 @@ class SQLAlchemyStateStore:
                 )
                 return _row_to_orchestrator_run_record(row) if row is not None else None
 
-    def get_orchestrator_run_by_key(
-        self, orchestrator_name: str, run_key: str
-    ) -> OrchestratorRunRecord | None:
-        """Retrieve an orchestrator run by orchestrator name and run key."""
+    def get_orchestrator_run_by_key(self, run_key: str) -> OrchestratorRunRecord | None:
+        """Retrieve an orchestrator run by run key."""
+        if self._namespace is None:
+            raise AmbiguousNamespaceError("Namespace must be set to get an orchestrator run by key.")
         with self._lock or _nullctx():
             with Session(self._engine) as session:
                 row = session.scalar(
                     select(_OrchestratorRunRow).where(
                         and_(
-                            _OrchestratorRunRow.orchestrator_name == orchestrator_name,
+                            _OrchestratorRunRow.namespace == self._namespace,
                             _OrchestratorRunRow.run_key == run_key,
                         )
                     )
@@ -651,27 +673,23 @@ class SQLAlchemyStateStore:
 
     def list_orchestrator_runs(
         self,
-        orchestrator_name: str | None = None,
         status: OrchestratorRunStatus | None = None,
         mode: OrchestratorRunMode | None = None,
     ) -> list[OrchestratorRunRecord]:
         """
-        List orchestrator runs, optionally filtered by orchestrator name,
-        status, and/or mode. Results sorted by (orchestrator_name, opened_at DESC).
+        List orchestrator runs, optionally filtered by status and/or mode. Results sorted by (namespace, opened_at DESC).
         """
         with self._lock or _nullctx():
             with Session(self._engine) as session:
                 q = select(_OrchestratorRunRow)
-                if orchestrator_name is not None:
-                    q = q.where(
-                        _OrchestratorRunRow.orchestrator_name == orchestrator_name
-                    )
+                if self._namespace is not None:
+                    q = q.where(_OrchestratorRunRow.namespace == self._namespace)
                 if status is not None:
                     q = q.where(_OrchestratorRunRow.status == status.value)
                 if mode is not None:
                     q = q.where(_OrchestratorRunRow.mode == mode.value)
                 q = q.order_by(
-                    _OrchestratorRunRow.orchestrator_name,
+                    _OrchestratorRunRow.namespace,
                     desc(_OrchestratorRunRow.opened_at),
                 )
                 rows = session.scalars(q).all()
