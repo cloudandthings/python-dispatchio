@@ -5,6 +5,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 from dispatchio.models import AttemptRecord, Status
+from dispatchio.state import StateStore
 from dispatchio.state.sqlalchemy_ import SQLAlchemyStateStore
 
 
@@ -35,6 +36,8 @@ def _make_attempt(
 
 class SharedStateStoreBehaviour:
     """Mix-in. Subclasses provide self.store."""
+
+    store: StateStore
 
     def test_get_latest_attempt_returns_none_for_missing(self):
         assert self.store.get_latest_attempt("no_job", "99991231") is None

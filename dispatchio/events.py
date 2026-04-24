@@ -47,4 +47,6 @@ def emit_event(
 
     settings = DispatchioSettings()
     state = _build_state(settings.state, namespace=namespace)
-    state.set_event(Event(namespace=namespace, name=name, run_key=run_key, status=status))
+    state.set_event(
+        Event(namespace=namespace, name=name, run_key=run_key, status=status)
+    )
