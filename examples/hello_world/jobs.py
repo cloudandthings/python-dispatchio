@@ -1,14 +1,12 @@
 """
-Hello World — Two Jobs and a Dependency.
+Hello World — Explicit Job and Orchestrator definitions.
 
-Two jobs:
-  1. hello_world   — runs immediately, prints a greeting.
-  2. goodbye_world — runs after hello_world is done for the same day.
+This is the explicit approach: Job objects are defined here and wired into
+an Orchestrator.  Use this pattern for complex pipelines with cross-file
+dependencies, dynamic registration, or graph loading.
 
-The Job class creates two jobs, and a dependency between them.
-
-Configuration is loaded from dispatchio.toml in this directory.
-For example, default_cadence is set to DAILY so it doesn't have to be specified in the Job definitions.
+For simple cases, see my_work.py which uses the @job decorator instead —
+no separate jobs.py needed.
 
 Run with:
   python examples/hello_world/run.py

@@ -1,15 +1,23 @@
 """
 Hello World demo runner.
 
-Runs the orchestrator through multiple ticks so you can watch the jobs
-complete without setting up a real scheduler.
+Two ways to run this example:
 
-    python examples/hello_world/run.py
+  1. Decorator style (no jobs.py needed) — run-file discovers @job functions:
 
-In production, replace run_loop() with a single tick() call triggered by
-your scheduler (EventBridge, cron, etc.):
+       dispatchio run-file examples/hello_world/my_work.py
 
-    orchestrator.tick()
+     For an explicit run key:
+
+       dispatchio run-file examples/hello_world/my_work.py --run-key D20260423
+
+  2. Explicit orchestrator style (suitable for complex pipelines):
+
+       python examples/hello_world/run.py
+
+     This script uses jobs.py, which defines the same jobs using the Job/PythonJob
+     API directly.  In production, replace run_loop() with a single tick() call
+     triggered by your scheduler (EventBridge, cron, etc.).
 """
 
 import sys

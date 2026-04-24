@@ -162,6 +162,87 @@ def run_script(
     run_job(job_name or function_name, fn)
 
 
+@app.command("run-file")
+@handle_cli_errors
+def run_file(
+    script_path: ScriptPathArgument,
+    *,
+    run_key: Annotated[
+        str | None,
+        typer.Option(
+            "--run-key",
+            help=(
+                "Explicit run key for all discovered jobs (uses LiteralCadence). "
+                "Without this flag the jobs' declared cadences apply and a normal "
+                "tick runs at the current wall-clock time."
+            ),
+            show_default=False,
+        ),
+    ] = None,
+    ignore_dependencies: Annotated[
+        bool,
+        typer.Option(
+            "--ignore-dependencies",
+            help="Submit jobs regardless of whether their dependencies are satisfied.",
+        ),
+    ] = False,
+) -> None:
+    """Discover @job-decorated functions in FILE and run one orchestrator tick.
+
+    Each function annotated with @dispatchio.job is registered as a job.
+    The orchestrator is wired from dispatchio.toml (or DISPATCHIO_CONFIG).
+
+    With --run-key, every job's cadence is overridden to LiteralCadence so
+    the supplied key is used directly.  Dependency checks still apply unless
+    --ignore-dependencies is also set.
+    """
+    from dispatchio.cadence import LiteralCadence
+    from dispatchio.config import load_config, orchestrator as build_orchestrator
+    from dispatchio.models import JobDependency, TriggerType
+
+    spec = importlib.util.spec_from_file_location("_dispatchio_script", script_path)
+    if spec is None or spec.loader is None:
+        raise CliUserError(f"Unable to load script: {script_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    jobs = [
+        obj._dispatchio_job
+        for obj in module.__dict__.values()
+        if callable(obj) and hasattr(obj, "_dispatchio_job")
+    ]
+
+    if not jobs:
+        raise CliUserError(
+            f"No @job-decorated functions found in {script_path}. "
+            "Annotate your functions with @dispatchio.job."
+        )
+
+    if run_key is not None:
+        literal = LiteralCadence(value=run_key)
+        updated = []
+        for j in jobs:
+            new_deps = [
+                dep.model_copy(update={"cadence": literal})
+                if isinstance(dep, JobDependency)
+                else dep
+                for dep in j.depends_on
+            ]
+            updated.append(
+                j.model_copy(update={"cadence": literal, "depends_on": new_deps})
+            )
+        jobs = updated
+
+    if ignore_dependencies:
+        jobs = [j.model_copy(update={"depends_on": []}) for j in jobs]
+
+    settings = load_config()
+    orch = build_orchestrator(jobs, config=settings)
+    result = orch.tick()
+    output.print_tick_result(result)
+
+
 @app.command()
 @handle_cli_errors
 def status(

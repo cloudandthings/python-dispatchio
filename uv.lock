@@ -420,7 +420,7 @@ wheels = [
 
 [[package]]
 name = "dispatchio"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "beartype" },
@@ -452,11 +452,6 @@ dev = [
     { name = "typer" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
 [package.metadata]
 requires-dist = [
     { name = "beartype", specifier = ">=0.19" },
@@ -476,9 +471,6 @@ requires-dist = [
     { name = "typer", marker = "extra == 'dev'", specifier = ">=0.24" },
 ]
 provides-extras = ["cli", "aws", "all", "dev"]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=9.0.2" }]
 
 [[package]]
 name = "docker"
