@@ -44,7 +44,9 @@ def load_store_from_context(
     if entry is not None:
         try:
             settings = load_config(entry.config_path)
-            namespace = None if all_namespaces else getattr(settings, "namespace", "default")
+            namespace = (
+                None if all_namespaces else getattr(settings, "namespace", "default")
+            )
             return _build_state(settings.state, namespace=namespace)  # type: ignore[return-value]
         except Exception as exc:
             raise CliUserError(
@@ -54,7 +56,9 @@ def load_store_from_context(
     try:
         settings = load_config()
         if settings is not None:
-            namespace = None if all_namespaces else getattr(settings, "namespace", "default")
+            namespace = (
+                None if all_namespaces else getattr(settings, "namespace", "default")
+            )
             return _build_state(settings.state, namespace=namespace)  # type: ignore[return-value]
     except Exception as exc:
         raise CliUserError(f"Failed loading default Dispatchio config: {exc}") from exc

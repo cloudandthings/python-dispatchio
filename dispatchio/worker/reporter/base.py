@@ -14,14 +14,15 @@ Implementations ship alongside their receiver counterparts:
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from abc import ABC, abstractmethod
+from typing import Any
 from uuid import UUID
 
 from dispatchio.models import Status
 
 
-@runtime_checkable
-class BaseReporter(Protocol):
+class BaseReporter(ABC):
+    @abstractmethod
     def report(
         self,
         correlation_id: str | UUID,

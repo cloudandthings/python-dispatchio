@@ -440,14 +440,15 @@ class SQLAlchemyStateStore(StateStore):
         # Protect in-memory SQLite's StaticPool from concurrent threads
         self._lock: threading.Lock | None = threading.Lock() if is_memory else None
 
-
     # ------------------------------------------------------------------
     # StateStore protocol - Attempt API
     # ------------------------------------------------------------------
 
     def get_latest_attempt(self, job_name: str, run_key: str) -> AttemptRecord | None:
         if self._namespace is None:
-            raise AmbiguousNamespaceError("Namespace must be set to get the latest attempt.")
+            raise AmbiguousNamespaceError(
+                "Namespace must be set to get the latest attempt."
+            )
         with self._lock or _nullctx():
             with Session(self._engine) as session:
                 row = session.scalar(
@@ -535,7 +536,9 @@ class SQLAlchemyStateStore(StateStore):
     def append_dead_letter(self, record: DeadLetterRecord) -> None:
         """Record a rejected completion event."""
         if self._namespace is None:
-            raise AmbiguousNamespaceError("Namespace must be set to append a dead letter.")
+            raise AmbiguousNamespaceError(
+                "Namespace must be set to append a dead letter."
+            )
         with self._lock or _nullctx():
             with Session(self._engine) as session:
                 row = _DeadLetterRow()
@@ -633,7 +636,9 @@ class SQLAlchemyStateStore(StateStore):
     def append_orchestrator_run(self, record: OrchestratorRunRecord) -> None:
         """Insert a new orchestrator run record."""
         if self._namespace is None:
-            raise AmbiguousNamespaceError("Namespace must be set to append an orchestrator run.")
+            raise AmbiguousNamespaceError(
+                "Namespace must be set to append an orchestrator run."
+            )
         with self._lock or _nullctx():
             with Session(self._engine) as session:
                 row = _OrchestratorRunRow()
@@ -658,7 +663,9 @@ class SQLAlchemyStateStore(StateStore):
     def get_orchestrator_run_by_key(self, run_key: str) -> OrchestratorRunRecord | None:
         """Retrieve an orchestrator run by run key."""
         if self._namespace is None:
-            raise AmbiguousNamespaceError("Namespace must be set to get an orchestrator run by key.")
+            raise AmbiguousNamespaceError(
+                "Namespace must be set to get an orchestrator run by key."
+            )
         with self._lock or _nullctx():
             with Session(self._engine) as session:
                 row = session.scalar(

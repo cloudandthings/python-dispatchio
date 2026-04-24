@@ -12,9 +12,9 @@ easy to tail, parse, and ship to log aggregators.
 from __future__ import annotations
 
 import json
+from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Protocol, runtime_checkable
 
 
 @dataclass
@@ -29,14 +29,15 @@ class TickLogRecord:
     ]  # Serialised JobTickResult list: job_name, run_key, action, detail
 
 
-@runtime_checkable
-class TickLogStore(Protocol):
+class TickLogStore(ABC):
     """Append-only store for tick audit records."""
 
+    @abstractmethod
     def append(self, record: TickLogRecord) -> None:
         """Append a tick record to the log."""
         ...
 
+    @abstractmethod
     def list(
         self,
         *,
@@ -48,7 +49,7 @@ class TickLogStore(Protocol):
         ...
 
 
-class FilesystemTickLogStore:
+class FilesystemTickLogStore(TickLogStore):
     """JSONL-backed tick log stored at a single file path."""
 
     def __init__(self, path: str | Path) -> None:

@@ -394,7 +394,9 @@ def test_retry_list_requests_renders_rich_table(
     )
     state_store.append_retry_request(request)
 
-    with patch("dispatchio.cli.retry.load_store_from_context", return_value=state_store):
+    with patch(
+        "dispatchio.cli.retry.load_store_from_context", return_value=state_store
+    ):
         result = runner.invoke(app, ["retry", "list", "--filter", "requests"])
 
     assert result.exit_code == 0, result.output
@@ -486,7 +488,9 @@ def test_graph_validate_reports_validation_failure(tmp_path, rich_error_output) 
 
 
 def test_record_set_prompts_without_yes(state_store: SQLAlchemyStateStore) -> None:
-    with patch("dispatchio.cli.record.load_store_from_context", return_value=state_store):
+    with patch(
+        "dispatchio.cli.record.load_store_from_context", return_value=state_store
+    ):
         with patch(
             "dispatchio.cli.record.output.confirm", return_value=True
         ) as confirm_mock:
@@ -497,7 +501,9 @@ def test_record_set_prompts_without_yes(state_store: SQLAlchemyStateStore) -> No
 
 
 def test_record_set_yes_skips_prompt(state_store: SQLAlchemyStateStore) -> None:
-    with patch("dispatchio.cli.record.load_store_from_context", return_value=state_store):
+    with patch(
+        "dispatchio.cli.record.load_store_from_context", return_value=state_store
+    ):
         with patch("dispatchio.cli.record.output.confirm") as confirm_mock:
             result = runner.invoke(
                 app, ["record", "set", "job_a", "20250115", "done", "--yes"]
@@ -558,6 +564,7 @@ class TestAllNamespacesFlag:
         ns_a = SQLAlchemyStateStore(
             connection_string="sqlite:///:memory:", namespace="ns_a"
         )
+
         # Share the underlying engine so all stores hit the same in-memory DB.
         def _clone(namespace):
             s = SQLAlchemyStateStore.__new__(SQLAlchemyStateStore)
@@ -574,18 +581,26 @@ class TestAllNamespacesFlag:
 
         ns_a.append_attempt(
             AttemptRecord(
-                job_name="job_a", run_key="20250115", attempt=0,
-                correlation_id=uuid4(), status=Status.DONE,
+                job_name="job_a",
+                run_key="20250115",
+                attempt=0,
+                correlation_id=uuid4(),
+                status=Status.DONE,
             )
         )
         ns_b.append_attempt(
             AttemptRecord(
-                job_name="job_b", run_key="20250115", attempt=0,
-                correlation_id=uuid4(), status=Status.ERROR,
+                job_name="job_b",
+                run_key="20250115",
+                attempt=0,
+                correlation_id=uuid4(),
+                status=Status.ERROR,
             )
         )
 
-        with patch("dispatchio.cli.root.load_store_from_context", return_value=unscoped):
+        with patch(
+            "dispatchio.cli.root.load_store_from_context", return_value=unscoped
+        ):
             result = runner.invoke(app, ["status", "--all-namespaces"])
 
         assert result.exit_code == 0, result.output
@@ -601,30 +616,43 @@ class TestAllNamespacesFlag:
     ) -> None:
         state_store.append_attempt(
             AttemptRecord(
-                job_name="job_a", run_key="20250115", attempt=0,
-                correlation_id=uuid4(), status=Status.DONE,
+                job_name="job_a",
+                run_key="20250115",
+                attempt=0,
+                correlation_id=uuid4(),
+                status=Status.DONE,
             )
         )
 
-        with patch("dispatchio.cli.root.load_store_from_context", return_value=state_store):
+        with patch(
+            "dispatchio.cli.root.load_store_from_context", return_value=state_store
+        ):
             result = runner.invoke(app, ["status"])
 
         assert result.exit_code == 0, result.output
         assert "NAMESPACE" not in rich_output.export_text()
 
-    def test_retry_list_all_namespaces_shows_records_from_all(self, rich_output) -> None:
+    def test_retry_list_all_namespaces_shows_records_from_all(
+        self, rich_output
+    ) -> None:
         ns_a, ns_b, unscoped = self._make_stores()
 
         ns_a.append_attempt(
             AttemptRecord(
-                job_name="job_a", run_key="20250115", attempt=0,
-                correlation_id=uuid4(), status=Status.ERROR,
+                job_name="job_a",
+                run_key="20250115",
+                attempt=0,
+                correlation_id=uuid4(),
+                status=Status.ERROR,
             )
         )
         ns_b.append_attempt(
             AttemptRecord(
-                job_name="job_b", run_key="20250115", attempt=0,
-                correlation_id=uuid4(), status=Status.ERROR,
+                job_name="job_b",
+                run_key="20250115",
+                attempt=0,
+                correlation_id=uuid4(),
+                status=Status.ERROR,
             )
         )
 
@@ -647,7 +675,16 @@ class TestAllNamespacesFlag:
             "FakeSettings",
             (),
             {
-                "state": type("S", (), {"backend": "sqlalchemy", "connection_string": "sqlite:///:memory:", "db_echo": False, "db_pool_size": 5})(),
+                "state": type(
+                    "S",
+                    (),
+                    {
+                        "backend": "sqlalchemy",
+                        "connection_string": "sqlite:///:memory:",
+                        "db_echo": False,
+                        "db_pool_size": 5,
+                    },
+                )(),
                 "namespace": "prod",
             },
         )()
@@ -668,7 +705,16 @@ class TestAllNamespacesFlag:
             "FakeSettings",
             (),
             {
-                "state": type("S", (), {"backend": "sqlalchemy", "connection_string": "sqlite:///:memory:", "db_echo": False, "db_pool_size": 5})(),
+                "state": type(
+                    "S",
+                    (),
+                    {
+                        "backend": "sqlalchemy",
+                        "connection_string": "sqlite:///:memory:",
+                        "db_echo": False,
+                        "db_pool_size": 5,
+                    },
+                )(),
                 "namespace": "prod",
             },
         )()

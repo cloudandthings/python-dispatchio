@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from dispatchio.datastore.base import _resolve_job, _resolve_run_key
+from dispatchio.datastore.base import DataStore, _resolve_job, _resolve_run_key
 
 
-class MemoryDataStore:
+class MemoryDataStore(DataStore):
     """DataStore backed by an in-process dict.
 
     State is not shared across process boundaries.
@@ -15,7 +15,7 @@ class MemoryDataStore:
     """
 
     def __init__(self, namespace: str = "default") -> None:
-        self.namespace = namespace
+        super().__init__(namespace=namespace)
         self._store: dict[str, Any] = {}
 
     def _key(self, job: str, run_key: str, key: str) -> str:
