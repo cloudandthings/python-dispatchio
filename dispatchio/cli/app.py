@@ -11,7 +11,7 @@ from dispatchio.cli import output
 
 _install_rich_tb(show_locals=False)
 
-app = typer.Typer(help="Dispatchio - lightweight tick-based batch job orchestrator.")
+app = typer.Typer(help="Dispatchio - lightweight tick-based batch job orchestrator.", no_args_is_help=True)
 
 
 @app.callback()
@@ -36,6 +36,7 @@ from dispatchio.cli.graph import app as graph_app  # noqa: E402
 from dispatchio.cli.record import app as record_app  # noqa: E402
 from dispatchio.cli.rename import event_app, job_app, namespace_app  # noqa: E402
 from dispatchio.cli.retry import app as retry_app  # noqa: E402
+from dispatchio.cli.sandbox import app as sandbox_app  # noqa: E402
 
 app.add_typer(record_app, name="record")
 app.add_typer(retry_app, name="retry")
@@ -44,6 +45,7 @@ app.add_typer(graph_app, name="graph")
 app.add_typer(job_app, name="job")
 app.add_typer(namespace_app, name="namespace")
 app.add_typer(event_app, name="event")
+app.add_typer(sandbox_app, name="sandbox")
 
 
 if __name__ == "__main__":

@@ -25,7 +25,7 @@ from dispatchio.cli.options import (
 from dispatchio.models import Attempt, Status
 
 
-app = typer.Typer(help="Create and list manual retry requests.")
+app = typer.Typer(help="Create and list manual retry requests.", no_args_is_help=True)
 
 
 class RetryListView(str, Enum):
