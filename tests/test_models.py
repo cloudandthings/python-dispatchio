@@ -15,7 +15,7 @@ from dispatchio.models import (
     JobTickResult,
     PythonJob,
     PoolPolicy,
-    AttemptRecord,
+    Attempt,
     Status,
     SubprocessJob,
     TickResult,
@@ -37,7 +37,7 @@ class TestStatus:
         assert Status.DONE not in Status.active()
 
     def test_attempt_record_is_finished(self):
-        record = AttemptRecord(
+        record = Attempt(
             job_name="x",
             run_key="1",
             attempt=0,
@@ -49,7 +49,7 @@ class TestStatus:
     def test_attempt_record_is_active(self):
         from uuid import uuid4
 
-        record = AttemptRecord(
+        record = Attempt(
             job_name="x",
             run_key="1",
             attempt=0,
@@ -60,9 +60,9 @@ class TestStatus:
         assert not record.is_finished()
 
 
-class TestAttemptRecord:
+class TestAttempt:
     def test_defaults(self):
-        r = AttemptRecord(
+        r = Attempt(
             job_name="job",
             run_key="20250115",
             attempt=0,
@@ -76,7 +76,7 @@ class TestAttemptRecord:
 
     def test_model_copy_update(self):
         correlation_id = uuid4()
-        r = AttemptRecord(
+        r = Attempt(
             job_name="job",
             run_key="20250115",
             attempt=0,

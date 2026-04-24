@@ -9,7 +9,7 @@ from dispatchio.cli import output
 from dispatchio.cli.errors import handle_cli_errors
 from dispatchio.cli.loaders import load_store_from_context
 from dispatchio.cli.options import ContextOption, ReasonOption, YesOption
-from dispatchio.models import AttemptRecord, Status
+from dispatchio.models import Attempt, Status
 
 
 app = typer.Typer(help="Manually inspect or override run records.")
@@ -40,7 +40,7 @@ def record_set(
     all_recs = store.list_attempts(job_name=job_name, run_key=run_key)
     existing = max(all_recs, key=lambda r: r.attempt) if all_recs else None
     if existing is None:
-        record = AttemptRecord(
+        record = Attempt(
             job_name=job_name,
             run_key=run_key,
             attempt=0,

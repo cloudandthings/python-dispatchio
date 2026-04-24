@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-from dispatchio.models import Job, AttemptRecord, Status
+from dispatchio.models import Job, Attempt, Status
 
 
 @runtime_checkable
@@ -24,7 +24,7 @@ class Executor(Protocol):
     def submit(
         self,
         job: Job,
-        attempt: AttemptRecord,
+        attempt: Attempt,
         reference_time: datetime,
         timeout: float | None = None,
     ) -> None:
@@ -34,7 +34,7 @@ class Executor(Protocol):
         Must NOT block waiting for the job to complete.
 
         job: Job definition including executor config
-        attempt: the AttemptRecord for this execution (contains job_name,
+        attempt: the Attempt for this execution (contains job_name,
                  run_key, attempt number, correlation_id)
         reference_time: the tick's reference time
         timeout: per-submission deadline in seconds. Not yet enforced by
@@ -64,4 +64,4 @@ class Pokeable(Protocol):
                          other liveness mechanisms
     """
 
-    def poke(self, record: AttemptRecord) -> Status | None: ...
+    def poke(self, record: Attempt) -> Status | None: ...

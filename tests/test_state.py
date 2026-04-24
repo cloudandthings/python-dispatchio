@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from dispatchio.models import AttemptRecord, Status
+from dispatchio.models import Attempt, Status
 from dispatchio.state import StateStore
 from dispatchio.state.sqlalchemy_ import SQLAlchemyStateStore
 
@@ -19,7 +19,7 @@ def _make_attempt(
 ):
     if correlation_id is None:
         correlation_id = uuid4()
-    return AttemptRecord(
+    return Attempt(
         job_name=job_name,
         run_key=run_key,
         attempt=attempt,

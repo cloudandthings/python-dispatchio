@@ -8,7 +8,7 @@ from botocore.stub import ANY, Stubber
 from moto import mock_aws
 
 from dispatchio.models import (
-    AttemptRecord,
+    Attempt,
     AthenaJob,
     Job,
     LambdaJob,
@@ -25,8 +25,8 @@ def _ref_time() -> datetime:
     return datetime(2026, 4, 18, 0, 0, tzinfo=timezone.utc)
 
 
-def _make_attempt(job_name: str, run_key: str, attempt: int = 0) -> AttemptRecord:
-    return AttemptRecord(
+def _make_attempt(job_name: str, run_key: str, attempt: int = 0) -> Attempt:
+    return Attempt(
         job_name=job_name,
         run_key=run_key,
         attempt=attempt,
@@ -125,7 +125,7 @@ def test_stepfunctions_poke_maps_terminal_statuses(monkeypatch) -> None:
 
     executor._client = _Client()
 
-    record = AttemptRecord(
+    record = Attempt(
         job_name="transform",
         run_key="20260418",
         attempt=0,
@@ -150,7 +150,7 @@ def test_athena_poke_maps_terminal_statuses(monkeypatch) -> None:
 
     executor._client = _Client()
 
-    record = AttemptRecord(
+    record = Attempt(
         job_name="athena-job",
         run_key="20260418",
         attempt=0,

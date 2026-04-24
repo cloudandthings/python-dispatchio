@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from dispatchio.models import AttemptRecord
+from dispatchio.models import Attempt
 
 
 def build_execution_context(
-    attempt: AttemptRecord, reference_time_iso: str
+    attempt: Attempt, reference_time_iso: str
 ) -> dict[str, str]:
     """Build the context dict injected into executor payloads.
 

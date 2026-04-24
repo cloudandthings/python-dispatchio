@@ -14,7 +14,7 @@ from dispatchio.cli.app import callback as cli_callback
 from dispatchio.cli.errors import CliUserError
 from dispatchio.graph import GraphValidationError
 from dispatchio.models import (
-    AttemptRecord,
+    Attempt,
     JobAction,
     JobTickResult,
     RetryRequest,
@@ -58,7 +58,7 @@ class TestRecordSet:
     def test_updates_existing_record(self, state_store: SQLAlchemyStateStore):
         """record set updates status when a record already exists."""
 
-        existing = AttemptRecord(
+        existing = Attempt(
             job_name="my_job",
             run_key="20250115",
             attempt=0,
@@ -339,7 +339,7 @@ def test_status_renders_rich_table(
     state_store: SQLAlchemyStateStore,
     rich_output,
 ) -> None:
-    record = AttemptRecord(
+    record = Attempt(
         job_name="job_a",
         run_key="20250115",
         attempt=0,
@@ -362,7 +362,7 @@ def test_retry_list_attempts_renders_rich_table(
     state_store: SQLAlchemyStateStore,
     rich_output,
 ) -> None:
-    record = AttemptRecord(
+    record = Attempt(
         job_name="job_a",
         run_key="20250115",
         attempt=1,
@@ -514,7 +514,7 @@ def test_record_set_yes_skips_prompt(state_store: SQLAlchemyStateStore) -> None:
 
 
 def test_cancel_prompts_without_yes(state_store: SQLAlchemyStateStore) -> None:
-    record = AttemptRecord(
+    record = Attempt(
         job_name="job_a",
         run_key="20250115",
         attempt=0,
@@ -536,7 +536,7 @@ def test_cancel_prompts_without_yes(state_store: SQLAlchemyStateStore) -> None:
 
 
 def test_cancel_yes_skips_prompt(state_store: SQLAlchemyStateStore) -> None:
-    record = AttemptRecord(
+    record = Attempt(
         job_name="job_a",
         run_key="20250115",
         attempt=0,
@@ -580,7 +580,7 @@ class TestAllNamespacesFlag:
         ns_a, ns_b, unscoped = self._make_stores()
 
         ns_a.append_attempt(
-            AttemptRecord(
+            Attempt(
                 job_name="job_a",
                 run_key="20250115",
                 attempt=0,
@@ -589,7 +589,7 @@ class TestAllNamespacesFlag:
             )
         )
         ns_b.append_attempt(
-            AttemptRecord(
+            Attempt(
                 job_name="job_b",
                 run_key="20250115",
                 attempt=0,
@@ -615,7 +615,7 @@ class TestAllNamespacesFlag:
         self, state_store: SQLAlchemyStateStore, rich_output
     ) -> None:
         state_store.append_attempt(
-            AttemptRecord(
+            Attempt(
                 job_name="job_a",
                 run_key="20250115",
                 attempt=0,
@@ -638,7 +638,7 @@ class TestAllNamespacesFlag:
         ns_a, ns_b, unscoped = self._make_stores()
 
         ns_a.append_attempt(
-            AttemptRecord(
+            Attempt(
                 job_name="job_a",
                 run_key="20250115",
                 attempt=0,
@@ -647,7 +647,7 @@ class TestAllNamespacesFlag:
             )
         )
         ns_b.append_attempt(
-            AttemptRecord(
+            Attempt(
                 job_name="job_b",
                 run_key="20250115",
                 attempt=0,
