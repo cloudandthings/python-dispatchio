@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 import threading
 from collections.abc import Iterator
 from typing import Any, ClassVar
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import (
     JSON,
@@ -36,6 +36,7 @@ from sqlalchemy import (
     select,
 )
 from sqlalchemy import inspect as sa_inspect
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -43,6 +44,9 @@ from dispatchio.models import (
     Attempt,
     DeadLetter,
     Event,
+    EventIdentity,
+    JobIdentity,
+    NamespaceIdentity,
     OrchestratorRun,
     OrchestratorRunStatus,
     OrchestratorRunMode,
@@ -60,7 +64,6 @@ from dispatchio.state.base import StateStore, AmbiguousNamespaceError
 # ---------------------------------------------------------------------------
 
 
-# Always returns UTC-aware datetimes (SQLite drops tz info)
 class _UTCDateTime(TypeDecorator):
     """Stores datetimes as UTC; always returns tz-aware datetime on load."""
 
@@ -71,21 +74,17 @@ class _UTCDateTime(TypeDecorator):
         if value is None:
             return None
         if value.tzinfo is None:
-            # Treat naive values as UTC by convention.
             return value.replace(tzinfo=timezone.utc)
-        # Persist all timezone-aware values normalized to UTC.
         return value.astimezone(timezone.utc)
 
     def process_result_value(self, value: datetime | None, dialect) -> datetime | None:
         if value is None:
             return None
         if value.tzinfo is None:
-            # SQLite commonly returns naive values even for tz-aware columns.
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
 
 
-# Generic enum type that stores the enum's value as a string and converts back on load.
 def _enum_type(enum_class):
     class _EnumType(TypeDecorator):
         impl = String(50)
@@ -127,31 +126,75 @@ class _Base(DeclarativeBase):
                 setattr(self, attr.key, getattr(record, attr.key))
 
 
+# ---------------------------------------------------------------------------
+# Registry tables — stable UUID identity for jobs, namespaces, and events
+# ---------------------------------------------------------------------------
+
+
+class _NamespaceRow(_Base):
+    """Registry entry for a namespace. Name is the mutable display label."""
+
+    __tablename__ = "namespaces"
+    _model_class = NamespaceIdentity
+
+    namespace_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(_UTCDateTime, nullable=False)
+
+
+class _JobRow(_Base):
+    """Registry entry for a job within a namespace."""
+
+    __tablename__ = "jobs"
+    _model_class = JobIdentity
+
+    job_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    namespace_id: Mapped[UUID] = mapped_column(Uuid, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(_UTCDateTime, nullable=False)
+
+    __table_args__ = (UniqueConstraint("namespace_id", "name", name="uq_job_ns_name"),)
+
+
+class _EventRow(_Base):
+    """Registry entry for an event type within a namespace."""
+
+    __tablename__ = "events"
+    _model_class = EventIdentity
+
+    event_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    namespace_id: Mapped[UUID] = mapped_column(Uuid, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(_UTCDateTime, nullable=False)
+
+    __table_args__ = (UniqueConstraint("namespace_id", "name", name="uq_event_ns_name"),)
+
+
+# ---------------------------------------------------------------------------
+# History / state tables
+# ---------------------------------------------------------------------------
+
+
 class _AttemptRow(_Base):
     """Immutable row per attempt."""
 
     __tablename__ = "attempts"
     _model_class = Attempt
 
-    # PK: correlation_id as UUID string
     correlation_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
-    # Identity key: (namespace, job_name, run_key, attempt)
     namespace: Mapped[str] = mapped_column(
         String(255), nullable=False, index=True, default="default"
     )
     job_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     run_key: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     attempt: Mapped[int] = mapped_column(Integer, nullable=False)
-    # Status and reason
     status: Mapped[Status] = mapped_column(_StatusType, nullable=False, index=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Timestamps
     submitted_at: Mapped[datetime | None] = mapped_column(_UTCDateTime, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(_UTCDateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(
         _UTCDateTime, nullable=True, index=True
     )
-    # Trigger and trace
     trigger_type: Mapped[TriggerType] = mapped_column(
         _TriggerTypeType, nullable=False, default=TriggerType.SCHEDULED
     )
@@ -160,8 +203,8 @@ class _AttemptRow(_Base):
     completion_event_trace: Mapped[dict[str, Any] | None] = mapped_column(
         JSON, nullable=True
     )
-    # Operator context for manual operations
     requested_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    job_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True, index=True)
 
     __table_args__ = (
         UniqueConstraint(
@@ -208,17 +251,18 @@ class _DeadLetterRow(_Base):
     status: Mapped[str] = mapped_column(
         String(50), nullable=False, default=DeadLetterStatus.OPEN.value
     )
-    # Event identity
     job_name: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     run_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     attempt: Mapped[int | None] = mapped_column(Integer, nullable=True)
     correlation_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
-    # Audit
     raw_payload: Mapped[dict[str, Any]] = mapped_column(
         JSON, nullable=False, default=dict
     )
     resolved_at: Mapped[datetime | None] = mapped_column(_UTCDateTime, nullable=True)
     resolver_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Best-effort resolved identity (no FK enforcement)
+    namespace_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    job_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
 
 
 class _OrchestratorRunRow(_Base):
@@ -228,7 +272,6 @@ class _OrchestratorRunRow(_Base):
     _model_class = OrchestratorRun
 
     orchestrator_run_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
-    # Identity key: (namespace, run_key)
     namespace: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     run_key: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
@@ -244,6 +287,7 @@ class _OrchestratorRunRow(_Base):
     opened_at: Mapped[datetime] = mapped_column(_UTCDateTime, nullable=False)
     activated_at: Mapped[datetime | None] = mapped_column(_UTCDateTime, nullable=True)
     closed_at: Mapped[datetime | None] = mapped_column(_UTCDateTime, nullable=True)
+    namespace_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True, index=True)
 
     __table_args__ = (
         UniqueConstraint("namespace", "run_key", name="uq_orchestrator_run_key"),
@@ -251,7 +295,7 @@ class _OrchestratorRunRow(_Base):
 
 
 class _EventOccurrenceRow(_Base):
-    """Row for events."""
+    """State row for one event occurrence (namespace, name, run_key)."""
 
     __tablename__ = "event_occurrences"
     _model_class = Event
@@ -264,6 +308,7 @@ class _EventOccurrenceRow(_Base):
         _UTCDateTime, nullable=False, index=True
     )
     trace: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    event_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True, index=True)
 
 
 # ---------------------------------------------------------------------------
@@ -295,12 +340,8 @@ class SQLAlchemyStateStore(StateStore):
         engine_kwargs: dict[str, Any] = {"echo": echo}
 
         if is_sqlite:
-            # SQLite needs check_same_thread=False so it can be used across
-            # threads (e.g. orchestrator submits on worker threads).
             engine_kwargs["connect_args"] = {"check_same_thread": False}
             if is_memory:
-                # In-memory SQLite must share a single connection; otherwise
-                # each Session would get an empty database.
                 engine_kwargs["poolclass"] = StaticPool
         else:
             engine_kwargs["pool_size"] = pool_size
@@ -308,19 +349,127 @@ class SQLAlchemyStateStore(StateStore):
         self._engine = create_engine(connection_string, **engine_kwargs)
         _Base.metadata.create_all(self._engine)
         self._Session = sessionmaker(bind=self._engine)
-        # Protect in-memory SQLite's StaticPool from concurrent threads
         self._lock: threading.Lock | None = threading.Lock() if is_memory else None
 
     @contextmanager
     def _session(self) -> Iterator[Session]:
         @contextmanager
         def _nullctx() -> Iterator[None]:
-            """A no-op context manager used when no lock is needed."""
             yield
 
         with self._lock or _nullctx():
             with Session(self._engine) as session:
                 yield session
+
+    # ------------------------------------------------------------------
+    # Registry resolution helpers
+    # ------------------------------------------------------------------
+
+    def _resolve_namespace_id(self, session: Session, name: str) -> UUID:
+        """Get or create a namespace registry entry; return its namespace_id."""
+        row = session.scalar(select(_NamespaceRow).where(_NamespaceRow.name == name))
+        if row is not None:
+            return row.namespace_id
+        new_id = uuid4()
+        try:
+            with session.begin_nested():
+                session.add(
+                    _NamespaceRow(
+                        namespace_id=new_id,
+                        name=name,
+                        created_at=datetime.now(timezone.utc),
+                    )
+                )
+            return new_id
+        except IntegrityError:
+            row = session.scalar(select(_NamespaceRow).where(_NamespaceRow.name == name))
+            return row.namespace_id  # type: ignore[union-attr]
+
+    def _resolve_job_id(
+        self, session: Session, namespace_id: UUID, job_name: str
+    ) -> UUID:
+        """Get or create a job registry entry; return its job_id."""
+        row = session.scalar(
+            select(_JobRow).where(
+                and_(_JobRow.namespace_id == namespace_id, _JobRow.name == job_name)
+            )
+        )
+        if row is not None:
+            return row.job_id
+        new_id = uuid4()
+        try:
+            with session.begin_nested():
+                session.add(
+                    _JobRow(
+                        job_id=new_id,
+                        namespace_id=namespace_id,
+                        name=job_name,
+                        created_at=datetime.now(timezone.utc),
+                    )
+                )
+            return new_id
+        except IntegrityError:
+            row = session.scalar(
+                select(_JobRow).where(
+                    and_(
+                        _JobRow.namespace_id == namespace_id, _JobRow.name == job_name
+                    )
+                )
+            )
+            return row.job_id  # type: ignore[union-attr]
+
+    def _resolve_event_id(
+        self, session: Session, namespace_id: UUID, event_name: str
+    ) -> UUID:
+        """Get or create an event type registry entry; return its event_id."""
+        row = session.scalar(
+            select(_EventRow).where(
+                and_(_EventRow.namespace_id == namespace_id, _EventRow.name == event_name)
+            )
+        )
+        if row is not None:
+            return row.event_id
+        new_id = uuid4()
+        try:
+            with session.begin_nested():
+                session.add(
+                    _EventRow(
+                        event_id=new_id,
+                        namespace_id=namespace_id,
+                        name=event_name,
+                        created_at=datetime.now(timezone.utc),
+                    )
+                )
+            return new_id
+        except IntegrityError:
+            row = session.scalar(
+                select(_EventRow).where(
+                    and_(
+                        _EventRow.namespace_id == namespace_id,
+                        _EventRow.name == event_name,
+                    )
+                )
+            )
+            return row.event_id  # type: ignore[union-attr]
+
+    def _lookup_job_id(self, session: Session, job_name: str) -> UUID | None:
+        """Return the job_id for job_name in the current namespace, or None."""
+        if self._namespace is None:
+            return None
+        ns_row = session.scalar(
+            select(_NamespaceRow).where(_NamespaceRow.name == self._namespace)
+        )
+        if ns_row is None:
+            return None
+        job_row = session.scalar(
+            select(_JobRow).where(
+                and_(
+                    _JobRow.namespace_id == ns_row.namespace_id,
+                    _JobRow.name == job_name,
+                )
+            )
+        )
+        return job_row.job_id if job_row is not None else None
 
     # ------------------------------------------------------------------
     # StateStore protocol - Attempt API
@@ -332,18 +481,33 @@ class SQLAlchemyStateStore(StateStore):
                 "Namespace must be set to get the latest attempt."
             )
         with self._session() as session:
-            row = session.scalar(
-                select(_AttemptRow)
-                .where(
-                    and_(
-                        _AttemptRow.namespace == self._namespace,
-                        _AttemptRow.job_name == job_name,
-                        _AttemptRow.run_key == run_key,
+            job_id = self._lookup_job_id(session, job_name)
+            if job_id is not None:
+                q = (
+                    select(_AttemptRow)
+                    .where(
+                        and_(
+                            _AttemptRow.job_id == job_id,
+                            _AttemptRow.run_key == run_key,
+                        )
                     )
+                    .order_by(desc(_AttemptRow.attempt))
+                    .limit(1)
                 )
-                .order_by(desc(_AttemptRow.attempt))
-                .limit(1)
-            )
+            else:
+                q = (
+                    select(_AttemptRow)
+                    .where(
+                        and_(
+                            _AttemptRow.namespace == self._namespace,
+                            _AttemptRow.job_name == job_name,
+                            _AttemptRow.run_key == run_key,
+                        )
+                    )
+                    .order_by(desc(_AttemptRow.attempt))
+                    .limit(1)
+                )
+            row = session.scalar(q)
             return row.to_model() if row is not None else None
 
     def get_attempt(self, correlation_id: UUID) -> Attempt | None:
@@ -354,13 +518,16 @@ class SQLAlchemyStateStore(StateStore):
             return row.to_model() if row is not None else None
 
     def append_attempt(self, record: Attempt) -> None:
-        """Insert a new attempt row."""
+        """Insert a new attempt row, resolving and recording the stable job_id."""
         if self._namespace is None:
             raise AmbiguousNamespaceError("Namespace must be set to append an attempt.")
         with self._session() as session:
+            ns_id = self._resolve_namespace_id(session, self._namespace)
+            job_id = self._resolve_job_id(session, ns_id, record.job_name)
             row = _AttemptRow()
             row.apply(record)
-            row.namespace = self._namespace  # enforce store namespace
+            row.namespace = self._namespace
+            row.job_id = job_id
             session.add(row)
             session.commit()
 
@@ -373,7 +540,10 @@ class SQLAlchemyStateStore(StateStore):
                 )
             )
             if existing is not None:
+                saved_job_id = existing.job_id
                 existing.apply(record)
+                if saved_job_id is not None and existing.job_id is None:
+                    existing.job_id = saved_job_id
                 session.commit()
 
     def list_attempts(
@@ -388,7 +558,11 @@ class SQLAlchemyStateStore(StateStore):
             if self._namespace is not None:
                 q = q.where(_AttemptRow.namespace == self._namespace)
             if job_name is not None:
-                q = q.where(_AttemptRow.job_name == job_name)
+                job_id = self._lookup_job_id(session, job_name)
+                if job_id is not None:
+                    q = q.where(_AttemptRow.job_id == job_id)
+                else:
+                    q = q.where(_AttemptRow.job_name == job_name)
             if run_key is not None:
                 q = q.where(_AttemptRow.run_key == run_key)
             if attempt is not None:
@@ -409,7 +583,7 @@ class SQLAlchemyStateStore(StateStore):
     # ------------------------------------------------------------------
 
     def append_dead_letter(self, record: DeadLetter) -> None:
-        """Record a rejected completion event."""
+        """Record a rejected completion event, resolving registry IDs where possible."""
         if self._namespace is None:
             raise AmbiguousNamespaceError(
                 "Namespace must be set to append a dead letter."
@@ -417,7 +591,15 @@ class SQLAlchemyStateStore(StateStore):
         with self._session() as session:
             row = _DeadLetterRow()
             row.apply(record)
-            row.namespace = self._namespace  # enforce store namespace
+            row.namespace = self._namespace
+            # Best-effort registry resolution — failures must not block dead-lettering.
+            try:
+                ns_id = self._resolve_namespace_id(session, self._namespace)
+                row.namespace_id = ns_id
+                if record.job_name is not None:
+                    row.job_id = self._resolve_job_id(session, ns_id, record.job_name)
+            except Exception:
+                pass
             session.add(row)
             session.commit()
 
@@ -436,13 +618,8 @@ class SQLAlchemyStateStore(StateStore):
         """
         Find the first attempt whose trace.executor[trace_key] == trace_value.
 
-        Used by AWS completion handlers to correlate by execution_arn or
-        query_execution_id stored in trace at submission time.
-
-        Uses a SQL LIKE pre-filter on the JSON column text to avoid a full
-        table scan, then does an exact Python-side match for correctness.
-        trace_value is typically a unique ARN or ID, so the pre-filter usually
-        returns at most one row.
+        Uses a SQL LIKE pre-filter on the JSON column text to avoid a full table
+        scan, then does an exact Python-side match for correctness.
         """
         with self._session() as session:
             rows = session.scalars(
@@ -464,7 +641,11 @@ class SQLAlchemyStateStore(StateStore):
             if self._namespace is not None:
                 q = q.where(_DeadLetterRow.namespace == self._namespace)
             if job_name is not None:
-                q = q.where(_DeadLetterRow.job_name == job_name)
+                job_id = self._lookup_job_id(session, job_name)
+                if job_id is not None:
+                    q = q.where(_DeadLetterRow.job_id == job_id)
+                else:
+                    q = q.where(_DeadLetterRow.job_name == job_name)
             if status is not None:
                 q = q.where(_DeadLetterRow.status == status)
             q = q.order_by(_DeadLetterRow.occurred_at.desc())
@@ -503,15 +684,17 @@ class SQLAlchemyStateStore(StateStore):
     # ------------------------------------------------------------------
 
     def append_orchestrator_run(self, record: OrchestratorRun) -> None:
-        """Insert a new orchestrator run record."""
+        """Insert a new orchestrator run record, resolving and recording namespace_id."""
         if self._namespace is None:
             raise AmbiguousNamespaceError(
                 "Namespace must be set to append an orchestrator run."
             )
         with self._session() as session:
+            ns_id = self._resolve_namespace_id(session, self._namespace)
             row = _OrchestratorRunRow()
             row.apply(record)
-            row.namespace = self._namespace  # enforce store namespace
+            row.namespace = self._namespace
+            row.namespace_id = ns_id
             session.add(row)
             session.commit()
 
@@ -547,9 +730,7 @@ class SQLAlchemyStateStore(StateStore):
         status: OrchestratorRunStatus | None = None,
         mode: OrchestratorRunMode | None = None,
     ) -> list[OrchestratorRun]:
-        """
-        List orchestrator runs, optionally filtered by status and/or mode. Results sorted by (namespace, opened_at DESC).
-        """
+        """List orchestrator runs, optionally filtered by status and/or mode."""
         with self._session() as session:
             q = select(_OrchestratorRunRow)
             if self._namespace is not None:
@@ -566,10 +747,7 @@ class SQLAlchemyStateStore(StateStore):
             return [r.to_model() for r in rows]
 
     def update_orchestrator_run(self, record: OrchestratorRun) -> None:
-        """
-        Update an existing orchestrator run record by orchestrator_run_id.
-        Used when changing status, updating checkpoint, or recording activation/closure.
-        """
+        """Update an existing orchestrator run record by orchestrator_run_id."""
         with self._session() as session:
             existing = session.scalar(
                 select(_OrchestratorRunRow).where(
@@ -578,7 +756,10 @@ class SQLAlchemyStateStore(StateStore):
                 )
             )
             if existing is not None:
+                saved_namespace_id = existing.namespace_id
                 existing.apply(record)
+                if saved_namespace_id is not None and existing.namespace_id is None:
+                    existing.namespace_id = saved_namespace_id
                 session.commit()
 
     # ------------------------------------------------------------------
@@ -586,12 +767,10 @@ class SQLAlchemyStateStore(StateStore):
     # ------------------------------------------------------------------
 
     def set_event(self, event: Event) -> None:
-        """Upsert an event by (namespace, name, run_key). Last write wins.
-
-        The event's own namespace field determines the target — the store's
-        namespace is not used here so that a caller can address any namespace.
-        """
+        """Upsert an event occurrence by (namespace, name, run_key). Last write wins."""
         with self._session() as session:
+            ns_id = self._resolve_namespace_id(session, event.namespace)
+            event_id = self._resolve_event_id(session, ns_id, event.name)
             row = session.scalar(
                 select(_EventOccurrenceRow).where(
                     and_(
@@ -609,19 +788,18 @@ class SQLAlchemyStateStore(StateStore):
                     status=event.status.value,
                     occurred_at=event.occurred_at,
                     trace=event.trace,
+                    event_id=event_id,
                 )
                 session.add(row)
             else:
                 row.status = event.status.value
                 row.occurred_at = event.occurred_at
                 row.trace = event.trace
+                row.event_id = event_id
             session.commit()
 
     def get_event(self, name: str, run_key: str) -> Event | None:
-        """Return the event for (namespace, name, run_key), or None.
-
-        Raises AmbiguousNamespaceError if the store has no namespace set.
-        """
+        """Return the event for (namespace, name, run_key), or None."""
         if self._namespace is None:
             raise AmbiguousNamespaceError("Namespace must be set to get an event.")
         with self._session() as session:
@@ -637,10 +815,7 @@ class SQLAlchemyStateStore(StateStore):
             return row.to_model() if row is not None else None
 
     def list_events(self, run_key: str | None = None) -> list[Event]:
-        """List events for this store's namespace, optionally filtered by run_key.
-
-        If the store has no namespace set, returns events across all namespaces.
-        """
+        """List events for this store's namespace, optionally filtered by run_key."""
         with self._session() as session:
             q = select(_EventOccurrenceRow)
             if self._namespace is not None:
@@ -654,3 +829,113 @@ class SQLAlchemyStateStore(StateStore):
             )
             rows = session.scalars(q).all()
             return [r.to_model() for r in rows]
+
+    # ------------------------------------------------------------------
+    # Rename / remap
+    # ------------------------------------------------------------------
+
+    def rename_job(self, old_name: str, new_name: str) -> None:
+        """Rename a job in the registry. Run this before renaming the job in code.
+
+        Raises ValueError if old_name is not found or new_name already exists.
+        """
+        if self._namespace is None:
+            raise AmbiguousNamespaceError("Namespace must be set to rename a job.")
+        with self._session() as session:
+            ns_row = session.scalar(
+                select(_NamespaceRow).where(_NamespaceRow.name == self._namespace)
+            )
+            if ns_row is None:
+                raise ValueError(
+                    f"Namespace {self._namespace!r} not found in registry."
+                )
+            self._rename_registry_entry(
+                session, _JobRow, ns_row.namespace_id, old_name, new_name, "job"
+            )
+
+    def remap_job(self, old_name: str, new_name: str) -> None:
+        """Remap an orphaned job entry to a new name (recovery after code was renamed first).
+
+        Raises ValueError if old_name is not found or new_name already exists.
+        """
+        self.rename_job(old_name, new_name)
+
+    def rename_namespace(self, old_name: str, new_name: str) -> None:
+        """Rename a namespace in the registry. Run this before renaming in code/config.
+
+        Raises ValueError if old_name is not found or new_name already exists.
+        """
+        with self._session() as session:
+            row = session.scalar(
+                select(_NamespaceRow).where(_NamespaceRow.name == old_name)
+            )
+            if row is None:
+                raise ValueError(f"Namespace {old_name!r} not found in registry.")
+            if session.scalar(
+                select(_NamespaceRow).where(_NamespaceRow.name == new_name)
+            ) is not None:
+                raise ValueError(
+                    f"Namespace {new_name!r} already exists in registry."
+                )
+            row.name = new_name
+            session.commit()
+
+    def remap_namespace(self, old_name: str, new_name: str) -> None:
+        """Remap an orphaned namespace entry to a new name."""
+        self.rename_namespace(old_name, new_name)
+
+    def rename_event(self, old_name: str, new_name: str) -> None:
+        """Rename an event type in the registry. Run this before renaming in code.
+
+        Raises ValueError if old_name is not found or new_name already exists.
+        """
+        if self._namespace is None:
+            raise AmbiguousNamespaceError("Namespace must be set to rename an event.")
+        with self._session() as session:
+            ns_row = session.scalar(
+                select(_NamespaceRow).where(_NamespaceRow.name == self._namespace)
+            )
+            if ns_row is None:
+                raise ValueError(
+                    f"Namespace {self._namespace!r} not found in registry."
+                )
+            self._rename_registry_entry(
+                session, _EventRow, ns_row.namespace_id, old_name, new_name, "event"
+            )
+
+    def remap_event(self, old_name: str, new_name: str) -> None:
+        """Remap an orphaned event type entry to a new name."""
+        self.rename_event(old_name, new_name)
+
+    @staticmethod
+    def _rename_registry_entry(
+        session: Session,
+        row_class: type,
+        namespace_id: UUID,
+        old_name: str,
+        new_name: str,
+        kind: str,
+    ) -> None:
+        row = session.scalar(
+            select(row_class).where(
+                and_(row_class.namespace_id == namespace_id, row_class.name == old_name)
+            )
+        )
+        if row is None:
+            raise ValueError(f"{kind.capitalize()} {old_name!r} not found in registry.")
+        if (
+            session.scalar(
+                select(row_class).where(
+                    and_(
+                        row_class.namespace_id == namespace_id,
+                        row_class.name == new_name,
+                    )
+                )
+            )
+            is not None
+        ):
+            raise ValueError(
+                f"{kind.capitalize()} {new_name!r} already exists in registry."
+            )
+        row.name = new_name
+        session.commit()

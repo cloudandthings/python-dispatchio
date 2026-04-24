@@ -31,3 +31,4 @@ class OrchestratorRun(BaseModel):
     opened_at: datetime
     activated_at: datetime | None = None
     closed_at: datetime | None = None
+    namespace_id: UUID | None = None

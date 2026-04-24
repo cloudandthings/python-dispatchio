@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
@@ -32,6 +32,7 @@ class Attempt(BaseModel):
     trace: dict[str, Any] = Field(default_factory=dict)
     completion_event_trace: dict[str, Any] | None = None
     requested_by: str | None = None
+    job_id: UUID | None = None
 
     def is_finished(self) -> bool:
         return self.status in Status.finished()

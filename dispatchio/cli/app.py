@@ -34,12 +34,16 @@ from dispatchio.cli import root as _root  # noqa: F401,E402
 from dispatchio.cli.ctx import app as ctx_app  # noqa: E402
 from dispatchio.cli.graph import app as graph_app  # noqa: E402
 from dispatchio.cli.record import app as record_app  # noqa: E402
+from dispatchio.cli.rename import event_app, job_app, namespace_app  # noqa: E402
 from dispatchio.cli.retry import app as retry_app  # noqa: E402
 
 app.add_typer(record_app, name="record")
 app.add_typer(retry_app, name="retry")
 app.add_typer(ctx_app, name="context")
 app.add_typer(graph_app, name="graph")
+app.add_typer(job_app, name="job")
+app.add_typer(namespace_app, name="namespace")
+app.add_typer(event_app, name="event")
 
 
 if __name__ == "__main__":

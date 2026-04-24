@@ -35,3 +35,5 @@ class DeadLetter(BaseModel):
     raw_payload: dict[str, Any] = Field(default_factory=dict)
     resolved_at: datetime | None = None
     resolver_notes: str | None = None
+    namespace_id: UUID | None = None
+    job_id: UUID | None = None
