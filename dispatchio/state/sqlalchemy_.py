@@ -216,6 +216,7 @@ class _EventRow(_Base):
 
     __tablename__ = "events"
 
+    namespace: Mapped[str] = mapped_column(String(255), primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(255), primary_key=True)
     run_key: Mapped[str] = mapped_column(String(255), primary_key=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
@@ -381,6 +382,7 @@ def _apply_orchestrator_run_record_to_row(
 
 def _row_to_event(row: _EventRow) -> Event:
     return Event(
+        namespace=row.namespace,
         name=row.name,
         run_key=row.run_key,
         status=Status(row.status),
@@ -724,12 +726,17 @@ class SQLAlchemyStateStore(StateStore):
     # ------------------------------------------------------------------
 
     def set_event(self, event: Event) -> None:
-        """Upsert an event by (name, run_key). Last write wins."""
+        """Upsert an event by (namespace, name, run_key). Last write wins.
+
+        The event's own namespace field determines the target — the store's
+        namespace is not used here so that a caller can address any namespace.
+        """
         with self._lock or _nullctx():
             with Session(self._engine) as session:
                 row = session.scalar(
                     select(_EventRow).where(
                         and_(
+                            _EventRow.namespace == event.namespace,
                             _EventRow.name == event.name,
                             _EventRow.run_key == event.run_key,
                         )
@@ -737,6 +744,7 @@ class SQLAlchemyStateStore(StateStore):
                 )
                 if row is None:
                     row = _EventRow(
+                        namespace=event.namespace,
                         name=event.name,
                         run_key=event.run_key,
                         status=event.status.value,
@@ -751,12 +759,18 @@ class SQLAlchemyStateStore(StateStore):
                 session.commit()
 
     def get_event(self, name: str, run_key: str) -> Event | None:
-        """Return the event for (name, run_key), or None."""
+        """Return the event for (namespace, name, run_key), or None.
+
+        Raises AmbiguousNamespaceError if the store has no namespace set.
+        """
+        if self._namespace is None:
+            raise AmbiguousNamespaceError("Namespace must be set to get an event.")
         with self._lock or _nullctx():
             with Session(self._engine) as session:
                 row = session.scalar(
                     select(_EventRow).where(
                         and_(
+                            _EventRow.namespace == self._namespace,
                             _EventRow.name == name,
                             _EventRow.run_key == run_key,
                         )
@@ -765,12 +779,17 @@ class SQLAlchemyStateStore(StateStore):
                 return _row_to_event(row) if row is not None else None
 
     def list_events(self, run_key: str | None = None) -> list[Event]:
-        """List all events, optionally filtered by run_key."""
+        """List events for this store's namespace, optionally filtered by run_key.
+
+        If the store has no namespace set, returns events across all namespaces.
+        """
         with self._lock or _nullctx():
             with Session(self._engine) as session:
                 q = select(_EventRow)
+                if self._namespace is not None:
+                    q = q.where(_EventRow.namespace == self._namespace)
                 if run_key is not None:
                     q = q.where(_EventRow.run_key == run_key)
-                q = q.order_by(_EventRow.name, _EventRow.run_key)
+                q = q.order_by(_EventRow.namespace, _EventRow.name, _EventRow.run_key)
                 rows = session.scalars(q).all()
                 return [_row_to_event(r) for r in rows]

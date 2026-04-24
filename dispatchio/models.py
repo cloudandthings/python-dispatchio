@@ -273,6 +273,7 @@ Dependency = Annotated[JobDependency | EventDependency, Field(discriminator="kin
 
 
 class Event(BaseModel):
+    namespace: str = "default"  # target orchestrator namespace
     name: str
     run_key: str
     status: Status = Status.DONE

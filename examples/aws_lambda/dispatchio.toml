@@ -3,7 +3,7 @@
 # Environment variables should provide secrets/URLs in real deployments.
 
 [dispatchio]
-name = "aws-lambda-example"
+namespace = "aws-lambda-example"
 log_level = "INFO"
 default_cadence = "daily"
 

@@ -1,16 +1,17 @@
 # Dispatchio configuration — daily-etl orchestrator
 #
-# Each orchestrator has a unique name. This name appears in tick log entries
-# and is used to identify the orchestrator in the context registry.
+# Both orchestrators share one SQLite database; namespace isolates their state.
+# Events emitted by daily-etl can target weekly-reports by namespace.
 
 [dispatchio]
-name = "daily-etl"
+namespace = "daily-etl"
 log_level = "INFO"
 default_cadence = "daily"
 
 [dispatchio.state]
 backend = "sqlalchemy"
-connection_string = "sqlite:///daily-etl.db"
+connection_string = "sqlite:///dispatchio-example.db"
+tick_log_path = ".dispatchio/daily-etl/tick_log.jsonl"
 
 [dispatchio.receiver]
 backend  = "filesystem"
