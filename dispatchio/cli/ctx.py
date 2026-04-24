@@ -10,7 +10,7 @@ from dispatchio.cli.errors import handle_cli_errors
 from dispatchio.cli.errors import CliUserError
 
 
-app = typer.Typer(help="Manage named orchestrator contexts (config file pointers).")
+app = typer.Typer(help="Manage named orchestrator contexts (config file pointers).", no_args_is_help=True)
 
 
 @app.command("add")
