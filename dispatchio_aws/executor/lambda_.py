@@ -9,7 +9,7 @@ import boto3
 from beartype import beartype
 from botocore.client import BaseClient
 
-from dispatchio.models import AttemptRecord, Job, LambdaJob
+from dispatchio.models import Attempt, Job, LambdaJob
 from dispatchio_aws.executor.base import build_execution_context, render_payload
 
 
@@ -29,7 +29,7 @@ class LambdaExecutor:
     def submit(
         self,
         job: Job,
-        attempt: AttemptRecord,
+        attempt: Attempt,
         reference_time: datetime,
         timeout: float | None = None,
     ) -> None:

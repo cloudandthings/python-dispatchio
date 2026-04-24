@@ -9,7 +9,7 @@ import boto3
 from beartype import beartype
 from botocore.client import BaseClient
 
-from dispatchio.models import AttemptRecord, Job, Status, StepFunctionJob
+from dispatchio.models import Attempt, Job, Status, StepFunctionJob
 from dispatchio_aws.executor.base import build_execution_context, render_payload
 
 
@@ -29,7 +29,7 @@ class StepFunctionsExecutor:
     def submit(
         self,
         job: Job,
-        attempt: AttemptRecord,
+        attempt: Attempt,
         reference_time: datetime,
         timeout: float | None = None,
     ) -> None:
@@ -64,7 +64,7 @@ class StepFunctionsExecutor:
             "execution_name": execution_name,
         }
 
-    def poke(self, record: AttemptRecord) -> Status | None:
+    def poke(self, record: Attempt) -> Status | None:
         executor_trace = record.trace.get("executor", {})
         execution_arn = executor_trace.get("execution_arn")
         if not execution_arn:

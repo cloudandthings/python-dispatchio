@@ -5,7 +5,7 @@ from typing import Any
 from beartype import beartype
 
 from dispatchio.config.loader import load_config
-from dispatchio.models import AttemptRecord, Status
+from dispatchio.models import Attempt, Status
 from dispatchio.reporter import build_reporter
 from dispatchio.state.sqlalchemy_ import SQLAlchemyStateStore
 
@@ -72,7 +72,7 @@ def _handle_athena_event(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _lookup_attempt_by_execution_arn(execution_arn: str) -> AttemptRecord:
+def _lookup_attempt_by_execution_arn(execution_arn: str) -> Attempt:
     """Look up an attempt by execution_arn stored in trace.executor at submission time."""
     record = _get_store().get_attempt_by_executor_trace("execution_arn", execution_arn)
     if record is None:
@@ -82,7 +82,7 @@ def _lookup_attempt_by_execution_arn(execution_arn: str) -> AttemptRecord:
     return record
 
 
-def _lookup_attempt_by_query_execution_id(query_execution_id: str) -> AttemptRecord:
+def _lookup_attempt_by_query_execution_id(query_execution_id: str) -> Attempt:
     """Look up an attempt by query_execution_id stored in trace.executor at submission time."""
     record = _get_store().get_attempt_by_executor_trace(
         "query_execution_id", query_execution_id
@@ -94,7 +94,7 @@ def _lookup_attempt_by_query_execution_id(query_execution_id: str) -> AttemptRec
     return record
 
 
-def _report_completion_from_record(record: AttemptRecord, status: Status) -> None:
+def _report_completion_from_record(record: Attempt, status: Status) -> None:
     reporter = build_reporter(load_config().receiver)
     if reporter is None:
         raise RuntimeError(

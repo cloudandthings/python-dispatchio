@@ -7,7 +7,7 @@ from rich.table import Table
 from rich.text import Text
 
 from dispatchio.contexts import ContextEntry
-from dispatchio.models import AttemptRecord, RetryRequest, TickResult
+from dispatchio.models import Attempt, RetryRequest, TickResult
 from dispatchio.tick_log import TickLogRecord
 
 
@@ -94,7 +94,7 @@ def print_graph_summary(
         print_info(f"  producer     : {producer_name} {producer_version}")
 
 
-def print_records(records: list[AttemptRecord]) -> None:
+def print_records(records: list[Attempt]) -> None:
     table = Table(show_header=True, header_style="bold")
 
     namespaces = {r.namespace for r in records if r.namespace is not None}

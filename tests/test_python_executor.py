@@ -4,11 +4,11 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from dispatchio.executor.python_ import PythonJobExecutor
-from dispatchio.models import AttemptRecord, Job, PythonJob, Status, TriggerType
+from dispatchio.models import Attempt, Job, PythonJob, Status, TriggerType
 
 
-def _make_attempt() -> AttemptRecord:
-    return AttemptRecord(
+def _make_attempt() -> Attempt:
+    return Attempt(
         job_name="job_a",
         run_key="20250115",
         attempt=0,

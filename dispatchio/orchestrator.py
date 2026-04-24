@@ -51,17 +51,17 @@ from dispatchio.models import (
     JobAction,
     Job,
     JobTickResult,
-    AttemptRecord,
+    Attempt,
     RetryRequest,
     Status,
     TickResult,
     TriggerType,
     DeadLetterReasonCode,
-    DeadLetterRecord,
+    DeadLetter,
     DeadLetterSourceBackend,
     DeadLetterStatus,
     OrchestratorRunMode,
-    OrchestratorRunRecord,
+    OrchestratorRun,
     OrchestratorRunStatus,
 )
 from dispatchio.receiver.base import StatusEvent, StatusReceiver
@@ -309,7 +309,7 @@ class Orchestrator:
         submitted_by: str | None = None,
         reason: str | None = None,
         force: bool = False,
-    ) -> list[OrchestratorRunRecord]:
+    ) -> list[OrchestratorRun]:
         """Create pending backfill runs for an inclusive range."""
         run_keys = self.plan_backfill(start=start, end=end)
         return self._enqueue_run_keys(
@@ -329,7 +329,7 @@ class Orchestrator:
         submitted_by: str | None = None,
         reason: str | None = None,
         force: bool = False,
-    ) -> list[OrchestratorRunRecord]:
+    ) -> list[OrchestratorRun]:
         """Create pending replay runs for explicit orchestrator run keys."""
         if not run_keys:
             raise ValueError("run_keys cannot be empty")
@@ -347,14 +347,14 @@ class Orchestrator:
         *,
         status: OrchestratorRunStatus | None = None,
         mode: OrchestratorRunMode | None = None,
-    ) -> list[OrchestratorRunRecord]:
+    ) -> list[OrchestratorRun]:
         """List orchestrator runs for this orchestrator."""
         return self.state.list_orchestrator_runs(
             status=status,
             mode=mode,
         )
 
-    def show_run(self, orchestrator_run_id: UUID) -> OrchestratorRunRecord:
+    def show_run(self, orchestrator_run_id: UUID) -> OrchestratorRun:
         """Get a single run by ID, scoped to this orchestrator."""
         record = self.state.get_orchestrator_run(orchestrator_run_id)
         if record is None or record.namespace != self.namespace:
@@ -365,7 +365,7 @@ class Orchestrator:
 
     def resume_run(
         self, orchestrator_run_id: UUID, *, reason: str | None = None
-    ) -> OrchestratorRunRecord:
+    ) -> OrchestratorRun:
         """Resume a blocked/pending/failed run by moving it back to ACTIVE."""
         record = self.show_run(orchestrator_run_id)
         if record.status == OrchestratorRunStatus.CANCELLED:
@@ -383,7 +383,7 @@ class Orchestrator:
 
     def cancel_run(
         self, orchestrator_run_id: UUID, *, reason: str | None = None
-    ) -> OrchestratorRunRecord:
+    ) -> OrchestratorRun:
         """Cancel a run and mark it terminal."""
         record = self.show_run(orchestrator_run_id)
         updated = record.model_copy(
@@ -405,8 +405,8 @@ class Orchestrator:
         submitted_by: str | None,
         reason: str | None,
         force: bool,
-    ) -> list[OrchestratorRunRecord]:
-        created_or_updated: list[OrchestratorRunRecord] = []
+    ) -> list[OrchestratorRun]:
+        created_or_updated: list[OrchestratorRun] = []
         now = datetime.now(tz=timezone.utc)
 
         for run_key in run_keys:
@@ -431,7 +431,7 @@ class Orchestrator:
                 created_or_updated.append(updated)
                 continue
 
-            record = OrchestratorRunRecord(
+            record = OrchestratorRun(
                 namespace=self.namespace,
                 run_key=run_key,
                 status=OrchestratorRunStatus.PENDING,
@@ -714,7 +714,7 @@ class Orchestrator:
 
         if not dry_run:
             self.state.append_orchestrator_run(
-                OrchestratorRunRecord(
+                OrchestratorRun(
                     namespace=self.namespace,
                     run_key=scheduled_run_key,
                     status=OrchestratorRunStatus.ACTIVE,
@@ -850,7 +850,7 @@ class Orchestrator:
         #     else DeadLetterSourceBackend.OTHER
         # )
 
-        dead_letter = DeadLetterRecord(
+        dead_letter = DeadLetter(
             dead_letter_id=uuid4(),
             occurred_at=now,
             source_backend=DeadLetterSourceBackend.OTHER,
@@ -1012,7 +1012,7 @@ class Orchestrator:
     def _plan_retry(
         self,
         job: Job,
-        record: AttemptRecord,
+        record: Attempt,
         run_key: str,
         cadence: Cadence,
         reference_time: datetime,
@@ -1157,7 +1157,7 @@ class Orchestrator:
 
         now = reference_time
         correlation_id = uuid4()
-        record = AttemptRecord(
+        record = Attempt(
             namespace=self.namespace,
             job_name=job.name,
             run_key=run_key,
@@ -1405,7 +1405,7 @@ class Orchestrator:
     # Alert helpers
     # ------------------------------------------------------------------
 
-    def _check_terminal_alerts(self, job: Job, record: AttemptRecord) -> None:
+    def _check_terminal_alerts(self, job: Job, record: Attempt) -> None:
         for cond in job.alerts:
             if cond.on == AlertOn.ERROR and record.status == Status.ERROR:
                 self._emit_alert(
@@ -1431,7 +1431,7 @@ class Orchestrator:
         job: Job,
         run_key: str,
         reference_time: datetime,
-        existing: AttemptRecord | None,
+        existing: Attempt | None,
         cadence: Cadence,
     ) -> None:
         if existing is not None:
@@ -1456,7 +1456,7 @@ class Orchestrator:
         job: Job,
         run_key: str,
         detail: str | None,
-        record: AttemptRecord | None,
+        record: Attempt | None,
         channels: list[str] | None = None,
     ) -> None:
         if channels is None:
@@ -1481,7 +1481,7 @@ class Orchestrator:
         run_key: str,
         requested_by: str,
         request_reason: str,
-    ) -> AttemptRecord:
+    ) -> Attempt:
         """
         Create a new manual retry attempt for a job.
 
@@ -1496,7 +1496,7 @@ class Orchestrator:
             request_reason: Explanation for manual retry
 
         Returns:
-            The newly created AttemptRecord (SUBMITTED status)
+            The newly created Attempt (SUBMITTED status)
 
         Raises:
             ValueError: If job not found, or latest attempt not in terminal state
@@ -1525,7 +1525,7 @@ class Orchestrator:
         now = datetime.now(tz=timezone.utc)
 
         # Submit via the normal execution path so the job is actually dispatched.
-        # _submit writes the AttemptRecord (SUBMITTED) then calls executor.submit().
+        # _submit writes the Attempt (SUBMITTED) then calls executor.submit().
         self._submit(
             job=job,
             run_key=run_key,
@@ -1569,7 +1569,7 @@ class Orchestrator:
 
     def manual_cancel(
         self, correlation_id: str, requested_by: str, request_reason: str
-    ) -> AttemptRecord:
+    ) -> Attempt:
         """
         Manually cancel a running or queued attempt.
 
@@ -1582,7 +1582,7 @@ class Orchestrator:
             request_reason: Explanation for cancellation
 
         Returns:
-            The updated AttemptRecord (CANCELLED status)
+            The updated Attempt (CANCELLED status)
 
         Raises:
             ValueError: If attempt not found or already terminal

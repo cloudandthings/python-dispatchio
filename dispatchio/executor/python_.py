@@ -26,7 +26,7 @@ from uuid import UUID
 
 import psutil
 
-from dispatchio.models import AttemptRecord, Job, PythonJob, Status
+from dispatchio.models import Attempt, Job, PythonJob, Status
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ class PythonJobExecutor:
     def submit(
         self,
         job: Job,
-        attempt: AttemptRecord,
+        attempt: Attempt,
         reference_time: datetime,
         timeout: float | None = None,
     ) -> None:
@@ -109,7 +109,7 @@ class PythonJobExecutor:
             "start_time": time.time(),
         }
 
-    def poke(self, record: AttemptRecord) -> Status | None:
+    def poke(self, record: Attempt) -> Status | None:
         """
         Check whether the spawned subprocess is still alive.
 
@@ -171,7 +171,7 @@ class PythonJobExecutor:
     def get_executor_reference(self, correlation_id: UUID) -> dict | None:
         """
         Retrieve the executor reference for an attempt UUID.
-        Used by orchestrator to populate AttemptRecord.trace.executor.
+        Used by orchestrator to populate Attempt.trace.executor.
         Returns {"pid": ..., "start_time": ...} or None if not tracked.
         """
         return self._references.get(str(correlation_id))

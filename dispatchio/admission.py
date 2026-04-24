@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 
-from dispatchio.models import AdmissionPolicy, AttemptRecord, JobAction, Status
+from dispatchio.models import AdmissionPolicy, Attempt, JobAction, Status
 
 
 @dataclass(frozen=True)
@@ -37,7 +37,7 @@ class AdmissionPlan:
 
 def build_admission_plan(
     candidates: list[AdmissionCandidate],
-    active_attempts: list[AttemptRecord],
+    active_attempts: list[Attempt],
     job_pool_by_name: dict[str, str],
     policy: AdmissionPolicy,
 ) -> AdmissionPlan:

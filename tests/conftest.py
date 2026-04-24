@@ -10,7 +10,7 @@ from uuid import uuid4
 from rich.console import Console
 
 from dispatchio.state.sqlalchemy_ import SQLAlchemyStateStore
-from dispatchio.models import Job, SubprocessJob, AttemptRecord, Status
+from dispatchio.models import Job, SubprocessJob, Attempt, Status
 
 
 REFERENCE_TIME = datetime(2025, 1, 15, 2, 30, tzinfo=timezone.utc)
@@ -39,8 +39,8 @@ def simple_job():
 def make_attempt(
     job_name="job", run_key="20250115", attempt=0, status=Status.DONE, **kw
 ):
-    """Helper to create AttemptRecord for tests."""
-    return AttemptRecord(
+    """Helper to create Attempt for tests."""
+    return Attempt(
         job_name=job_name,
         run_key=run_key,
         attempt=attempt,

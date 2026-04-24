@@ -5,7 +5,7 @@ from uuid import uuid4
 import boto3
 from moto import mock_aws
 
-from dispatchio.models import AttemptRecord, Status, TriggerType
+from dispatchio.models import Attempt, Status, TriggerType
 from dispatchio.state.sqlalchemy_ import SQLAlchemyStateStore
 from dispatchio_aws.receiver.sqs import SQSReceiver
 from dispatchio_aws.worker.completion_handler import handler
@@ -32,7 +32,7 @@ def test_stepfunctions_completion_handler_posts_to_sqs(monkeypatch, tmp_path) ->
     execution_arn = (
         "arn:aws:states:eu-west-1:123456789012:execution:my-sfn:ingest--20260418--0"
     )
-    record = AttemptRecord(
+    record = Attempt(
         job_name="ingest",
         run_key="20260418",
         attempt=0,
@@ -90,7 +90,7 @@ def test_athena_completion_handler_resolves_context_from_state(
 
     store = SQLAlchemyStateStore(f"sqlite:///{db_path}")
     correlation_id = uuid4()
-    record = AttemptRecord(
+    record = Attempt(
         job_name="athena-job",
         run_key="20260418",
         attempt=0,

@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from uuid import uuid4
-from dispatchio.models import AttemptRecord, TriggerType
+from dispatchio.models import Attempt, TriggerType
 from dispatchio import Status, run_loop
 from examples.dependency_modes.jobs import orchestrator
 
@@ -37,7 +37,7 @@ RUN_KEY = REF.strftime("%Y%m%d")  # "20250115"
 # Seed the state store to simulate entity results without running the jobs.
 def _seed(job_name: str, status: Status, reason: str | None = None) -> None:
     orchestrator.state.append_attempt(
-        AttemptRecord(
+        Attempt(
             job_name=job_name,
             run_key=RUN_KEY,
             attempt=0,

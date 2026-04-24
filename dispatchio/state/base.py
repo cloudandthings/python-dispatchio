@@ -12,10 +12,10 @@ from abc import ABC, abstractmethod
 from uuid import UUID
 
 from dispatchio.models import (
-    AttemptRecord,
-    DeadLetterRecord,
+    Attempt,
+    DeadLetter,
     Event,
-    OrchestratorRunRecord,
+    OrchestratorRun,
     OrchestratorRunStatus,
     OrchestratorRunMode,
     RetryRequest,
@@ -52,7 +52,7 @@ class StateStore(ABC):
     # ---------------------------------------------------------------------------
 
     @abstractmethod
-    def get_latest_attempt(self, job_name: str, run_key: str) -> AttemptRecord | None:
+    def get_latest_attempt(self, job_name: str, run_key: str) -> Attempt | None:
         """
         Return the most recent attempt for (job_name, run_key).
         Returns None if no attempts exist for this key.
@@ -62,12 +62,12 @@ class StateStore(ABC):
         ...
 
     @abstractmethod
-    def get_attempt(self, correlation_id: str) -> AttemptRecord | None:
+    def get_attempt(self, correlation_id: str) -> Attempt | None:
         """Return the attempt matching the given correlation_id, or None."""
         ...
 
     @abstractmethod
-    def append_attempt(self, record: AttemptRecord) -> None:
+    def append_attempt(self, record: Attempt) -> None:
         """
         Insert a new immutable attempt row.
         The attempt number is auto-allocated as max(attempt)+1 for the given
@@ -77,7 +77,7 @@ class StateStore(ABC):
         ...
 
     @abstractmethod
-    def update_attempt(self, record: AttemptRecord) -> None:
+    def update_attempt(self, record: Attempt) -> None:
         """
         Update an existing attempt row by correlation_id.
         Used when changing status, adding trace metadata, or appending
@@ -92,7 +92,7 @@ class StateStore(ABC):
         run_key: str | None = None,
         attempt: int | None = None,
         status: Status | None = None,
-    ) -> list[AttemptRecord]:
+    ) -> list[Attempt]:
         """
         Return all attempts matching the given filters.
         If no filters provided, returns all attempts.
@@ -103,7 +103,7 @@ class StateStore(ABC):
     @abstractmethod
     def get_attempt_by_executor_trace(
         self, trace_key: str, trace_value: str
-    ) -> AttemptRecord | None:
+    ) -> Attempt | None:
         """Find the first attempt whose trace.executor[trace_key] == trace_value."""
         ...
 
@@ -112,12 +112,12 @@ class StateStore(ABC):
     # ---------------------------------------------------------------------------
 
     @abstractmethod
-    def append_dead_letter(self, record: DeadLetterRecord) -> None:
+    def append_dead_letter(self, record: DeadLetter) -> None:
         """Record a rejected completion event in the dead-letter log."""
         ...
 
     @abstractmethod
-    def get_dead_letter(self, dead_letter_id: UUID) -> DeadLetterRecord | None:
+    def get_dead_letter(self, dead_letter_id: UUID) -> DeadLetter | None:
         """Retrieve a dead-letter record by ID."""
         ...
 
@@ -126,7 +126,7 @@ class StateStore(ABC):
         self,
         job_name: str | None = None,
         status: str | None = None,
-    ) -> list[DeadLetterRecord]:
+    ) -> list[DeadLetter]:
         """Return dead-letter records, optionally filtered by job_name and status."""
         ...
 
@@ -153,7 +153,7 @@ class StateStore(ABC):
     # ---------------------------------------------------------------------------
 
     @abstractmethod
-    def append_orchestrator_run(self, record: OrchestratorRunRecord) -> None:
+    def append_orchestrator_run(self, record: OrchestratorRun) -> None:
         """
         Insert a new orchestrator run record.
         Raises if run_key would violate unique constraint.
@@ -161,14 +161,12 @@ class StateStore(ABC):
         ...
 
     @abstractmethod
-    def get_orchestrator_run(
-        self, orchestrator_run_id: UUID
-    ) -> OrchestratorRunRecord | None:
+    def get_orchestrator_run(self, orchestrator_run_id: UUID) -> OrchestratorRun | None:
         """Retrieve an orchestrator run by its UUID."""
         ...
 
     @abstractmethod
-    def get_orchestrator_run_by_key(self, run_key: str) -> OrchestratorRunRecord | None:
+    def get_orchestrator_run_by_key(self, run_key: str) -> OrchestratorRun | None:
         """Retrieve an orchestrator run by run key."""
         ...
 
@@ -177,7 +175,7 @@ class StateStore(ABC):
         self,
         status: OrchestratorRunStatus | None = None,
         mode: OrchestratorRunMode | None = None,
-    ) -> list[OrchestratorRunRecord]:
+    ) -> list[OrchestratorRun]:
         """
         List orchestrator runs, optionally filtered by status and/or mode.
         Results sorted by opened_at DESC.
@@ -185,7 +183,7 @@ class StateStore(ABC):
         ...
 
     @abstractmethod
-    def update_orchestrator_run(self, record: OrchestratorRunRecord) -> None:
+    def update_orchestrator_run(self, record: OrchestratorRun) -> None:
         """
         Update an existing orchestrator run record by orchestrator_run_id.
         Used when changing status, updating checkpoint, or recording activation/closure.

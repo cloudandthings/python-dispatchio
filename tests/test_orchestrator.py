@@ -26,7 +26,7 @@ from dispatchio.models import (
     AdmissionPolicy,
     AlertCondition,
     AlertOn,
-    AttemptRecord,
+    Attempt,
     DependencyMode,
     JobAction,
     Job,
@@ -38,7 +38,7 @@ from dispatchio.models import (
     DeadLetterReasonCode,
     DeadLetterSourceBackend,
     OrchestratorRunMode,
-    OrchestratorRunRecord,
+    OrchestratorRun,
     OrchestratorRunStatus,
     TriggerType,
 )
@@ -99,11 +99,11 @@ def _attempt(
     reason: str | None = None,
     attempt: int = 0,
     correlation_id: UUID | None = None,
-) -> AttemptRecord:
-    """Helper to create AttemptRecord for tests."""
+) -> Attempt:
+    """Helper to create Attempt for tests."""
     if correlation_id is None:
         correlation_id = uuid4()
-    return AttemptRecord(
+    return Attempt(
         job_name=job_name,
         run_key=run_key,
         attempt=attempt,
@@ -197,7 +197,7 @@ class TestOrchestratorRunSelection:
         j = _job("simple")
         orch, store, _ = _make_orch([j])
 
-        run = OrchestratorRunRecord(
+        run = OrchestratorRun(
             namespace="default",
             run_key="20250114",
             status=OrchestratorRunStatus.PENDING,
@@ -221,7 +221,7 @@ class TestOrchestratorRunSelection:
         j = _job("simple")
         orch, store, _ = _make_orch([j])
 
-        run = OrchestratorRunRecord(
+        run = OrchestratorRun(
             namespace="default",
             run_key="20250114",
             status=OrchestratorRunStatus.PENDING,

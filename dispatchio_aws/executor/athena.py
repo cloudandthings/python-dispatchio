@@ -8,7 +8,7 @@ import boto3
 from beartype import beartype
 from botocore.client import BaseClient
 
-from dispatchio.models import AttemptRecord, AthenaJob, Job, Status
+from dispatchio.models import Attempt, AthenaJob, Job, Status
 
 
 @beartype
@@ -27,7 +27,7 @@ class AthenaExecutor:
     def submit(
         self,
         job: Job,
-        attempt: AttemptRecord,
+        attempt: Attempt,
         reference_time: datetime,
         timeout: float | None = None,
     ) -> None:
@@ -49,7 +49,7 @@ class AthenaExecutor:
             "workgroup": cfg.workgroup,
         }
 
-    def poke(self, record: AttemptRecord) -> Status | None:
+    def poke(self, record: Attempt) -> Status | None:
         executor_trace = record.trace.get("executor", {})
         query_execution_id = executor_trace.get("query_execution_id")
         if not query_execution_id:

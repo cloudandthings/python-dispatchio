@@ -22,7 +22,7 @@ from dispatchio.cli.options import (
     RunKeyOption,
     RunKeyRequiredOption,
 )
-from dispatchio.models import AttemptRecord, Status
+from dispatchio.models import Attempt, Status
 
 
 app = typer.Typer(help="Create and list manual retry requests.")
@@ -63,7 +63,7 @@ def retry_create(
         target_jobs = list(jobs)
     else:
         all_attempts = orch.state.list_attempts(run_key=run_key)
-        latest_by_job: dict[str, AttemptRecord] = {}
+        latest_by_job: dict[str, Attempt] = {}
         for rec in all_attempts:
             if (
                 rec.job_name not in latest_by_job
