@@ -198,15 +198,26 @@ class StateStore(ABC):
 
     @abstractmethod
     def set_event(self, event: Event) -> None:
-        """Upsert an event by (name, run_key). Last write wins."""
+        """Upsert an event by (namespace, name, run_key). Last write wins.
+
+        The event's own namespace field determines the target orchestrator.
+        The store's namespace is not used — callers can address any namespace.
+        """
         ...
 
     @abstractmethod
     def get_event(self, name: str, run_key: str) -> Event | None:
-        """Return the event for (name, run_key), or None."""
+        """Return the event for (namespace, name, run_key), or None.
+
+        Filters by the store's namespace. Raises AmbiguousNamespaceError if
+        the store has no namespace set.
+        """
         ...
 
     @abstractmethod
     def list_events(self, run_key: str | None = None) -> list[Event]:
-        """List all events, optionally filtered by run_key."""
+        """List events for this store's namespace, optionally filtered by run_key.
+
+        If the store has no namespace set, returns events across all namespaces.
+        """
         ...

@@ -45,7 +45,7 @@ def load_store_from_context(
         try:
             settings = load_config(entry.config_path)
             namespace = (
-                None if all_namespaces else getattr(settings, "namespace", "default")
+                None if all_namespaces else settings.namespace
             )
             return _build_state(settings.state, namespace=namespace)  # type: ignore[return-value]
         except Exception as exc:
@@ -57,7 +57,7 @@ def load_store_from_context(
         settings = load_config()
         if settings is not None:
             namespace = (
-                None if all_namespaces else getattr(settings, "namespace", "default")
+                None if all_namespaces else settings.namespace
             )
             return _build_state(settings.state, namespace=namespace)  # type: ignore[return-value]
     except Exception as exc:

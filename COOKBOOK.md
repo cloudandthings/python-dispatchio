@@ -1378,44 +1378,43 @@ def report(run_key: str) -> None:
 
 ```python
 """
-Multi-Orchestrator example — two named orchestrators, one tick log each.
+Multi-Orchestrator example — two named orchestrators, one shared database.
 
-This example creates two independent orchestrators:
-  - daily-etl      (ingest → transform, DAILY cadence)
-  - weekly-reports (aggregate → report, WEEKLY cadence)
+  daily-etl      ingest → transform            (DAILY cadence)
+  weekly-reports aggregate → report            (WEEKLY cadence)
 
-Each has its own config file, its own state directory, and its own tick log.
-After running, you can register both as named contexts and query them from
-anywhere on your machine:
+Both orchestrators share dispatchio-example.db. Namespace isolation means
+each only sees its own job state; the --all-namespaces CLI flag lets you
+query across both.
 
-    dispatchio context add daily-etl examples/multi_orchestrator/daily.toml
-    dispatchio context add weekly-reports examples/multi_orchestrator/weekly.toml
-    dispatchio context use daily-etl
-
-    dispatchio ticks                          # daily-etl tick history
-    dispatchio ticks --context weekly-reports # weekly-reports tick history
-    dispatchio status                         # daily-etl job status
-    dispatchio status --context weekly-reports
+Cross-namespace signalling: after daily-etl finishes, it emits a
+"daily-complete" event targeting weekly-reports. The aggregate job waits
+on that event before running, demonstrating deliberate cross-orchestrator
+dependency without any shared job definitions.
 
 Run:
     python examples/multi_orchestrator/run.py
+
+Register as named contexts to query from anywhere:
+    dispatchio context add daily-etl     examples/multi_orchestrator/daily.toml
+    dispatchio context add weekly-reports examples/multi_orchestrator/weekly.toml
+    dispatchio context use daily-etl
+
+    dispatchio status                              # daily-etl jobs
+    dispatchio status --context weekly-reports     # weekly-reports jobs
+    dispatchio status --all-namespaces             # both, with NAMESPACE column
 """
 
-import sys
 import logging
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
-from dispatchio import (
-    Job,
-    PythonJob,
-    WEEKLY,
-    run_loop,
-    orchestrator,
-    resolve_run_key,
-)
+from dispatchio import DAILY, WEEKLY, Job, PythonJob, orchestrator, resolve_run_key, run_loop
+from dispatchio.events import event_dependency
+from dispatchio.models import Event
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -1423,7 +1422,7 @@ BASE = Path(__file__).parent
 REFERENCE_TIME = datetime(2026, 4, 14, 9, 0, 0, tzinfo=timezone.utc)
 
 # ---------------------------------------------------------------------------
-# Daily orchestrator — ingest then transform
+# daily-etl — ingest then transform
 # ---------------------------------------------------------------------------
 
 ingest = Job.create(
@@ -1443,12 +1442,16 @@ daily = orchestrator(
 )
 
 # ---------------------------------------------------------------------------
-# Weekly orchestrator — aggregate then report
+# weekly-reports — waits for daily signal, then aggregate and report
 # ---------------------------------------------------------------------------
 
+# aggregate blocks until daily-etl emits "daily-complete" into this namespace.
+# The run_key weekly-reports evaluates is used as-is for the event lookup, so
+# the emitter below uses resolve_run_key(WEEKLY, ...) to match it exactly.
 aggregate = Job.create(
     "aggregate",
     executor=PythonJob(script=str(BASE / "my_work.py"), function="aggregate"),
+    depends_on=[event_dependency("daily-complete")],
 )
 
 report = Job.create(
@@ -1460,23 +1463,38 @@ report = Job.create(
 weekly = orchestrator(
     [aggregate, report],
     config=str(BASE / "weekly.toml"),
+    strict_dependencies=False,  # EventDependency names are not in the job index
 )
 
 # ---------------------------------------------------------------------------
-# Run both orchestrators
+# Step 1 — run daily-etl to completion
 # ---------------------------------------------------------------------------
 
 print(f"\n{'─' * 60}")
-print(f"  Orchestrator: {daily.namespace}  (reference: {REFERENCE_TIME.date()})")
+print(f"  daily-etl  (reference: {REFERENCE_TIME.date()})")
 print(f"{'─' * 60}\n")
 run_loop(daily, reference_time=REFERENCE_TIME, tick_interval=0.5)
 
-print(f"\n{'─' * 60}")
-print(f"  Orchestrator: {weekly.namespace}  (reference: {REFERENCE_TIME.date()})")
-print(f"{'─' * 60}\n")
-# run_loop() uses a daily run_key by default; supply the correct weekly stop condition
-# so it exits once both weekly jobs are done.
+# ---------------------------------------------------------------------------
+# Step 2 — signal weekly-reports that daily is done
+# ---------------------------------------------------------------------------
+
+# The event run_key must match what weekly-reports will evaluate, so we
+# resolve the weekly run_key from the same reference time.
 weekly_run_key = resolve_run_key(WEEKLY, REFERENCE_TIME)
+
+print(f"\n  → Emitting 'daily-complete' → weekly-reports  (run_key: {weekly_run_key})")
+daily.state.set_event(
+    Event(namespace="weekly-reports", name="daily-complete", run_key=weekly_run_key)
+)
+
+# ---------------------------------------------------------------------------
+# Step 3 — run weekly-reports (aggregate is now unblocked by the event)
+# ---------------------------------------------------------------------------
+
+print(f"\n{'─' * 60}")
+print(f"  weekly-reports  (reference: {REFERENCE_TIME.date()})")
+print(f"{'─' * 60}\n")
 run_loop(
     weekly,
     reference_time=REFERENCE_TIME,
@@ -1488,7 +1506,7 @@ run_loop(
 )
 
 # ---------------------------------------------------------------------------
-# Show tick log summary for each orchestrator
+# Tick log summary for both orchestrators
 # ---------------------------------------------------------------------------
 
 print(f"\n{'─' * 60}")
@@ -1504,16 +1522,13 @@ for orch in [daily, weekly]:
         sum(1 for a in r.actions if a["action"] == "submitted") for r in records
     )
     print(f"  {orch.namespace}:")
-    print(f"    {len(records)} tick(s) recorded, {submitted_total} total submission(s)")
+    print(f"    {len(records)} tick(s), {submitted_total} total submission(s)")
     for r in records:
-        n_submitted = sum(1 for a in r.actions if a["action"] == "submitted")
-        print(
-            f"    [{r.ticked_at}]  ref={r.reference_time[:10]}"
-            f"  {r.duration_seconds:.2f}s  {n_submitted} submitted"
-        )
+        n = sum(1 for a in r.actions if a["action"] == "submitted")
+        print(f"    [{r.ticked_at}]  ref={r.reference_time[:10]}  {r.duration_seconds:.2f}s  {n} submitted")
 
 # ---------------------------------------------------------------------------
-# Show how to register these as contexts
+# CLI usage hints
 # ---------------------------------------------------------------------------
 
 print(f"\n{'─' * 60}")
@@ -1521,14 +1536,13 @@ print("  Register as contexts and query from anywhere:")
 print(f"{'─' * 60}\n")
 daily_cfg = (BASE / "daily.toml").resolve()
 weekly_cfg = (BASE / "weekly.toml").resolve()
-print(f"    dispatchio context add daily-etl {daily_cfg}")
+print(f"    dispatchio context add daily-etl      {daily_cfg}")
 print(f"    dispatchio context add weekly-reports {weekly_cfg}")
 print("    dispatchio context use daily-etl")
 print()
-print("    dispatchio ticks                           # daily-etl history")
-print("    dispatchio ticks --context weekly-reports  # weekly-reports history")
-print("    dispatchio status                          # daily-etl job status")
-print("    dispatchio status --context weekly-reports")
+print("    dispatchio status                              # daily-etl jobs")
+print("    dispatchio status --context weekly-reports     # weekly-reports jobs")
+print("    dispatchio status --all-namespaces             # both, with NAMESPACE column")
 print()
 ```
 
@@ -1617,7 +1631,7 @@ if __name__ == "__main__":
 # Environment variables should provide secrets/URLs in real deployments.
 
 [dispatchio]
-name = "aws-lambda-example"
+namespace = "aws-lambda-example"
 log_level = "INFO"
 default_cadence = "daily"
 

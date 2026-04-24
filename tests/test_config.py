@@ -378,6 +378,7 @@ class TestOrchestratorFromConfig:
 
     def test_unknown_state_backend_raises(self, simple_job):
         settings = DispatchioSettings.__new__(DispatchioSettings)
+        object.__setattr__(settings, "namespace", "default")
         object.__setattr__(settings, "log_level", "INFO")
         object.__setattr__(
             settings, "state", StateSettings.model_construct(backend="unknown")

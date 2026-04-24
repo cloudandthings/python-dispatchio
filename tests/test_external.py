@@ -378,3 +378,111 @@ class TestEventDependencyInGraph:
         )
         orch, _, _ = _make_orch([upstream, consumer])
         assert orch is not None
+
+
+# ---------------------------------------------------------------------------
+# Cross-namespace event targeting
+# ---------------------------------------------------------------------------
+
+
+def _shared_stores(ns_a: str, ns_b: str):
+    """Two scoped stores and one unscoped store backed by the same SQLite DB."""
+    store_a = SQLAlchemyStateStore("sqlite:///:memory:", namespace=ns_a)
+
+    def _clone(ns):
+        s = SQLAlchemyStateStore.__new__(SQLAlchemyStateStore)
+        s._engine = store_a._engine
+        s._Session = store_a._Session
+        s._lock = store_a._lock
+        s._namespace = ns
+        return s
+
+    return store_a, _clone(ns_b), _clone(None)
+
+
+class TestCrossNamespaceEvents:
+    def test_event_addressed_to_other_namespace_not_visible_here(self):
+        """An event targeting orch_b must not appear in orch_a's get_event."""
+        store_a, store_b, _ = _shared_stores("orch_a", "orch_b")
+        store_a.set_event(Event(namespace="orch_b", name="signal", run_key=RUN_KEY))
+
+        assert store_a.get_event("signal", RUN_KEY) is None
+
+    def test_event_addressed_to_namespace_is_visible_there(self):
+        """An event targeting orch_b is visible to a store scoped to orch_b."""
+        store_a, store_b, _ = _shared_stores("orch_a", "orch_b")
+        store_a.set_event(Event(namespace="orch_b", name="signal", run_key=RUN_KEY))
+
+        result = store_b.get_event("signal", RUN_KEY)
+        assert result is not None
+        assert result.namespace == "orch_b"
+        assert result.name == "signal"
+
+    def test_same_event_name_distinct_per_namespace(self):
+        """(namespace, name, run_key) are independent — no collision across namespaces."""
+        store_a, store_b, _ = _shared_stores("orch_a", "orch_b")
+        store_a.set_event(
+            Event(namespace="orch_a", name="feed", run_key=RUN_KEY, status=Status.DONE)
+        )
+        store_a.set_event(
+            Event(namespace="orch_b", name="feed", run_key=RUN_KEY, status=Status.ERROR)
+        )
+
+        assert store_a.get_event("feed", RUN_KEY).status == Status.DONE
+        assert store_b.get_event("feed", RUN_KEY).status == Status.ERROR
+
+    def test_list_events_scoped_store_only_sees_own_namespace(self):
+        store_a, store_b, _ = _shared_stores("orch_a", "orch_b")
+        store_a.set_event(Event(namespace="orch_a", name="ev", run_key=RUN_KEY))
+        store_a.set_event(Event(namespace="orch_b", name="ev", run_key=RUN_KEY))
+
+        events_a = store_a.list_events()
+        assert all(e.namespace == "orch_a" for e in events_a)
+        assert len(events_a) == 1
+
+    def test_list_events_unscoped_store_sees_all_namespaces(self):
+        store_a, store_b, unscoped = _shared_stores("orch_a", "orch_b")
+        store_a.set_event(Event(namespace="orch_a", name="ev", run_key=RUN_KEY))
+        store_a.set_event(Event(namespace="orch_b", name="ev", run_key=RUN_KEY))
+
+        events = unscoped.list_events()
+        namespaces = {e.namespace for e in events}
+        assert namespaces == {"orch_a", "orch_b"}
+
+    def test_get_event_raises_on_unscoped_store(self):
+        from dispatchio.state.base import AmbiguousNamespaceError
+
+        _, _, unscoped = _shared_stores("orch_a", "orch_b")
+        with pytest.raises(AmbiguousNamespaceError):
+            unscoped.get_event("signal", RUN_KEY)
+
+    def test_cross_namespace_event_satisfies_orchestrator_dependency(self):
+        """Orchestrator 'orch_b' picks up an event emitted targeting its namespace."""
+        store_a, store_b, _ = _shared_stores("orch_a", "orch_b")
+
+        consumer = _job(
+            "consumer",
+            depends_on=[event_dependency("upstream_ready", cadence=DAILY)],
+        )
+        orch_b = Orchestrator(
+            jobs=[consumer],
+            state=store_b,
+            executors={"subprocess": SpyExecutor()},
+            strict_dependencies=False,
+        )
+
+        # Before signal: blocked
+        result = orch_b.tick(REF)
+        assert all(r.action != JobAction.SUBMITTED for r in result.results)
+
+        # orch_a emits event targeting orch_b's namespace
+        store_a.set_event(
+            Event(namespace="orch_b", name="upstream_ready", run_key=RUN_KEY)
+        )
+
+        # After signal: unblocked
+        result = orch_b.tick(REF)
+        assert any(
+            r.job_name == "consumer" and r.action == JobAction.SUBMITTED
+            for r in result.results
+        )
