@@ -204,11 +204,11 @@ class TestOrchestratorRunSelection:
             mode=OrchestratorRunMode.BACKFILL,
             opened_at=REF,
         )
-        store.append_orchestrator_run(run)
+        run = store.append_orchestrator_run(run)
 
         result = orch.tick(REF)
 
-        updated = store.get_orchestrator_run(run.orchestrator_run_id)
+        updated = store.get_orchestrator_run(run.id)
         assert updated is not None
         assert updated.status == OrchestratorRunStatus.ACTIVE
 
@@ -228,11 +228,11 @@ class TestOrchestratorRunSelection:
             mode=OrchestratorRunMode.BACKFILL,
             opened_at=REF,
         )
-        store.append_orchestrator_run(run)
+        run = store.append_orchestrator_run(run)
 
         result = orch.tick(REF, dry_run=True)
 
-        updated = store.get_orchestrator_run(run.orchestrator_run_id)
+        updated = store.get_orchestrator_run(run.id)
         assert updated is not None
         assert updated.status == OrchestratorRunStatus.PENDING
 
@@ -280,11 +280,11 @@ class TestOrchestratorRunApi:
         assert len(runs) == 2
         run = runs[0]
 
-        resumed = orch.resume_run(run.orchestrator_run_id, reason="unblocked")
+        resumed = orch.resume_run(run.id, reason="unblocked")
         assert resumed.status == OrchestratorRunStatus.ACTIVE
         assert resumed.reason == "unblocked"
 
-        cancelled = orch.cancel_run(run.orchestrator_run_id, reason="operator_cancel")
+        cancelled = orch.cancel_run(run.id, reason="operator_cancel")
         assert cancelled.status == OrchestratorRunStatus.CANCELLED
         assert cancelled.reason == "operator_cancel"
 
@@ -1372,6 +1372,150 @@ class TestDependencyModes:
                 dependency_mode=DependencyMode.THRESHOLD,
                 dependency_threshold=None,
             )
+
+
+# ---------------------------------------------------------------------------
+# SKIPPED_UPSTREAM
+# ---------------------------------------------------------------------------
+
+
+class TestSkippedUpstream:
+    """SKIPPED_UPSTREAM is emitted when a dep has finished but didn't reach required_status."""
+
+    def test_upstream_error_emits_skipped_upstream(self):
+        """Upstream ERROR with required_status=DONE → SKIPPED_UPSTREAM, not SKIPPED_DEPENDENCIES."""
+        downstream = _job(
+            "down",
+            cadence=DAILY,
+            depends_on=[JobDependency(job_name="up", cadence=DAILY)],
+        )
+        orch, store, executor = _make_orch([downstream], strict_dependencies=False)
+        store.append_attempt(_attempt("up", "D20250115", Status.ERROR))
+
+        result = orch.tick(REF)
+        r = next(r for r in result.results if r.job_name == "down")
+        assert r.action == JobAction.SKIPPED_UPSTREAM
+
+    def test_upstream_lost_emits_skipped_upstream(self):
+        """Upstream LOST with required_status=DONE → SKIPPED_UPSTREAM."""
+        downstream = _job(
+            "down",
+            cadence=DAILY,
+            depends_on=[JobDependency(job_name="up", cadence=DAILY)],
+        )
+        orch, store, executor = _make_orch([downstream], strict_dependencies=False)
+        store.append_attempt(_attempt("up", "D20250115", Status.LOST))
+
+        result = orch.tick(REF)
+        r = next(r for r in result.results if r.job_name == "down")
+        assert r.action == JobAction.SKIPPED_UPSTREAM
+
+    def test_upstream_still_running_emits_skipped_dependencies(self):
+        """Upstream RUNNING → dep is unmet but not finished, so SKIPPED_DEPENDENCIES."""
+        downstream = _job(
+            "down",
+            cadence=DAILY,
+            depends_on=[JobDependency(job_name="up", cadence=DAILY)],
+        )
+        orch, store, executor = _make_orch([downstream], strict_dependencies=False)
+        store.append_attempt(_attempt("up", "D20250115", Status.RUNNING))
+
+        result = orch.tick(REF)
+        r = next(r for r in result.results if r.job_name == "down")
+        assert r.action == JobAction.SKIPPED_DEPENDENCIES
+
+    def test_upstream_done_not_matching_required_error_emits_skipped_upstream(self):
+        """required_status=ERROR, upstream DONE → SKIPPED_UPSTREAM (dep on failure use-case)."""
+        downstream = _job(
+            "on_failure_handler",
+            cadence=DAILY,
+            depends_on=[
+                JobDependency(
+                    job_name="up", cadence=DAILY, required_status=Status.ERROR
+                )
+            ],
+        )
+        orch, store, executor = _make_orch([downstream], strict_dependencies=False)
+        store.append_attempt(_attempt("up", "D20250115", Status.DONE))
+
+        result = orch.tick(REF)
+        r = next(r for r in result.results if r.job_name == "on_failure_handler")
+        assert r.action == JobAction.SKIPPED_UPSTREAM
+
+    def test_skipped_upstream_detail_names_upstream_and_statuses(self):
+        """Detail string includes dep name, run_key, actual status, and required status."""
+        downstream = _job(
+            "down",
+            cadence=DAILY,
+            depends_on=[JobDependency(job_name="up", cadence=DAILY)],
+        )
+        orch, store, executor = _make_orch([downstream], strict_dependencies=False)
+        store.append_attempt(_attempt("up", "D20250115", Status.ERROR))
+
+        result = orch.tick(REF)
+        r = next(r for r in result.results if r.job_name == "down")
+        assert r.action == JobAction.SKIPPED_UPSTREAM
+        assert "up" in r.detail
+        assert "error" in r.detail
+        assert "done" in r.detail  # required_status
+
+    def test_skipped_upstream_appears_in_skipped_helper(self):
+        """TickResult.skipped() includes SKIPPED_UPSTREAM results."""
+        downstream = _job(
+            "down",
+            cadence=DAILY,
+            depends_on=[JobDependency(job_name="up", cadence=DAILY)],
+        )
+        orch, store, executor = _make_orch([downstream], strict_dependencies=False)
+        store.append_attempt(_attempt("up", "D20250115", Status.ERROR))
+
+        result = orch.tick(REF)
+        assert any(r.job_name == "down" for r in result.skipped())
+
+    def test_skipped_upstream_unblocks_when_upstream_retried_and_succeeds(self):
+        """If upstream is manually retried and reaches DONE, downstream unblocks next tick."""
+        downstream = _job(
+            "down",
+            cadence=DAILY,
+            depends_on=[JobDependency(job_name="up", cadence=DAILY)],
+        )
+        orch, store, executor = _make_orch([downstream], strict_dependencies=False)
+        store.append_attempt(_attempt("up", "D20250115", Status.ERROR))
+
+        result = orch.tick(REF)
+        assert any(
+            r.job_name == "down" and r.action == JobAction.SKIPPED_UPSTREAM
+            for r in result.results
+        )
+
+        # Operator retries upstream; it succeeds
+        record = store.get_latest_attempt("up", "D20250115")
+        store.update_attempt(record.model_copy(update={"status": Status.DONE}))
+
+        result = orch.tick(REF)
+        assert any(
+            r.job_name == "down" and r.action == JobAction.SUBMITTED
+            for r in result.results
+        )
+
+    def test_mixed_deps_some_finished_wrong_some_waiting(self):
+        """When some deps are finished-wrong and some are still waiting, emits SKIPPED_UPSTREAM."""
+        downstream = _job(
+            "down",
+            cadence=DAILY,
+            depends_on=[
+                JobDependency(job_name="a", cadence=DAILY),
+                JobDependency(job_name="b", cadence=DAILY),
+            ],
+        )
+        orch, store, executor = _make_orch([downstream], strict_dependencies=False)
+        store.append_attempt(_attempt("a", "D20250115", Status.ERROR))
+        # b has no attempt yet — still waiting
+
+        result = orch.tick(REF)
+        r = next(r for r in result.results if r.job_name == "down")
+        assert r.action == JobAction.SKIPPED_UPSTREAM
+        assert "a" in r.detail
 
 
 # ---------------------------------------------------------------------------

@@ -8,21 +8,6 @@ but they are independent enough to be reviewed and accepted separately.
 
 ## Context: what already works
 
-Before describing gaps, it is worth noting what the existing model
-already handles correctly:
-
-- **Monthly and weekly run IDs** — `run_id_expr` already supports `mon0`,
-  `week0`, `hour0`, etc. (see `dispatchio/run_key_resolution.py`).
-- **Cross-granularity dependencies** — because `Dependency.run_id_expr` is
-  resolved independently from the parent job's own `run_id_expr`, a daily
-  job can already declare `Dependency(job_name="monthly_etl", run_id_expr="mon0")`
-  and it will correctly wait for the current month's run to be DONE.
-- **Job state is granularity-agnostic** — `RunRecord` stores whatever
-  string `run_id` resolves to, so monthly, weekly, and daily records coexist
-  in the same state store without any schema changes.
-
----
-
 ## Phase 1 — Extended schedule conditions
 
 This has been implemented.
@@ -132,187 +117,37 @@ orchestrator = Orchestrator(jobs=job_factory, artifact_store=FilesystemArtifactS
 
 ## Phase 4 — DataStore
 
-### Status
-
-Implemented as `dispatchio.datastore`.
-
-### Problem
-
-Jobs in the same pipeline often need to pass structured data to each other —
-for example, a discovery job that writes a list of changed entities so a
-downstream job knows what to process.
-
-`StateStore` is the wrong place for this: it stores execution lifecycle records
-(attempts, statuses, timestamps), not job output data.
-
-`DataStore` is the answer: a simple key-value store for JSON-serialisable
-values, keyed by `(namespace, job, run_id, key)`.
-
-### Naming
-
-`MetadataStore` was rejected — "metadata" means data *about* jobs, which is
-already `StateStore`'s domain. `ArtifactStore` was considered but implies binary
-build artifacts. `DataStore` is neutral and accurate.
-
-### Key structure
-
-```text
-<namespace> / <producer_job> / <run_id> / <key>
-```
-
-- `namespace` is set at construction (default `"default"`). Multiple
-  orchestrators sharing a backing store use distinct namespaces.
-- `key` defaults to `"return_value"`.
-- When `job` or `run_id` is `None` in a write/read call, the values are
-  resolved from `DISPATCHIO_JOB_NAME` and `DISPATCHIO_JOB_RUN_KEY` env vars
-  injected by the executor. This makes the harness API ergonomic:
-
-```python
-store = get_data_store()
-store.write(entities, key="entities")   # job and run_id from env
-```
-
-### Protocol
-
-```python
-class DataStore(Protocol):
-    namespace: str
-
-    def write(self, value, *, job=None, run_id=None, key="return_value") -> None: ...
-    def read(self, *, job, run_id=None, key="return_value") -> Any | None: ...
-    def worker_env(self) -> dict[str, str]: ...
-```
-
-`worker_env()` returns the env vars that worker subprocesses need to access
-this store instance. Executors call it at submit time to inject config without
-requiring isinstance checks in the factories:
-
-- `MemoryDataStore.worker_env()` → `{}` (in-process only)
-- `FilesystemDataStore.worker_env()` → `{"DISPATCHIO_DATA_DIR": ..., "DISPATCHIO_DATA_NAMESPACE": ...}`
-
-### Harness integration
-
-Workers call `get_data_store()` — no manual configuration needed:
-
-```python
-from dispatchio.datastore import get_data_store
-
-def discover():
-    store = get_data_store()
-    entities = query_changed_entities()
-    store.write(entities, key="entities")   # job + run_id from env
-
-def process():
-    store = get_data_store()
-    entities = store.read(job="discover", key="entities") or []
-    for entity in entities:
-        ...
-```
-
-The orchestrator injects `DISPATCHIO_JOB_NAME`, `DISPATCHIO_DATA_DIR`, and
-`DISPATCHIO_DATA_NAMESPACE` into every worker subprocess automatically.
-
-### Configuration (dispatchio.toml)
-
-```toml
-[dispatchio.data_store]
-backend   = "filesystem"
-base_dir  = ".dispatchio/data"
-namespace = "my-pipeline"
-```
-
-
-### Backends (v1)
-
-| Class | Use case |
-|---|---|
-| `MemoryDataStore` | Tests, single-process simulations |
-| `FilesystemDataStore` | Local dev and simple single-node deployments |
-
-Deferred: `SQLiteDataStore` (batched writes, better for fan-out), DynamoDB
-backend (distributed deployments).
-
-### Deferred
-
-- `DataStoreCache` — load/flush optimisation for fan-out patterns with many
-  dynamic child jobs. Not needed for the primary use case.
-- Escape hatch (`get/put/delete/list_keys`) — direct key access for custom
-  naming schemes. Deferred until a concrete use case emerges.
-- Factory callable integration — `Orchestrator(job_factory=...)` receiving
-  the DataStore as an injected argument.
-
-### Scope of change (implemented)
-
-- `dispatchio/datastore/base.py` — `DataStore` protocol, `_resolve_job`, `_resolve_job_run_key`
-- `dispatchio/datastore/memory.py` — `MemoryDataStore`
-- `dispatchio/datastore/filesystem.py` — `FilesystemDataStore`
-- `dispatchio/datastore/__init__.py` — `get_data_store()` factory
-- `dispatchio/executor/python_.py` + `subprocess_.py` — `data_env` param; inject `DISPATCHIO_JOB_NAME`, `DISPATCHIO_DATA_DIR`, `DISPATCHIO_DATA_NAMESPACE`
-- `dispatchio/orchestrator.py` — `data_store` param (stored for future factory use)
-- `dispatchio/config/settings.py` — `DataStoreSettings` + `[dispatchio.data_store]` section
-- `dispatchio/config/loader.py` — `_build_data_store`, relative path resolution for `base_dir`
-- `dispatchio/__init__.py` — re-export `DataStore`, `FilesystemDataStore`, `MemoryDataStore`, `get_data_store`; `orchestrator` accepts `data_store`
-- `examples/data_store/` — discover → DataStore → process example
+This has been implemented
 
 ---
 
-## Phase 5 — Cascading skip on permanent failure
+## Phase 5 — Upstream-blocked skip
 
-### Problem
+This has been implemented.
 
-When an upstream job exhausts all retries and stays in ERROR (or LOST),
-every downstream job that depends on it waits forever — `_unmet_dependencies`
-never returns empty because `required_status=DONE` can never be satisfied.
-This is a silent, operational dead-end that becomes more likely with fan-in
-patterns containing many dynamic jobs.
+The implemented behaviour differs from the original design in two ways:
 
-### Proposed change
+1. **No `Status.SKIPPED` or persistent state.** Upstream errors are recoverable
+   — operators can manually retry any errored job. Writing a sticky SKIPPED
+   record would prevent the downstream from unblocking once the upstream is fixed.
+   Instead, the check runs every tick: if any unmet dependency has *finished* in
+   a state that cannot satisfy `required_status`, the downstream emits
+   `SKIPPED_UPSTREAM` and is re-evaluated on the next tick (including after a
+   manual upstream retry).
 
-Extend `_evaluate_job` with a "blocked forever" check. After the normal
-unmet-dependency scan, inspect whether any unmet dependency is both:
+2. **`SKIPPED_UPSTREAM` instead of `SKIPPED_UPSTREAM_FAILED`.** The action name
+   is neutral because `required_status` can be set to `ERROR` or `LOST`
+   intentionally (e.g. an on-failure handler). `SKIPPED_UPSTREAM` means "a
+   dependency has finished but not in the required state", regardless of whether
+   that outcome represents a failure or a success.
 
-- in a **terminal** state (`ERROR`, `LOST`, or `SKIPPED`), and
-- **not** satisfying `required_status`
+The detail string names each blocking upstream with its actual and required
+status: e.g. `process_data[D20260425] is error (required: done)`.
 
-If so, the dependent job can never proceed — transition it to `SKIPPED`
-and log a warning naming the blocking upstream.
-
-```python
-# In _evaluate_job, after the existing unmet-dependency block:
-
-permanently_blocked = [
-    dep for dep in unmet
-    if (rec := self.state.get(dep.job_name, resolve_job_run_key(dep.run_id_expr, reference_time)))
-    and rec.is_terminal()
-    and rec.status != dep.required_status
-]
-if permanently_blocked:
-    detail = ", ".join(
-        f"{d.job_name} is {self.state.get(d.job_name, ...).status.value}"
-        for d in permanently_blocked
-    )
-    skipped_record = RunRecord(job_name=job.name, run_id=run_id,
-                               status=Status.SKIPPED, ...)
-    self.state.put(skipped_record)
-    return JobTickResult(job_name=job.name, run_id=run_id,
-                         action=JobAction.SKIPPED_UPSTREAM_FAILED, detail=detail)
-```
-
-This cascades naturally: once a downstream is SKIPPED, any jobs depending
-on *it* are blocked by a terminal SKIPPED record and will be SKIPPED on the
-next tick.
-
-### New `JobAction` value
-
-`SKIPPED_UPSTREAM_FAILED` — distinguishes "waiting on dependency" from
-"will never run because upstream is terminal".
-
-### Scope of change
-
-- `dispatchio/models.py` — add `SKIPPED_UPSTREAM_FAILED` to `JobAction`
-- `dispatchio/orchestrator.py` — extend `_evaluate_job`
-- `tests/test_orchestrator.py` — cascade tests: direct upstream failure,
-  multi-hop cascade, cascade with retries still in-flight
+Cascade to deeper dependents is partial: a job two hops downstream sees
+`SKIPPED_DEPENDENCIES` (not `SKIPPED_UPSTREAM`) because there is no attempt
+record written for the intermediate job. The tick log still shows the root
+cause at the first hop.
 
 ---
 
@@ -322,57 +157,7 @@ This has been implemented.
 
 ## Phase 7 — Backfill / date-range replay
 
-### Problem
-
-`run_loop()` supports a fixed `reference_time`, making one-off historical
-runs possible. But reprocessing a range of historical dates (e.g. re-running
-six months of monthly jobs after a pipeline fix) requires a loop that the
-user has to write every time.
-
-### Proposed change
-
-Add a `backfill()` function to `dispatchio/run_loop.py`:
-
-```python
-def backfill(
-    orchestrator: Orchestrator,
-    start: date | datetime,
-    end:   date | datetime,
-    *,
-    granularity:         str      = "day",      # "day", "week", "mon", "hour"
-    tick_interval:       float    = 0.0,        # 0 = no sleep (historical)
-    max_ticks_per_date:  int      = 20,
-    stop_when:           Callable | None = None,
-) -> None:
-```
-
-`backfill` iterates from `start` to `end` inclusive, stepping by `granularity`,
-and calls `run_loop()` for each step with the appropriate `reference_time`.
-
-The `tick_interval=0` default is intentional: historical runs should not
-sleep between ticks. The caller can pass a non-zero value if the jobs
-submit work to a rate-limited external system.
-
-Backfill is **idempotent** by design — jobs that are already DONE for a
-given date are silently skipped, so re-running is safe.
-
-### Example
-
-```python
-from datetime import date
-from dispatchio import backfill
-
-# Re-run all monthly jobs from Jan–Jun 2025
-backfill(orchestrator, start=date(2025, 1, 1), end=date(2025, 6, 1),
-         granularity="mon")
-```
-
-### Scope of change
-
-- `dispatchio/run_loop.py` — add `backfill()`, add date-stepping helper
-- `dispatchio/__init__.py` — re-export `backfill`
-- `tests/test_simulate.py` (new) — date iteration, idempotency, granularity steps
-- `mise-tasks/backfill` — optional task wrapper (same pattern as `build-cookbook`)
+This has been implemented
 
 ---
 

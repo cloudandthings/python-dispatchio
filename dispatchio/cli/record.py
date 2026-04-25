@@ -12,7 +12,9 @@ from dispatchio.cli.options import ContextOption, ReasonOption, YesOption
 from dispatchio.models import Attempt, Status
 
 
-app = typer.Typer(help="Manually inspect or override run records.", no_args_is_help=True)
+app = typer.Typer(
+    help="Manually inspect or override run records.", no_args_is_help=True
+)
 
 
 @app.command("set")

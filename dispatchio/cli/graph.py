@@ -12,7 +12,9 @@ from dispatchio.cli.errors import CliUserError
 from dispatchio.cli.options import GraphPathArgument
 
 
-app = typer.Typer(help="Graph artifact utilities (JSON graph mode).", no_args_is_help=True)
+app = typer.Typer(
+    help="Graph artifact utilities (JSON graph mode).", no_args_is_help=True
+)
 
 
 @app.command("validate")

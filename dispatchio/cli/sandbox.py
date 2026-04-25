@@ -10,7 +10,10 @@ import typer
 from dispatchio.cli import output
 from dispatchio.cli.errors import CliUserError, handle_cli_errors
 
-app = typer.Typer(help="Interactive sandbox for exploring Dispatchio CLI commands.", no_args_is_help=True)
+app = typer.Typer(
+    help="Interactive sandbox for exploring Dispatchio CLI commands.",
+    no_args_is_help=True,
+)
 
 _SANDBOX_DIR = ".dispatchio-sandbox"
 _TOML_FILENAME = "dispatchio.toml"
@@ -241,16 +244,20 @@ def init(
 
     _seed(f"sqlite:///{db_path}")
 
-    output.console.print(f"[green]✓[/green] Sandbox created at [bold]{sandbox_path}[/bold]")
+    output.console.print(
+        f"[green]✓[/green] Sandbox created at [bold]{sandbox_path}[/bold]"
+    )
     output.console.print(f"[green]✓[/green] Config written to [bold]{toml_path}[/bold]")
     output.console.print()
     guide()
+
 
 @app.command("guide")
 @handle_cli_errors
 def guide() -> None:
     """Print an interactive CLI guide for the sandbox."""
     output.console.print(_GUIDE)
+
 
 @app.command("reset")
 @handle_cli_errors
@@ -282,7 +289,9 @@ def reset(
 
     _seed(f"sqlite:///{db_path}")
 
-    output.console.print(f"[green]✓[/green] Sandbox reset at [bold]{sandbox_path}[/bold]")
+    output.console.print(
+        f"[green]✓[/green] Sandbox reset at [bold]{sandbox_path}[/bold]"
+    )
 
 
 @app.callback()

@@ -5,4 +5,4 @@ The Job class creates two jobs and a dependency between them.\
 """
 tags       = ["PythonJob", "dependencies", "getting-started"]
 order      = 1
-show_files = ["jobs.py", "my_work.py"]
+show_files = ["my_work.py", "dispatchio.toml", "jobs.py", "run.py"]

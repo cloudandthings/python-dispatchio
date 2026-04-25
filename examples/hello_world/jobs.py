@@ -5,14 +5,15 @@ This is the explicit approach: Job objects are defined here and wired into
 an Orchestrator.  Use this pattern for complex pipelines with cross-file
 dependencies, dynamic registration, or graph loading.
 
-For simple cases, see my_work.py which uses the @job decorator instead —
-no separate jobs.py needed.
+For simple cases, see examples/hello_world/my_work.py which uses the
+@job decorator instead.
 
 Run with:
   python examples/hello_world/run.py
 """
 
 import os
+import logging
 from pathlib import Path
 
 from dispatchio import Job, PythonJob, orchestrator
@@ -43,3 +44,11 @@ goodbye_world = Job.create(
 
 JOBS = [hello_world, goodbye_world]
 orchestrator = orchestrator(JOBS, config=CONFIG_FILE)
+
+if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
+    # Run a single tick in the orchestrator, for demo purposes.
+    # To run several ticks in a loop, see examples/hello_world/run.py which calls run_loop().
+    orchestrator.tick()

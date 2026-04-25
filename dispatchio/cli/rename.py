@@ -8,13 +8,19 @@ from dispatchio.cli.loaders import load_store_from_context
 from dispatchio.cli.options import ContextOption
 
 job_app = typer.Typer(help="Manage job identity in the registry.", no_args_is_help=True)
-namespace_app = typer.Typer(help="Manage namespace identity in the registry.", no_args_is_help=True)
-event_app = typer.Typer(help="Manage event type identity in the registry.", no_args_is_help=True)
+namespace_app = typer.Typer(
+    help="Manage namespace identity in the registry.", no_args_is_help=True
+)
+event_app = typer.Typer(
+    help="Manage event type identity in the registry.", no_args_is_help=True
+)
 
 _NameArg = Annotated[str, typer.Argument()]
 _NamespaceOpt = Annotated[
     str | None,
-    typer.Option("--namespace", "-n", help="Target namespace (overrides context default)."),
+    typer.Option(
+        "--namespace", "-n", help="Target namespace (overrides context default)."
+    ),
 ]
 
 

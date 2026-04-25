@@ -9,7 +9,6 @@ are fully interchangeable.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from uuid import UUID
 
 from dispatchio.models import (
     Attempt,
@@ -67,7 +66,7 @@ class StateStore(ABC):
         ...
 
     @abstractmethod
-    def append_attempt(self, record: Attempt) -> None:
+    def append_attempt(self, record: Attempt) -> Attempt:
         """
         Insert a new immutable attempt row.
         The attempt number is auto-allocated as max(attempt)+1 for the given
@@ -117,7 +116,7 @@ class StateStore(ABC):
         ...
 
     @abstractmethod
-    def get_dead_letter(self, dead_letter_id: UUID) -> DeadLetter | None:
+    def get_dead_letter(self, dead_letter_id: int) -> DeadLetter | None:
         """Retrieve a dead-letter record by ID."""
         ...
 
@@ -153,7 +152,7 @@ class StateStore(ABC):
     # ---------------------------------------------------------------------------
 
     @abstractmethod
-    def append_orchestrator_run(self, record: OrchestratorRun) -> None:
+    def append_orchestrator_run(self, record: OrchestratorRun) -> OrchestratorRun:
         """
         Insert a new orchestrator run record.
         Raises if run_key would violate unique constraint.
@@ -161,8 +160,8 @@ class StateStore(ABC):
         ...
 
     @abstractmethod
-    def get_orchestrator_run(self, orchestrator_run_id: UUID) -> OrchestratorRun | None:
-        """Retrieve an orchestrator run by its UUID."""
+    def get_orchestrator_run(self, orchestrator_run_id: int) -> OrchestratorRun | None:
+        """Retrieve an orchestrator run by its id."""
         ...
 
     @abstractmethod
@@ -185,7 +184,7 @@ class StateStore(ABC):
     @abstractmethod
     def update_orchestrator_run(self, record: OrchestratorRun) -> None:
         """
-        Update an existing orchestrator run record by orchestrator_run_id.
+        Update an existing orchestrator run record by id.
         Used when changing status, updating checkpoint, or recording activation/closure.
         """
         ...

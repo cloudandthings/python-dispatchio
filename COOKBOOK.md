@@ -21,6 +21,76 @@ python examples/<name>/run.py
 
 **Run:** `python examples/hello_world/run.py`
 
+**`my_work.py`**
+
+```python
+"""
+Hello World worker functions — with @job decorators.
+
+Decorating with @job creates a simple job definition around your function.
+
+Run the whole file with:
+
+    dispatchio run-file examples/hello_world/my_work.py
+
+To run for an explicit run key (e.g. today's date or an event identifier):
+
+    dispatchio run-file examples/hello_world/my_work.py --run-key D20260423
+
+If a dependency isn't satisfied yet, the downstream job is held back.
+Override that with --ignore-dependencies.
+
+Cadence can be supplied to the @job decorators below — in this example,
+dispatchio.toml sets default_cadence = "daily" so it applies automatically.
+
+For complex pipelines (cross-file deps, dynamic registration, graph loading)
+the explicit jobs.py approach is still available — see examples/hello_world/jobs.py
+"""
+
+import time
+
+from dispatchio import job
+
+
+# cadence is omitted — default_cadence=DAILY from dispatchio.toml applies.
+@job()
+def hello_world(run_key: str) -> None:
+    print(f"Hello, World! Running for {run_key}.")
+    time.sleep(0.3)
+
+# cadence is omitted — default_cadence=DAILY from dispatchio.toml applies.
+@job(depends_on=hello_world)
+def goodbye_world(run_key: str) -> None:
+    print(f"Goodbye, World! Wrapping up {run_key}.")
+    time.sleep(0.3)
+```
+
+**`dispatchio.toml`**
+
+```toml
+# Dispatchio configuration — hello_world example (local dev)
+#
+# This file is auto-discovered by load_config() / orchestrator()
+# when present in the working directory, or pointed to via DISPATCHIO_CONFIG.
+#
+# Any value here can be overridden by an environment variable.
+# Syntax: DISPATCHIO_<FIELD> or DISPATCHIO_<SECTION>__<FIELD>
+# Example: DISPATCHIO_LOG_LEVEL=DEBUG
+#          DISPATCHIO_STATE__BACKEND=filesystem
+
+[dispatchio]
+log_level = "INFO"
+default_cadence = "daily"
+
+[dispatchio.state]
+backend = "sqlalchemy"
+connection_string = "sqlite:///dispatchio.db"
+
+[dispatchio.receiver]
+backend  = "filesystem"
+drop_dir = ".dispatchio/completions"
+```
+
 **`jobs.py`**
 
 ```python
@@ -31,14 +101,15 @@ This is the explicit approach: Job objects are defined here and wired into
 an Orchestrator.  Use this pattern for complex pipelines with cross-file
 dependencies, dynamic registration, or graph loading.
 
-For simple cases, see my_work.py which uses the @job decorator instead —
-no separate jobs.py needed.
+For simple cases, see examples/hello_world/my_work.py which uses the
+@job decorator instead.
 
 Run with:
   python examples/hello_world/run.py
 """
 
 import os
+import logging
 from pathlib import Path
 
 from dispatchio import Job, PythonJob, orchestrator
@@ -69,45 +140,51 @@ goodbye_world = Job.create(
 
 JOBS = [hello_world, goodbye_world]
 orchestrator = orchestrator(JOBS, config=CONFIG_FILE)
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    # Run a single tick in the orchestrator, for demo purposes.
+    # To run several ticks in a loop, see examples/hello_world/run.py which calls run_loop().
+    orchestrator.tick()
 ```
 
-**`my_work.py`**
+**`run.py`**
 
 ```python
 """
-Hello World worker functions — with @job decorators.
+Hello World demo runner.
 
-Decorating with @job co-locates the job definition with the function, so you
-don't need a separate jobs.py for simple cases.  Run the whole file with:
+Two ways to run this example:
 
-    dispatchio run-file examples/hello_world/my_work.py
+  1. Decorator style (no jobs.py needed) — run-file discovers @job functions:
 
-To run for an explicit run key (e.g. today's date or an event identifier):
+       dispatchio run-file examples/hello_world/my_work.py
 
-    dispatchio run-file examples/hello_world/my_work.py --run-key D20260423
+     For an explicit run key:
 
-If a dependency isn't satisfied yet, the downstream job is held back.
-Override that with --ignore-dependencies.
+       dispatchio run-file examples/hello_world/my_work.py --run-key D20260423
 
-For complex pipelines (cross-file deps, dynamic registration, graph loading)
-the explicit jobs.py approach is still available — see jobs.py in this directory.
+  2. Explicit orchestrator style (suitable for complex pipelines):
+
+       python examples/hello_world/run.py
+
+     This script uses jobs.py, which defines the same jobs using the Job/PythonJob
+     API directly.  In production, replace run_loop() with a single tick() call
+     triggered by your scheduler (EventBridge, cron, etc.).
 """
 
-import time
+import sys
+import logging
+from pathlib import Path
 
-from dispatchio import DAILY, job
+sys.path.insert(0, str(Path(__file__).parents[2]))
 
+from dispatchio import run_loop
+from examples.hello_world.jobs import orchestrator
 
-@job(cadence=DAILY)
-def hello_world(run_key: str) -> None:
-    print(f"Hello, World! Running for {run_key}.")
-    time.sleep(0.3)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-
-@job(cadence=DAILY, depends_on=hello_world)
-def goodbye_world(run_key: str) -> None:
-    print(f"Goodbye, World! Wrapping up {run_key}.")
-    time.sleep(0.3)
+run_loop(orchestrator)
 ```
 
 ---
@@ -400,7 +477,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from uuid import uuid4
-from dispatchio.models import AttemptRecord, TriggerType
+from dispatchio.models import Attempt, TriggerType
 from dispatchio import Status, run_loop
 from examples.dependency_modes.jobs import orchestrator
 
@@ -413,7 +490,7 @@ RUN_KEY = REF.strftime("%Y%m%d")  # "20250115"
 # Seed the state store to simulate entity results without running the jobs.
 def _seed(job_name: str, status: Status, reason: str | None = None) -> None:
     orchestrator.state.append_attempt(
-        AttemptRecord(
+        Attempt(
             job_name=job_name,
             run_key=RUN_KEY,
             attempt=0,
@@ -1412,7 +1489,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
-from dispatchio import DAILY, WEEKLY, Job, PythonJob, orchestrator, resolve_run_key, run_loop
+from dispatchio import WEEKLY, Job, PythonJob, orchestrator, resolve_run_key, run_loop
 from dispatchio.events import event_dependency
 from dispatchio.models import Event
 
@@ -1525,7 +1602,9 @@ for orch in [daily, weekly]:
     print(f"    {len(records)} tick(s), {submitted_total} total submission(s)")
     for r in records:
         n = sum(1 for a in r.actions if a["action"] == "submitted")
-        print(f"    [{r.ticked_at}]  ref={r.reference_time[:10]}  {r.duration_seconds:.2f}s  {n} submitted")
+        print(
+            f"    [{r.ticked_at}]  ref={r.reference_time[:10]}  {r.duration_seconds:.2f}s  {n} submitted"
+        )
 
 # ---------------------------------------------------------------------------
 # CLI usage hints
@@ -1542,7 +1621,9 @@ print("    dispatchio context use daily-etl")
 print()
 print("    dispatchio status                              # daily-etl jobs")
 print("    dispatchio status --context weekly-reports     # weekly-reports jobs")
-print("    dispatchio status --all-namespaces             # both, with NAMESPACE column")
+print(
+    "    dispatchio status --all-namespaces             # both, with NAMESPACE column"
+)
 print()
 ```
 

@@ -6,7 +6,7 @@
 # Any value here can be overridden by an environment variable.
 # Syntax: DISPATCHIO_<FIELD> or DISPATCHIO_<SECTION>__<FIELD>
 # Example: DISPATCHIO_LOG_LEVEL=DEBUG
-#          DISPATCHIO_STATE__ROOT=/tmp/my-state
+#          DISPATCHIO_STATE__BACKEND=filesystem
 
 [dispatchio]
 log_level = "INFO"

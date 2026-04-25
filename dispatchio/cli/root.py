@@ -6,7 +6,6 @@ import os
 import sys
 from datetime import datetime, timezone
 from typing import Annotated
-from uuid import UUID
 
 import typer
 
@@ -390,7 +389,7 @@ def run_list(
         return
     for run in runs:
         output.print_info(
-            f"{run.orchestrator_run_id}  {run.run_key}  status={run.status.value}  mode={run.mode.value}  priority={run.priority}"
+            f"{run.id}  {run.run_key}  status={run.status.value}  mode={run.mode.value}  priority={run.priority}"
         )
 
 
@@ -400,24 +399,18 @@ def run_show(
     *,
     orchestrator: OrchestratorOption = None,
     orchestrator_run_id: Annotated[
-        str,
-        typer.Option("--orchestrator-run-id", help="Run UUID."),
+        int,
+        typer.Option("--orchestrator-run-id", help="Run ID."),
     ],
 ) -> None:
-    """Show one orchestrator run by UUID."""
+    """Show one orchestrator run by ID."""
     if not orchestrator:
         raise CliUserError(
             "Specify an orchestrator with --orchestrator or DISPATCHIO_ORCHESTRATOR"
         )
     orch = load_orchestrator(orchestrator)
-    try:
-        run_uuid = UUID(orchestrator_run_id)
-    except ValueError as exc:
-        raise CliUserError(
-            f"Invalid --orchestrator-run-id: {orchestrator_run_id!r}"
-        ) from exc
-    run = orch.show_run(run_uuid)
-    output.print_info(f"orchestrator_run_id: {run.orchestrator_run_id}")
+    run = orch.show_run(orchestrator_run_id)
+    output.print_info(f"id                 : {run.id}")
     output.print_info(f"namespace          : {run.namespace}")
     output.print_info(f"run_key            : {run.run_key}")
     output.print_info(f"status             : {run.status.value}")
@@ -433,8 +426,8 @@ def run_resume(
     *,
     orchestrator: OrchestratorOption = None,
     orchestrator_run_id: Annotated[
-        str,
-        typer.Option("--orchestrator-run-id", help="Run UUID."),
+        int,
+        typer.Option("--orchestrator-run-id", help="Run ID."),
     ],
     reason: ReasonOption = None,
 ) -> None:
@@ -444,15 +437,9 @@ def run_resume(
             "Specify an orchestrator with --orchestrator or DISPATCHIO_ORCHESTRATOR"
         )
     orch = load_orchestrator(orchestrator)
-    try:
-        run_uuid = UUID(orchestrator_run_id)
-    except ValueError as exc:
-        raise CliUserError(
-            f"Invalid --orchestrator-run-id: {orchestrator_run_id!r}"
-        ) from exc
-    run = orch.resume_run(run_uuid, reason=reason)
+    run = orch.resume_run(orchestrator_run_id, reason=reason)
     output.print_success(
-        f"Resumed run {run.orchestrator_run_id} ({run.run_key}) to status={run.status.value}."
+        f"Resumed run {run.id} ({run.run_key}) to status={run.status.value}."
     )
 
 
@@ -462,8 +449,8 @@ def run_cancel(
     *,
     orchestrator: OrchestratorOption = None,
     orchestrator_run_id: Annotated[
-        str,
-        typer.Option("--orchestrator-run-id", help="Run UUID."),
+        int,
+        typer.Option("--orchestrator-run-id", help="Run ID."),
     ],
     reason: ReasonOption = None,
 ) -> None:
@@ -473,15 +460,9 @@ def run_cancel(
             "Specify an orchestrator with --orchestrator or DISPATCHIO_ORCHESTRATOR"
         )
     orch = load_orchestrator(orchestrator)
-    try:
-        run_uuid = UUID(orchestrator_run_id)
-    except ValueError as exc:
-        raise CliUserError(
-            f"Invalid --orchestrator-run-id: {orchestrator_run_id!r}"
-        ) from exc
-    run = orch.cancel_run(run_uuid, reason=reason)
+    run = orch.cancel_run(orchestrator_run_id, reason=reason)
     output.print_warning(
-        f"Cancelled run {run.orchestrator_run_id} ({run.run_key}) status={run.status.value}."
+        f"Cancelled run {run.id} ({run.run_key}) status={run.status.value}."
     )
 
 
@@ -547,7 +528,7 @@ def backfill_enqueue(
     )
     output.print_success(f"Enqueued {len(runs)} backfill run(s).")
     for run in runs:
-        output.print_info(f"  {run.orchestrator_run_id}  {run.run_key}")
+        output.print_info(f"  {run.id}  {run.run_key}")
 
 
 @app.command("replay-enqueue")
@@ -587,4 +568,4 @@ def replay_enqueue(
     )
     output.print_success(f"Enqueued {len(runs)} replay run(s).")
     for run in runs:
-        output.print_info(f"  {run.orchestrator_run_id}  {run.run_key}")
+        output.print_info(f"  {run.id}  {run.run_key}")
