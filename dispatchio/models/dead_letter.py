@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -21,7 +21,7 @@ class DeadLetter(BaseModel):
     job_name, run_key, attempt, and correlation_id unpopulated.
     """
 
-    dead_letter_id: UUID = Field(default_factory=uuid4)
+    id: int | None = None
     occurred_at: datetime
     source_backend: DeadLetterSourceBackend
     reason_code: DeadLetterReasonCode
@@ -35,5 +35,5 @@ class DeadLetter(BaseModel):
     raw_payload: dict[str, Any] = Field(default_factory=dict)
     resolved_at: datetime | None = None
     resolver_notes: str | None = None
-    namespace_id: UUID | None = None
-    job_id: UUID | None = None
+    namespace_id: int | None = None
+    job_id: int | None = None

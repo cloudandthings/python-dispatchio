@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
@@ -14,7 +13,7 @@ class RetryRequest(BaseModel):
     answer: who requested a retry, why, and which attempt numbers were assigned.
     """
 
-    retry_request_id: UUID = Field(default_factory=uuid4)
+    id: int | None = None
     requested_at: datetime
     requested_by: str
     run_key: str

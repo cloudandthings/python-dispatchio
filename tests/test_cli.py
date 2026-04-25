@@ -139,7 +139,7 @@ def test_backfill_plan_prints_run_keys(rich_output) -> None:
 def test_run_list_prints_rows(rich_output) -> None:
     class _Run:
         def __init__(self):
-            self.orchestrator_run_id = "id-1"
+            self.id = 1
             self.run_key = "20250101"
             self.status = type("S", (), {"value": "pending"})()
             self.mode = type("M", (), {"value": "backfill"})()

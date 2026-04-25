@@ -87,6 +87,7 @@ class JobAction(str, Enum):
     SKIPPED_THRESHOLD_UNREACHABLE = "skipped_threshold_unreachable"
     SKIPPED_ALREADY_ACTIVE = "skipped_already_active"
     SKIPPED_ALREADY_DONE = "skipped_already_done"
+    SKIPPED_UPSTREAM = "skipped_upstream"
     MARKED_LOST = "marked_lost"
     MARKED_ERROR = "marked_error"
     RETRYING = "retrying"
@@ -105,6 +106,7 @@ _SKIPPED_ACTIONS: frozenset[JobAction] = frozenset(
         JobAction.SKIPPED_THRESHOLD_UNREACHABLE,
         JobAction.SKIPPED_ALREADY_ACTIVE,
         JobAction.SKIPPED_ALREADY_DONE,
+        JobAction.SKIPPED_UPSTREAM,
     }
 )
 

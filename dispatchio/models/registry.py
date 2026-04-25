@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
@@ -9,7 +8,7 @@ from pydantic import BaseModel, Field
 class NamespaceIdentity(BaseModel):
     """Stable identity record for a namespace. Name is the mutable display label."""
 
-    namespace_id: UUID = Field(default_factory=uuid4)
+    id: int | None = None
     name: str
     created_at: datetime = Field(default_factory=datetime.now)
 
@@ -17,8 +16,8 @@ class NamespaceIdentity(BaseModel):
 class JobIdentity(BaseModel):
     """Stable identity record for a job within a namespace."""
 
-    job_id: UUID = Field(default_factory=uuid4)
-    namespace_id: UUID
+    id: int | None = None
+    namespace_id: int
     name: str
     created_at: datetime = Field(default_factory=datetime.now)
 
@@ -26,7 +25,7 @@ class JobIdentity(BaseModel):
 class EventIdentity(BaseModel):
     """Stable identity record for an event type within a namespace."""
 
-    event_id: UUID = Field(default_factory=uuid4)
-    namespace_id: UUID
+    id: int | None = None
+    namespace_id: int
     name: str
     created_at: datetime = Field(default_factory=datetime.now)

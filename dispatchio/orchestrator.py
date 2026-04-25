@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 if TYPE_CHECKING:
     from dispatchio.datastore.base import DataStore
@@ -354,7 +354,7 @@ class Orchestrator:
             mode=mode,
         )
 
-    def show_run(self, orchestrator_run_id: UUID) -> OrchestratorRun:
+    def show_run(self, orchestrator_run_id: int) -> OrchestratorRun:
         """Get a single run by ID, scoped to this orchestrator."""
         record = self.state.get_orchestrator_run(orchestrator_run_id)
         if record is None or record.namespace != self.namespace:
@@ -364,7 +364,7 @@ class Orchestrator:
         return record
 
     def resume_run(
-        self, orchestrator_run_id: UUID, *, reason: str | None = None
+        self, orchestrator_run_id: int, *, reason: str | None = None
     ) -> OrchestratorRun:
         """Resume a blocked/pending/failed run by moving it back to ACTIVE."""
         record = self.show_run(orchestrator_run_id)
@@ -382,7 +382,7 @@ class Orchestrator:
         return updated
 
     def cancel_run(
-        self, orchestrator_run_id: UUID, *, reason: str | None = None
+        self, orchestrator_run_id: int, *, reason: str | None = None
     ) -> OrchestratorRun:
         """Cancel a run and mark it terminal."""
         record = self.show_run(orchestrator_run_id)
@@ -442,7 +442,7 @@ class Orchestrator:
                 force=force,
                 opened_at=now,
             )
-            self.state.append_orchestrator_run(record)
+            record = self.state.append_orchestrator_run(record)
             created_or_updated.append(record)
 
         return created_or_updated
@@ -851,7 +851,6 @@ class Orchestrator:
         # )
 
         dead_letter = DeadLetter(
-            dead_letter_id=uuid4(),
             occurred_at=now,
             source_backend=DeadLetterSourceBackend.OTHER,
             reason_code=reason_code,
@@ -864,12 +863,10 @@ class Orchestrator:
         self.state.append_dead_letter(dead_letter)
 
         logger.warning(
-            "Dead-lettered status event: %s reason=%s detail=%s (id=%s)",
-            # f"{event.correlation_id}/{event.run_key}/{event.attempt}",
+            "Dead-lettered status event: %s reason=%s detail=%s",
             f"{event.correlation_id}",
             reason_code.value,
             reason_detail,
-            dead_letter.dead_letter_id,
         )
 
     # ------------------------------------------------------------------
@@ -1309,6 +1306,30 @@ class Orchestrator:
             )
             if not unmet:
                 return None
+
+            # Deps that have finished in a state that can't satisfy required_status.
+            # These need operator attention; still-waiting deps may resolve on their own.
+            upstream_finished = [
+                (dep, self._dep_record(dep, job, reference_time, orchestrator_run_key))
+                for dep in unmet
+                if self._dep_is_finished(
+                    dep, job, reference_time, orchestrator_run_key=orchestrator_run_key
+                )
+            ]
+            if upstream_finished:
+                detail = ", ".join(
+                    f"{self._format_dependency_run_ref(d, job, reference_time, orchestrator_run_key=orchestrator_run_key)}"
+                    f" is {r.status.value} (required: {d.required_status.value})"
+                    for d, r in upstream_finished
+                )
+                return self._result(
+                    job_name=job.name,
+                    run_key=run_key,
+                    pool=job.pool,
+                    action=JobAction.SKIPPED_UPSTREAM,
+                    detail=detail,
+                )
+
             detail = ", ".join(
                 self._format_dependency_run_ref(
                     d,

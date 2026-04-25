@@ -11,7 +11,10 @@ from dispatchio.cli import output
 
 _install_rich_tb(show_locals=False)
 
-app = typer.Typer(help="Dispatchio - lightweight tick-based batch job orchestrator.", no_args_is_help=True)
+app = typer.Typer(
+    help="Dispatchio - lightweight tick-based batch job orchestrator.",
+    no_args_is_help=True,
+)
 
 
 @app.callback()

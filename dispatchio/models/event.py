@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
-from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -19,7 +18,7 @@ class Event(BaseModel):
     occurred_at: datetime = Field(default_factory=datetime.now)
     trace: dict[str, Any] = Field(default_factory=dict)
 
-    event_id: UUID | None = None
+    event_id: int | None = None
 
     def is_finished(self) -> bool:
         return self.status in Status.finished()
