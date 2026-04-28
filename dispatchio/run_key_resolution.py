@@ -94,6 +94,16 @@ def resolve_run_key(cadence: Cadence, reference_time: datetime) -> str:
                 "%Y%m%d%H"
             )
 
+        if freq == Frequency.QUARTERLY:
+            # Q prefix + year + 1-based quarter number (e.g. Q20261)
+            dt = _subtract_months(reference_time, lookback * 3)
+            quarter = (dt.month - 1) // 3 + 1
+            return f"Q{dt.year:04d}{quarter}"
+
+        if freq == Frequency.ANNUALLY:
+            dt = reference_time.replace(year=reference_time.year - lookback)
+            return "Y" + dt.strftime("%Y")
+
     raise ValueError(f"Cannot resolve cadence: {cadence!r}")  # pragma: no cover
 
 

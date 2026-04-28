@@ -28,7 +28,7 @@ import calendar
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
@@ -93,6 +93,7 @@ class _PendingSubmission:
     attempt: int
     trigger_type: TriggerType = TriggerType.SCHEDULED
     trigger_reason: str | None = None
+    params: dict[str, str] = field(default_factory=dict)
 
 
 class Orchestrator:
@@ -138,6 +139,7 @@ class Orchestrator:
         namespace: str = "default",
         tick_log: TickLogStore | None = None,
         data_store: DataStore | None = None,
+        settings: object | None = None,
     ) -> None:
         self.namespace = namespace
         self.tick_log = tick_log
@@ -158,6 +160,7 @@ class Orchestrator:
         self.strict_dependencies = strict_dependencies
         self.allow_runtime_mutation = allow_runtime_mutation
         self.data_store = data_store
+        self.settings = settings
 
         self._job_index: dict[str, Job] = {}
         self._jobs_dirty = False
@@ -532,6 +535,13 @@ class Orchestrator:
         # Phase 3 — evaluate each job (planning only; no state writes)
         # outcomes preserves job-list order so results are reported in order.
         outcomes: list[JobTickResult | _PendingSubmission | None] = []
+
+        # Determine if this tick is processing a backfill run (for RunContext)
+        orch_run = self.state.get_orchestrator_run_by_key(orchestrator_run_key)
+        is_backfill = (
+            orch_run is not None and orch_run.mode == OrchestratorRunMode.BACKFILL
+        )
+
         for job in self.jobs:
             if pool is not None and job.pool != pool:
                 continue
@@ -541,15 +551,28 @@ class Orchestrator:
                 reference_time=reference_time,
                 orchestrator_run_key=orchestrator_run_key,
             )
-            outcomes.append(
-                self._evaluate_job(
-                    job,
-                    run_key,
-                    effective_cadence,
-                    reference_time,
-                    orchestrator_run_key=orchestrator_run_key,
+
+            if job.runs is not None:
+                outcomes.extend(
+                    self._evaluate_runs(
+                        job,
+                        run_key,
+                        effective_cadence,
+                        reference_time,
+                        orchestrator_run_key=orchestrator_run_key,
+                        is_backfill=is_backfill,
+                    )
                 )
-            )
+            else:
+                outcomes.append(
+                    self._evaluate_job(
+                        job,
+                        run_key,
+                        effective_cadence,
+                        reference_time,
+                        orchestrator_run_key=orchestrator_run_key,
+                    )
+                )
 
         # Phase 4 — admission planning (active and per-tick limits)
         pending_indices = [
@@ -929,6 +952,76 @@ class Orchestrator:
         return results
 
     # ------------------------------------------------------------------
+    # Phase 3 — expand and evaluate jobs with a runs callable
+    # ------------------------------------------------------------------
+
+    def _evaluate_runs(
+        self,
+        job: Job,
+        base_run_key: str,
+        cadence: Cadence,
+        reference_time: datetime,
+        *,
+        orchestrator_run_key: str,
+        is_backfill: bool,
+    ) -> list[JobTickResult | _PendingSubmission | None]:
+        from dispatchio.date_context import DateContext
+        from dispatchio.runs import RunContext
+
+        dates_cfg = getattr(self.settings, "dates", None)
+        week_start_day = getattr(dates_cfg, "week_start_day", 0) if dates_cfg else 0
+        quarter_start_month = (
+            getattr(dates_cfg, "quarter_start_month", 1) if dates_cfg else 1
+        )
+
+        rc = RunContext(
+            reference_time=reference_time,
+            dates=DateContext(
+                reference_time,
+                week_start_day=week_start_day,
+                quarter_start_month=quarter_start_month,
+            ),
+            is_backfill=is_backfill,
+            job_name=job.name,
+        )
+
+        try:
+            specs = job.runs(rc)
+        except Exception as exc:
+            logger.error("runs() callable failed for %s: %s", job.name, exc)
+            return [
+                self._result(
+                    job_name=job.name,
+                    run_key=base_run_key,
+                    pool=job.pool,
+                    action=JobAction.SUBMISSION_FAILED,
+                    detail=f"runs() error: {exc}",
+                )
+            ]
+
+        results: list[JobTickResult | _PendingSubmission | None] = []
+        for spec in specs:
+            if spec.run_key is not None:
+                effective_run_key = spec.run_key
+            elif spec.variant is not None:
+                effective_run_key = f"{base_run_key}:{spec.variant}"
+            else:
+                effective_run_key = base_run_key
+
+            outcome = self._evaluate_job(
+                job,
+                effective_run_key,
+                cadence,
+                reference_time,
+                orchestrator_run_key=orchestrator_run_key,
+            )
+            if isinstance(outcome, _PendingSubmission) and spec.params:
+                outcome.params = dict(spec.params)
+            results.append(outcome)
+
+        return results
+
+    # ------------------------------------------------------------------
     # Phase 3 — evaluate a single job (planning; returns intent, not action)
     # ------------------------------------------------------------------
 
@@ -1099,6 +1192,7 @@ class Orchestrator:
                     ps.attempt,
                     ps.trigger_type,
                     ps.trigger_reason,
+                    params=ps.params,
                 ): i
                 for i, ps in enumerate(pending)
             }
@@ -1138,6 +1232,7 @@ class Orchestrator:
         trigger_type: TriggerType = TriggerType.SCHEDULED,
         trigger_reason: str | None = None,
         requested_by: str | None = None,
+        params: dict[str, str] | None = None,
     ) -> JobTickResult:
         executor_type = job.executor.type
         executor = self.executors.get(executor_type)
@@ -1165,6 +1260,7 @@ class Orchestrator:
             trigger_type=trigger_type,
             trigger_reason=trigger_reason,
             requested_by=requested_by,
+            params=params or {},
             trace={},
         )
         self.state.append_attempt(record)

@@ -204,6 +204,7 @@ class _AttemptRow(_Base):
         _TriggerTypeType, nullable=False, default=TriggerType.SCHEDULED
     )
     trigger_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    params: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False, default=dict)
     trace: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     completion_event_trace: Mapped[dict[str, Any] | None] = mapped_column(
         JSON, nullable=True

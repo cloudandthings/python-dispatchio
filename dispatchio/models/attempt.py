@@ -30,6 +30,7 @@ class Attempt(BaseModel):
     completed_at: datetime | None = None
     trigger_type: TriggerType = TriggerType.SCHEDULED
     trigger_reason: str | None = None
+    params: dict[str, str] = Field(default_factory=dict)
     trace: dict[str, Any] = Field(default_factory=dict)
     completion_event_trace: dict[str, Any] | None = None
     requested_by: str | None = None

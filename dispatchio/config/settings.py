@@ -99,6 +99,18 @@ class ReceiverSettings(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class DateSettings(BaseModel):
+    """
+    Date context settings for parametrized runs.
+
+    week_start_day:     First day of the week (0=Monday … 6=Sunday). Default: 0.
+    quarter_start_month: First month of Q1 (1=January). Default: 1.
+    """
+
+    week_start_day: int = 0
+    quarter_start_month: int = 1
+
+
 class DataStoreSettings(BaseModel):
     """
     Inter-job DataStore configuration.
@@ -151,6 +163,7 @@ class DispatchioSettings(BaseSettings):
     receiver: ReceiverSettings = Field(default_factory=ReceiverSettings)
     admission: AdmissionPolicy = Field(default_factory=AdmissionPolicy)
     data_store: DataStoreSettings = Field(default_factory=DataStoreSettings)
+    dates: DateSettings = Field(default_factory=DateSettings)
     default_cadence: Any = "daily"
     # Accepts a frequency string ("daily", "monthly", etc.) or a full
     # Cadence dict.  Coerced to a DateCadence by _coerce_cadence below.

@@ -299,6 +299,7 @@ def orchestrator(
         namespace=namespace,
         tick_log=_build_tick_log(settings.state),
         data_store=data_store,
+        settings=settings,
         **orchestrator_kwargs,
     )
 
