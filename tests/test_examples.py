@@ -48,6 +48,10 @@ EXAMPLES: tuple[ExampleCase, ...] = (
         "custom_pool",
         REPO_ROOT / "examples" / "custom_pool" / "run.py",
     ),
+    ExampleCase(
+        "parametrized_runs",
+        REPO_ROOT / "examples" / "parametrized_runs" / "run.py",
+    ),
 )
 
 

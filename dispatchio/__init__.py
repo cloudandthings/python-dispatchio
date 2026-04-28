@@ -9,14 +9,18 @@ from dispatchio.cadence import (
     Frequency,
     IncrementalCadence,
     # Constants
+    ANNUALLY,
     DAILY,
     HOURLY,
     LAST_MONTH,
     LAST_WEEK,
     MONTHLY,
+    QUARTERLY,
     WEEKLY,
     YESTERDAY,
 )
+from dispatchio.date_context import DateContext
+from dispatchio.runs import RunContext, RunSpec
 from dispatchio.decorator import job
 from dispatchio.conditions import (
     AllOf,
@@ -90,13 +94,19 @@ __all__ = [
     "IncrementalCadence",
     # Decorator
     "job",
+    "ANNUALLY",
     "DAILY",
     "HOURLY",
     "LAST_MONTH",
     "LAST_WEEK",
     "MONTHLY",
+    "QUARTERLY",
     "WEEKLY",
     "YESTERDAY",
+    # Date context + parametrized runs
+    "DateContext",
+    "RunContext",
+    "RunSpec",
     # Conditions
     "AllOf",
     "AnyCondition",

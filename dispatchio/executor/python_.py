@@ -90,6 +90,9 @@ class PythonJobExecutor:
             "DISPATCHIO_CORRELATION_ID": str(attempt.correlation_id),
         }
 
+        for k, v in attempt.params.items():
+            env[f"DISPATCHIO_PARAM_{k.upper()}"] = str(v)
+
         if cfg.pythonpath:
             extra = os.pathsep.join(str(p) for p in cfg.pythonpath)
             existing = env.get("PYTHONPATH", "")

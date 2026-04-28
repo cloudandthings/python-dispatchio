@@ -4,7 +4,7 @@ from datetime import datetime, time
 from typing import Annotated, Any, Literal
 from collections.abc import Sequence
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from dispatchio.cadence import Cadence
 from dispatchio.conditions import AnyCondition
@@ -225,6 +225,8 @@ class Job(BaseModel):
     and how errors are handled.
     """
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     name: str
     executor: ExecutorConfig
     cadence: Cadence | None = None
@@ -236,6 +238,9 @@ class Job(BaseModel):
     alerts: list[AlertCondition] = Field(default_factory=list)
     pool: str = "default"
     priority: int = 0
+    # Callable[[RunContext], list[RunSpec]] | None — stored as Any to avoid
+    # a circular import; the orchestrator validates it at runtime.
+    runs: Any = Field(default=None, exclude=True)
 
     @model_validator(mode="after")
     def _check_dependency_threshold(self) -> Job:
@@ -271,6 +276,7 @@ class Job(BaseModel):
         name: str,
         executor: ExecutorConfig,
         depends_on: Sequence[Job | Dependency] | Dependency | Job | None = None,
+        runs: Any = None,
         **kwargs,
     ) -> Job:
         if not isinstance(depends_on, list) and depends_on is not None:
@@ -279,6 +285,7 @@ class Job(BaseModel):
             name=name,
             executor=executor,
             depends_on=[_normalise_dep(d) for d in (depends_on or [])],
+            runs=runs,
             **kwargs,
         )
 

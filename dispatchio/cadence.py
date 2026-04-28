@@ -25,6 +25,8 @@ class Frequency(str, Enum):
     DAILY = "daily"
     WEEKLY = "weekly"
     MONTHLY = "monthly"
+    QUARTERLY = "quarterly"
+    ANNUALLY = "annually"
 
 
 class DateCadence(BaseModel):
@@ -71,6 +73,8 @@ HOURLY = DateCadence(frequency=Frequency.HOURLY)
 DAILY = DateCadence(frequency=Frequency.DAILY)
 WEEKLY = DateCadence(frequency=Frequency.WEEKLY)
 MONTHLY = DateCadence(frequency=Frequency.MONTHLY)
+QUARTERLY = DateCadence(frequency=Frequency.QUARTERLY)
+ANNUALLY = DateCadence(frequency=Frequency.ANNUALLY)
 
 YESTERDAY = DateCadence(frequency=Frequency.DAILY, offset=-1)
 LAST_WEEK = DateCadence(frequency=Frequency.WEEKLY, offset=-1)

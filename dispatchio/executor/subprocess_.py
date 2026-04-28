@@ -81,6 +81,9 @@ class SubprocessExecutor:
         env["DISPATCHIO_ATTEMPT"] = str(attempt.attempt)
         env["DISPATCHIO_CORRELATION_ID"] = str(attempt.correlation_id)
 
+        for k, v in attempt.params.items():
+            env[f"DISPATCHIO_PARAM_{k.upper()}"] = str(v)
+
         # Detach: we do not wait for completion.
         # The child process is responsible for posting a completion event.
         proc = subprocess.Popen(
