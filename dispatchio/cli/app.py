@@ -30,7 +30,6 @@ def callback(
     if no_color:
         output.console = Console(highlight=False, no_color=True)
         output.error_console = Console(stderr=True, highlight=False, no_color=True)
-    output.apply_cli_settings()
 
 
 from dispatchio.cli import root as _root  # noqa: F401,E402 — registers root commands; must follow app definition

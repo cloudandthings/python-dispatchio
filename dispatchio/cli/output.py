@@ -6,7 +6,7 @@ from rich.prompt import Confirm
 from rich.table import Table
 from rich.text import Text
 
-from dispatchio.config.loader import load_config
+from dispatchio.config.loader import get_config
 from dispatchio.contexts import ContextEntry
 from dispatchio.models import Attempt, RetryRequest, TickResult
 from dispatchio.tick_log import TickLogRecord
@@ -50,15 +50,19 @@ _ACTION_ICONS: dict[str, str] = {
 }
 
 
-def apply_cli_settings() -> None:
-    """Load and apply CLI look-and-feel settings from config."""
-    cli_settings = load_config().cli
-    _STATUS_COLOURS.update(cli_settings.status_colors)
-    _ACTION_ICONS.update(cli_settings.action_icons)
+def _status_colour(status: str) -> str:
+    overrides = get_config().cli.status_colors
+    return overrides.get(status, _STATUS_COLOURS.get(status, "white"))
+
+
+def _action_icon(action: str) -> str:
+    overrides = get_config().cli.action_icons
+    return overrides.get(action, _ACTION_ICONS.get(action, "?"))
+
 
 def _make_table() -> Table:
     """Build a Rich Table using the user-configured table settings."""
-    ts = load_config().cli.table
+    ts = get_config().cli.table
     kwargs: dict = {
         "show_header": True,
         "header_style": ts.header_style,
@@ -72,6 +76,7 @@ def _make_table() -> Table:
         kwargs["border_style"] = ts.border_style
     if ts and ts.box is not None:
         from rich import box as rich_box
+
         name = ts.box.upper()
         kwargs["box"] = None if name == "NONE" else getattr(rich_box, name, None)
     return Table(**kwargs)
@@ -138,7 +143,7 @@ def print_records(records: list[Attempt]) -> None:
 
     for record in records:
         status_value = record.status.value
-        status_colour = _STATUS_COLOURS.get(status_value, "white")
+        status_colour = _status_colour(status_value)
         completed = record.completed_at.isoformat() if record.completed_at else "-"
         row: list[str] = []
         if show_namespace:
@@ -167,8 +172,8 @@ def print_tick_result(result: TickResult) -> None:
     lines: list[Text] = []
     for item in result.results:
         action = item.action.value
-        icon = _ACTION_ICONS.get(action, "?")
-        colour = _STATUS_COLOURS.get(action, "white")
+        icon = _action_icon(action)
+        colour = _status_colour(action)
         line = Text(f"{icon} {item.job_name}[{item.run_key}] -> {action}", style=colour)
         if item.detail:
             line.append(f"  {item.detail}")
@@ -201,7 +206,7 @@ def print_tick_summary(record: TickLogRecord, *, detail: bool = False) -> None:
 
     for action in record.actions:
         action_name = str(action.get("action", ""))
-        icon = _ACTION_ICONS.get(action_name, "?")
+        icon = _action_icon(action_name)
         job_name = action.get("job_name", "?")
         run_key = action.get("run_key", "?")
         action_detail = action.get("detail", "")
@@ -247,4 +252,3 @@ def print_json(data: str) -> None:
 
 def confirm(message: str) -> bool:
     return Confirm.ask(message, console=console)
-

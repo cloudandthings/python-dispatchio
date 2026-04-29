@@ -14,12 +14,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dispatchio import (
-    DAILY,
-    Job,
-    PythonJob,
-    event_dependency
-)
+from dispatchio import DAILY, Job, PythonJob, event_dependency
 from dispatchio.config import orchestrator
 
 BASE = Path(__file__).parent

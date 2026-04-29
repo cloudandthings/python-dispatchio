@@ -122,6 +122,7 @@ def _build_tick_log(cfg: StateSettings) -> FilesystemTickLogStore:
 def _build_state(cfg: StateSettings, namespace: str | None = "default") -> StateStore:
     if cfg.backend == "sqlalchemy":
         from dispatchio.state import SQLAlchemyStateStore
+
         return SQLAlchemyStateStore(
             namespace=namespace,
             connection_string=cfg.connection_string,
@@ -150,6 +151,7 @@ def _build_data_store(
         return None
     if cfg.backend == "filesystem":
         from dispatchio.datastore import FilesystemDataStore
+
         ns = cfg.namespace if cfg.namespace != "default" else default_namespace
         return FilesystemDataStore(cfg.base_dir, namespace=ns)
     raise ValueError(f"Unknown data_store backend: {cfg.backend!r}")
@@ -161,11 +163,13 @@ def _build_receiver(cfg: ReceiverSettings):
 
     if cfg.backend == "filesystem":
         from dispatchio.receiver import FilesystemReceiver
+
         return FilesystemReceiver(cfg.drop_dir)
 
     if cfg.backend == "sqs":
         try:
             from dispatchio_aws.receiver.sqs import SQSReceiver  # type: ignore[import]
+
             return SQSReceiver(queue_url=cfg.queue_url, region=cfg.region)
         except ImportError:
             raise ImportError(

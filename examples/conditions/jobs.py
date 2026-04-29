@@ -27,13 +27,7 @@ import os
 from datetime import time
 from pathlib import Path
 
-from dispatchio import (
-    AllOf,
-    DayOfWeekCondition,
-    Job,
-    PythonJob,
-    TimeOfDayCondition
-)
+from dispatchio import AllOf, DayOfWeekCondition, Job, PythonJob, TimeOfDayCondition
 from dispatchio.config import orchestrator
 
 BASE = Path(__file__).parent

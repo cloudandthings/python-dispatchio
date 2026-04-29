@@ -28,15 +28,7 @@ Run with:
 import os
 from pathlib import Path
 
-from dispatchio import (
-    DAILY,
-    MONTHLY,
-    WEEKLY,
-    YESTERDAY,
-    JobDependency,
-    Job,
-    PythonJob
-)
+from dispatchio import DAILY, MONTHLY, WEEKLY, YESTERDAY, JobDependency, Job, PythonJob
 from dispatchio.config import orchestrator
 
 BASE = Path(__file__).parent
