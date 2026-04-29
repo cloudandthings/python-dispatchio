@@ -60,13 +60,7 @@ CLI usage:
 import os
 from pathlib import Path
 
-from dispatchio import (
-    DAILY,
-    MONTHLY,
-    Job,
-    RunContext,
-    RunSpec
-    resolve_run_key)
+from dispatchio import DAILY, MONTHLY, Job, RunContext, RunSpec, resolve_run_key
 from dispatchio.config import orchestrator
 from dispatchio_aws import AthenaJob
 

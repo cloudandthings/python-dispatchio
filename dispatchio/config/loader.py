@@ -215,3 +215,28 @@ def load_config(path: str | Path | None = None) -> DispatchioSettings:
 
     _Settings._data = data
     return _Settings()
+
+
+# ---------------------------------------------------------------------------
+# Public: get_config (cached)
+# ---------------------------------------------------------------------------
+
+_cache: dict[str | Path | None, DispatchioSettings] = {}
+
+
+def get_config(path: str | Path | None = None) -> DispatchioSettings:
+    """
+    Return DispatchioSettings for the given path, loading and caching on first call.
+
+    Subsequent calls with the same path argument return the cached result without
+    re-reading the file. Keyed by the path argument, so different context paths
+    cache independently:
+
+        get_config()                     # ambient config, cached under None
+        get_config("prod.toml")          # explicit file, cached under that path
+        get_config(entry.config_path)    # per-context, cached by path string
+
+    """
+    if path not in _cache:
+        _cache[path] = load_config(path)
+    return _cache[path]

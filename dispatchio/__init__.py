@@ -71,41 +71,41 @@ from dispatchio.config import DispatchioSettings, load_config
 # Maps public name -> (module_path, attribute)
 _LAZY: dict[str, tuple[str, str]] = {
     # Orchestrator
-    "Orchestrator":         ("dispatchio.orchestrator",     "Orchestrator"),
+    "Orchestrator": ("dispatchio.orchestrator", "Orchestrator"),
     # State
-    "SQLAlchemyStateStore": ("dispatchio.state",            "SQLAlchemyStateStore"),
+    "SQLAlchemyStateStore": ("dispatchio.state", "SQLAlchemyStateStore"),
     # Executors
-    "SubprocessExecutor":   ("dispatchio.executor",         "SubprocessExecutor"),
-    "PythonJobExecutor":    ("dispatchio.executor",         "PythonJobExecutor"),
+    "SubprocessExecutor": ("dispatchio.executor", "SubprocessExecutor"),
+    "PythonJobExecutor": ("dispatchio.executor", "PythonJobExecutor"),
     # Receiver
-    "FilesystemReceiver":   ("dispatchio.receiver",         "FilesystemReceiver"),
+    "FilesystemReceiver": ("dispatchio.receiver", "FilesystemReceiver"),
     # Reporter
-    "Reporter":             ("dispatchio.reporter",         "Reporter"),
-    "build_reporter":       ("dispatchio.reporter",         "build_reporter"),
-    "get_reporter":         ("dispatchio.reporter",         "get_reporter"),
+    "Reporter": ("dispatchio.reporter", "Reporter"),
+    "build_reporter": ("dispatchio.reporter", "build_reporter"),
+    "get_reporter": ("dispatchio.reporter", "get_reporter"),
     # Tick log
-    "FilesystemTickLogStore": ("dispatchio.tick_log",       "FilesystemTickLogStore"),
-    "TickLogRecord":        ("dispatchio.tick_log",         "TickLogRecord"),
-    "TickLogStore":         ("dispatchio.tick_log",         "TickLogStore"),
+    "FilesystemTickLogStore": ("dispatchio.tick_log", "FilesystemTickLogStore"),
+    "TickLogRecord": ("dispatchio.tick_log", "TickLogRecord"),
+    "TickLogStore": ("dispatchio.tick_log", "TickLogStore"),
     # Contexts
-    "ContextEntry":         ("dispatchio.contexts",         "ContextEntry"),
-    "ContextStore":         ("dispatchio.contexts",         "ContextStore"),
+    "ContextEntry": ("dispatchio.contexts", "ContextEntry"),
+    "ContextStore": ("dispatchio.contexts", "ContextStore"),
     # Graph
-    "GraphExternalDependency": ("dispatchio.graph",         "GraphExternalDependency"),
-    "GraphSpec":            ("dispatchio.graph",            "GraphSpec"),
-    "GraphValidationError": ("dispatchio.graph",            "GraphValidationError"),
-    "ProducerInfo":         ("dispatchio.graph",            "ProducerInfo"),
-    "dump_schema":          ("dispatchio.graph",            "dump_schema"),
-    "load_graph":           ("dispatchio.graph",            "load_graph"),
-    "orchestrator_from_graph": ("dispatchio.graph",         "orchestrator_from_graph"),
-    "validate_graph":       ("dispatchio.graph",            "validate_graph"),
+    "GraphExternalDependency": ("dispatchio.graph", "GraphExternalDependency"),
+    "GraphSpec": ("dispatchio.graph", "GraphSpec"),
+    "GraphValidationError": ("dispatchio.graph", "GraphValidationError"),
+    "ProducerInfo": ("dispatchio.graph", "ProducerInfo"),
+    "dump_schema": ("dispatchio.graph", "dump_schema"),
+    "load_graph": ("dispatchio.graph", "load_graph"),
+    "orchestrator_from_graph": ("dispatchio.graph", "orchestrator_from_graph"),
+    "validate_graph": ("dispatchio.graph", "validate_graph"),
     # DataStore
-    "DataStore":            ("dispatchio.datastore",        "DataStore"),
-    "FilesystemDataStore":  ("dispatchio.datastore",        "FilesystemDataStore"),
-    "MemoryDataStore":      ("dispatchio.datastore",        "MemoryDataStore"),
-    "dispatchio_read_results":  ("dispatchio.datastore",    "dispatchio_read_results"),
-    "dispatchio_write_results": ("dispatchio.datastore",    "dispatchio_write_results"),
-    "get_data_store":       ("dispatchio.datastore",        "get_data_store"),
+    "DataStore": ("dispatchio.datastore", "DataStore"),
+    "FilesystemDataStore": ("dispatchio.datastore", "FilesystemDataStore"),
+    "MemoryDataStore": ("dispatchio.datastore", "MemoryDataStore"),
+    "dispatchio_read_results": ("dispatchio.datastore", "dispatchio_read_results"),
+    "dispatchio_write_results": ("dispatchio.datastore", "dispatchio_write_results"),
+    "get_data_store": ("dispatchio.datastore", "get_data_store"),
 }
 
 
@@ -113,6 +113,7 @@ def __getattr__(name: str):
     entry = _LAZY.get(name)
     if entry is not None:
         import importlib
+
         mod = importlib.import_module(entry[0])
         return getattr(mod, entry[1])
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

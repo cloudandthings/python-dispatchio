@@ -19,13 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
-from dispatchio import (
-    DAILY,
-    Job,
-    PythonJob,
-    RunContext,
-    RunSpec
-)
+from dispatchio import DAILY, Job, PythonJob, RunContext, RunSpec
 from dispatchio.config import orchestrator
 from dispatchio.run_loop import run_loop
 

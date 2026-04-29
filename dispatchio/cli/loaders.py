@@ -13,6 +13,7 @@ from dispatchio.orchestrator import Orchestrator
 from dispatchio.state import SQLAlchemyStateStore
 from dispatchio.tick_log import FilesystemTickLogStore
 
+
 def load_orchestrator(path: str) -> Orchestrator:
     if ":" not in path:
         raise CliUserError(
@@ -39,8 +40,6 @@ def load_orchestrator(path: str) -> Orchestrator:
 def load_store_from_context(
     context_name: str | None, *, all_namespaces: bool = False
 ) -> SQLAlchemyStateStore:
-
-
     entry = ContextStore().resolve(context_name)
     if entry is not None:
         try:
