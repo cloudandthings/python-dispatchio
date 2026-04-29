@@ -32,7 +32,7 @@ def test_python_executor_uses_run_for_entry_point(monkeypatch) -> None:
             captured["kwargs"] = kwargs
             self.pid = 1234
 
-    monkeypatch.setattr("dispatchio.executor.python_.subprocess.Popen", FakePopen)
+    monkeypatch.setattr("dispatchio.executor.subprocess_.subprocess.Popen", FakePopen)
 
     executor = PythonJobExecutor()
     job = Job(name="job_a", executor=PythonJob(entry_point="pkg.jobs:run_job"))
@@ -57,7 +57,7 @@ def test_python_executor_uses_run_script_for_script_form(monkeypatch) -> None:
             captured["kwargs"] = kwargs
             self.pid = 5678
 
-    monkeypatch.setattr("dispatchio.executor.python_.subprocess.Popen", FakePopen)
+    monkeypatch.setattr("dispatchio.executor.subprocess_.subprocess.Popen", FakePopen)
 
     executor = PythonJobExecutor()
     job = Job(

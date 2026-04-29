@@ -18,20 +18,16 @@ from __future__ import annotations
 
 import logging
 import os
-import subprocess
 import sys
-import time
 from datetime import datetime
-from uuid import UUID
 
-import psutil
-
-from dispatchio.models import Attempt, Job, PythonJob, Status
+from dispatchio.executor.subprocess_ import _BaseSubprocessExecutor
+from dispatchio.models import Attempt, Job, PythonJob
 
 logger = logging.getLogger(__name__)
 
 
-class PythonJobExecutor:
+class PythonJobExecutor(_BaseSubprocessExecutor):
     """
     Executor for PythonJob configs.
 
@@ -39,23 +35,10 @@ class PythonJobExecutor:
     as a detached subprocess. Run ID and reporter env vars are injected
     automatically; the job function itself stays free of Dispatchio imports.
 
-    Implements Pokeable: poke() checks subprocess liveness via poll() so the
-    orchestrator can detect crashed jobs via active polling.
-
     Args:
         env: Env vars that configure the subprocess. This now primarily includes
              DISPATCHIO_CONFIG so workers can load receiver settings from shared config.
     """
-
-    def __init__(
-        self,
-        env: dict[str, str] | None = None,
-    ) -> None:
-        self._env: dict[str, str] = env or {}
-        self._processes: dict[
-            str, subprocess.Popen
-        ] = {}  # keyed by str(correlation_id)
-        self._references: dict[str, dict] = {}  # keyed by str(correlation_id)
 
     def submit(
         self,
@@ -98,83 +81,4 @@ class PythonJobExecutor:
             existing = env.get("PYTHONPATH", "")
             env["PYTHONPATH"] = f"{extra}{os.pathsep}{existing}" if existing else extra
 
-        proc = subprocess.Popen(
-            cmd,
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=True,
-        )
-        attempt_id_str = str(attempt.correlation_id)
-        self._processes[attempt_id_str] = proc
-        self._references[attempt_id_str] = {
-            "pid": proc.pid,
-            "start_time": time.time(),
-        }
-
-    def poke(self, record: Attempt) -> Status | None:
-        """
-        Check whether the spawned subprocess is still alive.
-
-        Returns Status.RUNNING if the process is alive, Status.DONE if it
-        exited cleanly (exit code 0), Status.ERROR if it exited with a
-        non-zero code, or None if the process cannot be determined.
-
-        First checks in-memory process table (hot path). If not found and
-        trace.executor is available (survived orchestrator restart),
-        looks up the process by PID.
-        """
-        correlation_id_str = str(record.correlation_id)
-        # Hot path: check in-memory process table
-        proc = self._processes.get(correlation_id_str)
-        if proc is not None:
-            returncode = proc.poll()
-            if returncode is None:
-                return Status.RUNNING
-            del self._processes[correlation_id_str]
-            return Status.DONE if returncode == 0 else Status.ERROR
-
-        # Cold path: lookup by PID from trace.executor (after restart)
-        executor_trace = record.trace.get("executor", {})
-        if not executor_trace:
-            return None
-
-        pid = executor_trace.get("pid")
-        start_time = executor_trace.get("start_time")
-
-        if pid is None:
-            return None
-
-        try:
-            proc = psutil.Process(pid)
-
-            # Verify this is the same process we started (prevent PID reuse issues)
-            if start_time is not None:
-                proc_start = proc.create_time()
-                # Allow 1 second tolerance for floating point precision
-                if abs(proc_start - start_time) > 1.0:
-                    logger.warning(
-                        "PID %d reused or stale for %s/%s/%d (start time mismatch)",
-                        pid,
-                        record.job_name,
-                        record.run_key,
-                        record.attempt,
-                    )
-                    return Status.ERROR
-
-            returncode = proc.poll()
-            if returncode is None:
-                return Status.RUNNING
-            return Status.DONE if returncode == 0 else Status.ERROR
-
-        except (psutil.NoSuchProcess, psutil.AccessDenied, ProcessLookupError):
-            # Process doesn't exist or can't be accessed — it's dead
-            return Status.ERROR
-
-    def get_executor_reference(self, correlation_id: UUID) -> dict | None:
-        """
-        Retrieve the executor reference for an attempt UUID.
-        Used by orchestrator to populate Attempt.trace.executor.
-        Returns {"pid": ..., "start_time": ...} or None if not tracked.
-        """
-        return self._references.get(str(correlation_id))
+        self._spawn(cmd, env, attempt)

@@ -9,12 +9,13 @@ import boto3
 from beartype import beartype
 from botocore.client import BaseClient
 
+from dispatchio.executor.base import BaseExecutor
 from dispatchio.models import Attempt, Job, Status, StepFunctionJob
 from dispatchio_aws.executor.base import build_execution_context, render_payload
 
 
 @beartype
-class StepFunctionsExecutor:
+class StepFunctionsExecutor(BaseExecutor):
     """Submit StepFunctionJob runs via start_execution and support poke()."""
 
     def __init__(

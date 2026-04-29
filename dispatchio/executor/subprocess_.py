@@ -20,74 +20,30 @@ import logging
 import subprocess
 import time
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 import psutil
 
+from dispatchio.executor.base import BaseExecutor
 from dispatchio.models import Attempt, Job, Status, SubprocessJob
 
 logger = logging.getLogger(__name__)
 
 
-class SubprocessExecutor:
-    """
-    Executor for SubprocessJob configs.
-
-    Launches the job as a detached child process. The process is responsible
-    for posting its own completion event (e.g. by calling run_job()).
-
-    Implements Pokeable: poke() checks subprocess liveness via poll() so the
-    orchestrator can detect crashed jobs via active polling.
-
-    Args:
-        env: Env vars to inject into the subprocess environment.
-    """
+class _BaseSubprocessExecutor(BaseExecutor):
+    """Shared process-tracking base for subprocess-based executors."""
 
     def __init__(self, env: dict[str, str] | None = None) -> None:
         self._env: dict[str, str] = env or {}
-        self._processes: dict[
-            str, subprocess.Popen
-        ] = {}  # keyed by str(correlation_id)
-        self._references: dict[str, dict] = {}  # keyed by str(correlation_id)
+        self._processes: dict[str, subprocess.Popen] = {}
+        self._references: dict[str, dict[str, Any]] = {}
 
-    def submit(
-        self,
-        job: Job,
-        attempt: Attempt,
-        reference_time: datetime,
-        timeout: float | None = None,
-    ) -> None:
-        cfg = job.executor
-        if not isinstance(cfg, SubprocessJob):
-            raise TypeError(
-                f"SubprocessExecutor requires SubprocessJob, got {type(cfg).__name__}"
-            )
-
-        ctx = {
-            "job_name": job.name,
-            "run_key": attempt.run_key,
-            "attempt": str(attempt.attempt),
-            "reference_time": reference_time.isoformat(),
-        }
-
-        command = [part.format(**ctx) for part in cfg.command]
-
-        env = {**self._env}
-        for k, v in cfg.env.items():
-            env[k] = v.format(**ctx)
-        # Inject attempt identity for Phase 2 completion correlation
-        env["DISPATCHIO_JOB_NAME"] = job.name
-        env["DISPATCHIO_RUN_KEY"] = attempt.run_key
-        env["DISPATCHIO_ATTEMPT"] = str(attempt.attempt)
-        env["DISPATCHIO_CORRELATION_ID"] = str(attempt.correlation_id)
-
-        for k, v in attempt.params.items():
-            env[f"DISPATCHIO_PARAM_{k.upper()}"] = str(v)
-
-        # Detach: we do not wait for completion.
-        # The child process is responsible for posting a completion event.
+    def _spawn(
+        self, cmd: list[str], env: dict[str, str], attempt: Attempt
+    ) -> subprocess.Popen:
         proc = subprocess.Popen(
-            command,
+            cmd,
             env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -99,14 +55,11 @@ class SubprocessExecutor:
             "pid": proc.pid,
             "start_time": time.time(),
         }
+        return proc
 
     def poke(self, record: Attempt) -> Status | None:
         """
         Check whether the spawned subprocess is still alive.
-
-        Returns Status.RUNNING if the process is alive, Status.DONE if it
-        exited cleanly (exit code 0), Status.ERROR if it exited with a
-        non-zero code, or None if the process cannot be determined.
 
         First checks in-memory process table (hot path). If not found and
         trace.executor is available (survived orchestrator restart),
@@ -150,19 +103,60 @@ class SubprocessExecutor:
                     )
                     return Status.ERROR
 
-            returncode = proc.poll()
-            if returncode is None:
+            if proc.is_running():
                 return Status.RUNNING
+            returncode = proc.wait(timeout=0)
             return Status.DONE if returncode == 0 else Status.ERROR
 
         except (psutil.NoSuchProcess, psutil.AccessDenied, ProcessLookupError):
-            # Process doesn't exist or can't be accessed — it's dead
             return Status.ERROR
 
-    def get_executor_reference(self, correlation_id: UUID) -> dict | None:
-        """
-        Retrieve the executor reference for an attempt UUID.
-        Used by orchestrator to populate Attempt.trace.executor.
-        Returns {"pid": ..., "start_time": ...} or None if not tracked.
-        """
+    def get_executor_reference(self, correlation_id: UUID) -> dict[str, Any] | None:
         return self._references.get(str(correlation_id))
+
+
+class SubprocessExecutor(_BaseSubprocessExecutor):
+    """
+    Executor for SubprocessJob configs.
+
+    Launches the job as a detached child process. The process is responsible
+    for posting its own completion event (e.g. by calling run_job()).
+
+    Args:
+        env: Env vars to inject into the subprocess environment.
+    """
+
+    def submit(
+        self,
+        job: Job,
+        attempt: Attempt,
+        reference_time: datetime,
+        timeout: float | None = None,
+    ) -> None:
+        cfg = job.executor
+        if not isinstance(cfg, SubprocessJob):
+            raise TypeError(
+                f"SubprocessExecutor requires SubprocessJob, got {type(cfg).__name__}"
+            )
+
+        ctx = {
+            "job_name": job.name,
+            "run_key": attempt.run_key,
+            "attempt": str(attempt.attempt),
+            "reference_time": reference_time.isoformat(),
+        }
+
+        command = [part.format(**ctx) for part in cfg.command]
+
+        env = {**self._env}
+        for k, v in cfg.env.items():
+            env[k] = v.format(**ctx)
+        env["DISPATCHIO_JOB_NAME"] = job.name
+        env["DISPATCHIO_RUN_KEY"] = attempt.run_key
+        env["DISPATCHIO_ATTEMPT"] = str(attempt.attempt)
+        env["DISPATCHIO_CORRELATION_ID"] = str(attempt.correlation_id)
+
+        for k, v in attempt.params.items():
+            env[f"DISPATCHIO_PARAM_{k.upper()}"] = str(v)
+
+        self._spawn(command, env, attempt)

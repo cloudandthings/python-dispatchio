@@ -20,6 +20,7 @@ from dispatchio import (
 )
 from dispatchio.cadence import DateCadence, Frequency
 from dispatchio.events import event_dependency
+from dispatchio.executor.base import BaseExecutor
 from dispatchio.models import (
     Event,
     EventDependency,
@@ -52,7 +53,7 @@ def _job(name: str, **kwargs) -> Job:
     )
 
 
-class SpyExecutor:
+class SpyExecutor(BaseExecutor):
     def __init__(self):
         self.calls: list[str] = []
 

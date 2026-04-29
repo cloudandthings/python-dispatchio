@@ -9,12 +9,13 @@ import boto3
 from beartype import beartype
 from botocore.client import BaseClient
 
+from dispatchio.executor.base import BaseExecutor
 from dispatchio.models import Attempt, Job, LambdaJob
 from dispatchio_aws.executor.base import build_execution_context, render_payload
 
 
 @beartype
-class LambdaExecutor:
+class LambdaExecutor(BaseExecutor):
     """Submit LambdaJob runs via asynchronous Lambda invocation."""
 
     def __init__(

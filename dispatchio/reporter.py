@@ -64,7 +64,7 @@ class Reporter:
 
 def build_reporter(
     receiver_settings: ReceiverSettings,
-) -> Reporter | None:
+) -> BaseReporter | None:
     """
     Build a Reporter from ReceiverSettings.
 
@@ -110,7 +110,7 @@ def build_reporter(
     raise ValueError(f"Unknown receiver backend: {receiver_settings.backend!r}")
 
 
-def _reporter_from_env() -> Reporter | None:
+def _reporter_from_env() -> BaseReporter | None:
     """Create a Reporter from config URI first, then legacy env fallbacks."""
     if os.environ.get("DISPATCHIO_CONFIG_INLINE") or os.environ.get(
         "DISPATCHIO_CONFIG"
