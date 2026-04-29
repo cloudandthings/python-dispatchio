@@ -77,7 +77,7 @@ Data produced by one job can be persisted and consumed by downstream jobs via
 Pipelines can be defined as JSON graph artifacts and loaded/validated at
 runtime. This supports decoupled graph publishing and promotion flows where the
 orchestrator consumes a versioned graph artifact instead of in-code DAG wiring.
-See [JSON Graph Decoupling](docs/json_graph_decoupling.md).
+See [JSON Graph Decoupling](https://github.com/cloudandthings/dispatchio/blob/main/docs/json_graph_decoupling.md).
 
 ## Compared to Airflow and Prefect
 
@@ -234,7 +234,7 @@ except Exception as exc:
     reporter.report_error(run_id, str(exc))
 ```
 
-See [Completion Reporting](docs/completion_reporting.md) for detailed patterns, configuration, and
+See [Completion Reporting](https://github.com/cloudandthings/dispatchio/blob/main/docs/completion_reporting.md) for detailed patterns, configuration, and
 low-level manual event writing.
 
 ### 3a. Local development loop with `run_loop()`
@@ -658,12 +658,12 @@ reporter = get_reporter("my_job")
 reporter.report_success(run_id, metadata={"rows": 1000})
 ```
 
-No changes needed. See [Completion Reporting](docs/completion_reporting.md) for full details.
+No changes needed. See [Completion Reporting](https://github.com/cloudandthings/dispatchio/blob/main/docs/completion_reporting.md) for full details.
 
-For event-driven pipelines, see [Event Dependencies](docs/external_events.md)
+For event-driven pipelines, see [Event Dependencies](https://github.com/cloudandthings/dispatchio/blob/main/docs/external_events.md)
 for single-event and two-event fan-in patterns using the existing receiver queue.
 
-For operator runbooks, see [Retries, Attempts, and Audit Workflows](docs/retries_attempts_audit.md).
+For operator runbooks, see [Retries, Attempts, and Audit Workflows](https://github.com/cloudandthings/dispatchio/blob/main/docs/retries_attempts_audit.md).
 
 ---
 
