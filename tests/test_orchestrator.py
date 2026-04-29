@@ -22,6 +22,7 @@ from dispatchio.cadence import (
     Frequency,
 )
 from dispatchio.conditions import DayOfWeekCondition, TimeOfDayCondition
+from dispatchio.executor.base import BaseExecutor
 from dispatchio.models import (
     AdmissionPolicy,
     AlertCondition,
@@ -65,7 +66,7 @@ def _job(name=None, cadence=DAILY, **kwargs) -> Job:
     )
 
 
-class SpyExecutor:
+class SpyExecutor(BaseExecutor):
     """Records every submit() call without running anything."""
 
     def __init__(self):

@@ -8,11 +8,12 @@ import boto3
 from beartype import beartype
 from botocore.client import BaseClient
 
+from dispatchio.executor.base import BaseExecutor
 from dispatchio.models import Attempt, AthenaJob, Job, Status
 
 
 @beartype
-class AthenaExecutor:
+class AthenaExecutor(BaseExecutor):
     """Submit AthenaJob runs via start_query_execution and support poke()."""
 
     def __init__(

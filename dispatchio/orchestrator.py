@@ -41,7 +41,7 @@ from dispatchio.admission import AdmissionCandidate, build_admission_plan
 from dispatchio.alerts.base import AlertEvent, AlertHandler, LogAlertHandler
 from dispatchio.cadence import DAILY, Cadence, DateCadence
 from dispatchio.conditions import TimeOfDayCondition
-from dispatchio.executor.base import Executor, Pokeable
+from dispatchio.executor.base import Executor
 from dispatchio.models import (
     AlertOn,
     Dependency,
@@ -914,8 +914,7 @@ class Orchestrator:
             executor = self.executors.get(job.executor.type)
 
             # Poke-based liveness check — preferred over heartbeat for local executors.
-            # Executors opt in by implementing the Pokeable protocol.
-            if executor is not None and isinstance(executor, Pokeable):
+            if executor is not None:
                 poke_status = executor.poke(record)
                 if poke_status is not None and poke_status != Status.RUNNING:
                     detail = f"poke: process exited with status={poke_status.value}"
@@ -1269,11 +1268,10 @@ class Orchestrator:
             executor.submit(job, record, reference_time, timeout=self.submit_timeout)
 
             # Optionally retrieve executor reference if executor implements it
-            if hasattr(executor, "get_executor_reference"):
-                ref = executor.get_executor_reference(record.correlation_id)
-                if ref is not None:
-                    record = record.model_copy(update={"trace": {"executor": ref}})
-                    self.state.update_attempt(record)
+            ref = executor.get_executor_reference(record.correlation_id)
+            if ref is not None:
+                record = record.model_copy(update={"trace": {"executor": ref}})
+                self.state.update_attempt(record)
 
             logger.info("Submitted %s/%s (attempt %d)", job.name, run_key, attempt)
             action = JobAction.RETRYING if attempt > 0 else JobAction.SUBMITTED

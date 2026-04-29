@@ -6,21 +6,23 @@ runs the job. It is fire-and-forget: submit() kicks the job off and
 returns immediately. The job reports completion separately via the
 receiver layer.
 
-Executors may optionally implement the Pokeable protocol to support
-active liveness checks. The orchestrator calls poke() during Phase 2
-(lost detection) for any active job whose executor is Pokeable.
+Executors may optionally implement poke() to support active liveness
+checks. The orchestrator calls poke() during Phase 2 (lost detection)
+for any active job.
 """
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Protocol, runtime_checkable
+from typing import Any, TypeAlias
+from uuid import UUID
 
 from dispatchio.models import Job, Attempt, Status
 
 
-@runtime_checkable
-class Executor(Protocol):
+class BaseExecutor(ABC):
+    @abstractmethod
     def submit(
         self,
         job: Job,
@@ -43,25 +45,32 @@ class Executor(Protocol):
         """
         ...
 
+    def poke(self, record: Attempt) -> Status | None:
+        """
+        Optional method for executors that can actively check job liveness.
 
-@runtime_checkable
-class Pokeable(Protocol):
-    """
-    Optional protocol for executors that can actively check job liveness.
+        Implement this to enable active liveness checks as an alternative or
+        complement to process polling mechanisms.
+        The orchestrator calls poke() during Phase 2 for every active job whose
+        executor implements this protocol.
 
-    Implement this alongside Executor to enable active liveness checks
-    as an alternative or complement to process polling mechanisms.
-    The orchestrator calls poke() during Phase 2 for every active job whose
-    executor implements this protocol.
+        Return values:
+            Status.RUNNING — process is confirmed alive; no state change
+            Status.DONE    — process exited cleanly (exit code 0) without posting
+                            a completion event; the orchestrator marks the job DONE
+            Status.ERROR   — process died unexpectedly; orchestrator marks ERROR
+            None           — liveness cannot be determined (e.g. job not tracked
+                            by this executor instance); orchestrator falls back to
+                            other liveness mechanisms
+        """
+        return None
 
-    Return values:
-        Status.RUNNING — process is confirmed alive; no state change
-        Status.DONE    — process exited cleanly (exit code 0) without posting
-                         a completion event; the orchestrator marks the job DONE
-        Status.ERROR   — process died unexpectedly; orchestrator marks ERROR
-        None           — liveness cannot be determined (e.g. job not tracked
-                         by this executor instance); orchestrator falls back to
-                         other liveness mechanisms
-    """
+    def get_executor_reference(self, correlation_id: UUID) -> dict[str, Any] | None:
+        """
+        Retrieve the executor reference for an attempt UUID.
+        Used by orchestrator to populate Attempt.trace.executor.
+        """
+        return None
 
-    def poke(self, record: Attempt) -> Status | None: ...
+
+Executor: TypeAlias = BaseExecutor
