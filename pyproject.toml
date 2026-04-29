@@ -44,13 +44,13 @@ cli = [
     "typer>=0.24",
     "rich>=13",
 ]
-aws = ["boto3>=1.26"]
+aws = ["boto3>=1.26", "jinja2>=3.0"]
 all = ["dispatchio[cli,aws]"]
 dev = [
     "pytest>=7.0",
     "freezegun>=1.2",
     "pytest-cov>=4.0",
-    "moto[sqs,awslambda,stepfunctions,athena]>=5.0",
+    "moto[sqs,awslambda,stepfunctions,athena,ssm,s3]>=5.0",
     "typer>=0.24",
     "rich>=13",
 ]

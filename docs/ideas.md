@@ -1,5 +1,12 @@
 # Suggested features - developer
 
+# Known issues
+
+LambdaExecutor has no poke(), so if a Lambda worker crashes without posting a completion event it will sit in SUBMITTED forever unless you add a timeout/lost-job policy for it.
+We could make the default timeout equal to greater than the lambda timeout but lambda is resumable now.
+
+_PendingSubmission and other code does not use submitted_by
+
 ## Namespace / identity migration tooling
 
 Now that all state records are keyed by `namespace` (derived from orchestrator name),

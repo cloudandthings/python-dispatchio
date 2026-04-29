@@ -569,3 +569,57 @@ def replay_enqueue(
     output.print_success(f"Enqueued {len(runs)} replay run(s).")
     for run in runs:
         output.print_info(f"  {run.id}  {run.run_key}")
+
+
+@app.command("dispatch")
+@handle_cli_errors
+def dispatch(
+    *,
+    orchestrator: OrchestratorOption = None,
+    job: Annotated[str, typer.Option("--job", help="Job name to dispatch.")],
+    run_key: Annotated[str, typer.Option("--run-key", help="Run key for this run.")],
+    param: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--param",
+            help="Param in KEY=VALUE form (repeatable). Passed to the job executor as params.",
+        ),
+    ] = None,
+    submitted_by: Annotated[
+        str | None,
+        typer.Option("--submitted-by", help="Who is dispatching this run."),
+    ] = None,
+    reason: ReasonOption = None,
+) -> None:
+    """Immediately submit a single job run with explicit params.
+
+    Bypasses the tick cycle and admission control. Useful for one-off ad-hoc
+    runs or manual re-runs with specific parameters.
+
+    Example:
+        dispatchio dispatch --job my_query --run-key D20260429 \\
+            --param start_date=2026-04-01 --param end_date=2026-04-29
+    """
+    if not orchestrator:
+        raise CliUserError(
+            "Specify an orchestrator with --orchestrator or DISPATCHIO_ORCHESTRATOR"
+        )
+    params: dict[str, str] = {}
+    for raw in param or []:
+        if "=" not in raw:
+            raise CliUserError(f"--param must be in KEY=VALUE form, got: {raw!r}")
+        k, _, v = raw.partition("=")
+        params[k.strip()] = v
+    orch = load_orchestrator(orchestrator)
+    result = orch.dispatch(
+        job_name=job,
+        run_key=run_key,
+        params=params,
+        submitted_by=submitted_by,
+        reason=reason,
+    )
+    output.print_success(
+        f"Dispatched {result.job_name}/{result.run_key}: {result.action.value}"
+    )
+    if result.detail:
+        output.print_info(f"  {result.detail}")

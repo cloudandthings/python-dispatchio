@@ -939,9 +939,17 @@ class MyReceiver:
 
 ---
 
+## Reference Architectures
+
+End-to-end patterns for deploying dispatchio in real environments:
+
+- [AWS Athena Pipeline](https://github.com/cloudandthings/dispatchio/blob/main/docs/reference/aws_athena_pipeline.md) — EventBridge → Lambda orchestrator, Athena queries with Jinja templates on S3, RDS state store, SSM config, operator CLI over VPN
+
+---
+
 ## Roadmap
 
-- `dispatchio[aws]` — DynamoDB state store, SQS receiver, ECS and Lambda executors + SSM config source
+- `dispatchio[aws]` — DynamoDB state store, ECS executor, Glue executor
 - HTTP receiver — FastAPI-based endpoint for non-AWS environments
 - Cron-style schedule conditions
 - Web UI / status dashboard

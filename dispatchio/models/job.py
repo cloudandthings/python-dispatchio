@@ -189,13 +189,34 @@ class StepFunctionJob(BaseModel):
 
 
 class AthenaJob(BaseModel):
-    """Run the job by submitting an Athena query execution."""
+    """Run the job by submitting an Athena query execution.
+
+    Supply exactly one of `query_string` (inline Jinja template) or
+    `query_template_uri` (s3://bucket/key to a Jinja .sql template).
+    At execution time the template is rendered with attempt.params plus the
+    standard context variables: run_key, job_name, reference_time.
+    """
 
     type: Literal["athena"] = "athena"
-    query_string: str
+    query_string: str | None = None
+    query_template_uri: str | None = None
     database: str
     output_location: str
     workgroup: str = "primary"
+
+    @model_validator(mode="after")
+    def _validate_query_source(self) -> AthenaJob:
+        has_inline = self.query_string is not None
+        has_uri = self.query_template_uri is not None
+        if not has_inline and not has_uri:
+            raise ValueError(
+                "AthenaJob requires either query_string or query_template_uri"
+            )
+        if has_inline and has_uri:
+            raise ValueError(
+                "AthenaJob accepts only one of query_string or query_template_uri, not both"
+            )
+        return self
 
 
 ExecutorConfig = Annotated[

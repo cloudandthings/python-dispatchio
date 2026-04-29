@@ -345,6 +345,50 @@ class Orchestrator:
             force=force,
         )
 
+    def dispatch(
+        self,
+        job_name: str,
+        run_key: str,
+        *,
+        params: dict[str, str] | None = None,
+        submitted_by: str | None = None,
+        reason: str | None = None,
+    ) -> JobTickResult:
+        """Immediately submit a single job run with explicit params.
+
+        Bypasses the tick cycle and admission control. Useful for one-off
+        ad-hoc runs from the CLI or external triggers.
+
+        Raises ValueError if the job is unknown or an active attempt already
+        exists for this job/run_key pair.
+        """
+        self._refresh_job_graph_if_dirty()
+        job = self._job_index.get(job_name)
+        if job is None:
+            raise ValueError(f"Unknown job: {job_name!r}")
+
+        existing = self.state.list_attempts(job_name=job_name, run_key=run_key)
+        active = [a for a in existing if a.status in Status.active()]
+        if active:
+            raise ValueError(
+                f"Active attempt already exists for {job_name!r}/{run_key!r} "
+                f"(attempt={active[0].attempt}, status={active[0].status.value}). "
+                "Consider cancelling it or waiting for it to complete."
+            )
+
+        pending = _PendingSubmission(
+            job=job,
+            run_key=run_key,
+            attempt=len(existing),
+            trigger_type=TriggerType.ADHOC,
+            trigger_reason=reason,
+            params=params or {},
+        )
+
+        now = datetime.now(tz=timezone.utc)
+        results = self._execute_submissions([pending], now)
+        return results[0]
+
     def list_runs(
         self,
         *,

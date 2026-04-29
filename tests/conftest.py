@@ -16,6 +16,18 @@ from dispatchio.models import Job, SubprocessJob, Attempt, Status
 REFERENCE_TIME = datetime(2025, 1, 15, 2, 30, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def aws_default_region(monkeypatch):
+    """Ensure a default AWS region is set for every test.
+
+    boto3 raises NoRegionError when no region is configured and none is passed
+    explicitly. CI environments have no ~/.aws/config, so we set a fallback
+    here. Tests that need a specific region should still pass it explicitly to
+    boto3.client(); this fixture only fills the gap when they don't.
+    """
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+
+
 @pytest.fixture
 def ref_time():
     return REFERENCE_TIME
