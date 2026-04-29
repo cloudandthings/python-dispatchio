@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.3.0](https://github.com/cloudandthings/python-dispatchio/compare/v0.2.0...v0.3.0) (2026-04-29)
+
+
+### Features
+
+* CLI sandbox ([c89198d](https://github.com/cloudandthings/python-dispatchio/commit/c89198d0aabe7ee81af68bd10ece7c953c206398))
+* Improve AWS coverage, add reference architecture ([60b772e](https://github.com/cloudandthings/python-dispatchio/commit/60b772efa42983afc10923449793e0702cfac8c8))
+* Introduce [@job](https://github.com/job) decorator for job metadata and enhance run-file command ([00d9b33](https://github.com/cloudandthings/python-dispatchio/commit/00d9b335260dc3182c2a160ff76529df99c83e46))
+* Parameterised runs and dates ([58d7248](https://github.com/cloudandthings/python-dispatchio/commit/58d7248df4ec709fa33fc87f7c13860560156865))
+* Renames of jobs/namespaces/events ([c2fd1b9](https://github.com/cloudandthings/python-dispatchio/commit/c2fd1b9621825784cd4233131a792cb7e30a8971))
+
+
+### Bug Fixes
+
+* Clear error when CLI not installed ([34b920f](https://github.com/cloudandthings/python-dispatchio/commit/34b920f9ad64449610e8ea4f37430e671cf14692))
+* Config caching ([2967516](https://github.com/cloudandthings/python-dispatchio/commit/2967516c7ee592c662a1ce423df3b351a7d2d39c))
+* Namespaced events ([247d129](https://github.com/cloudandthings/python-dispatchio/commit/247d129406ed67b9c4c4266f3778cc9f40313442))
+* Namespaces now work as intended ([00a74f1](https://github.com/cloudandthings/python-dispatchio/commit/00a74f18b844cfceb50ba1174384a6d9fbce73ba))
+* Optimise imports ([e434b0a](https://github.com/cloudandthings/python-dispatchio/commit/e434b0a1cd210b2c17907c524bb41a32062b8f04))
+
+
+### Documentation
+
+* Fix README links for Pypi ([6654c5f](https://github.com/cloudandthings/python-dispatchio/commit/6654c5fc66c5f53e5ea2490b1989bc3a82800c5e))
+
 ## [0.2.0](https://github.com/cloudandthings/python-dispatchio/compare/v0.1.0...v0.2.0) (2026-04-23)
 
 
