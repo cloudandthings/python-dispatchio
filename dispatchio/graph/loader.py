@@ -204,7 +204,7 @@ def orchestrator_from_graph(
         **orchestrator_kwargs:
                 Forwarded to Orchestrator (e.g. alert_handler=...).
     """
-    from dispatchio.config.loader import orchestrator
+    from dispatchio.config.factory import orchestrator
 
     validate_graph(spec)
 

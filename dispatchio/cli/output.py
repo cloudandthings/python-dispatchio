@@ -6,6 +6,7 @@ from rich.prompt import Confirm
 from rich.table import Table
 from rich.text import Text
 
+from dispatchio.config.loader import load_config
 from dispatchio.contexts import ContextEntry
 from dispatchio.models import Attempt, RetryRequest, TickResult
 from dispatchio.tick_log import TickLogRecord
@@ -47,6 +48,33 @@ _ACTION_ICONS: dict[str, str] = {
     "skipped_already_active": "·",
     "skipped_already_done": "·",
 }
+
+
+def apply_cli_settings() -> None:
+    """Load and apply CLI look-and-feel settings from config."""
+    cli_settings = load_config().cli
+    _STATUS_COLOURS.update(cli_settings.status_colors)
+    _ACTION_ICONS.update(cli_settings.action_icons)
+
+def _make_table() -> Table:
+    """Build a Rich Table using the user-configured table settings."""
+    ts = load_config().cli.table
+    kwargs: dict = {
+        "show_header": True,
+        "header_style": ts.header_style,
+        "show_lines": ts.show_lines,
+        "show_edge": ts.show_edge,
+        "expand": ts.expand,
+    }
+    if ts and ts.row_styles:
+        kwargs["row_styles"] = ts.row_styles
+    if ts and ts.border_style is not None:
+        kwargs["border_style"] = ts.border_style
+    if ts and ts.box is not None:
+        from rich import box as rich_box
+        name = ts.box.upper()
+        kwargs["box"] = None if name == "NONE" else getattr(rich_box, name, None)
+    return Table(**kwargs)
 
 
 def print_error(message: str) -> None:
@@ -95,7 +123,7 @@ def print_graph_summary(
 
 
 def print_records(records: list[Attempt]) -> None:
-    table = Table(show_header=True, header_style="bold")
+    table = _make_table()
 
     namespaces = {r.namespace for r in records if r.namespace is not None}
     show_namespace = len(namespaces) > 1
@@ -182,7 +210,7 @@ def print_tick_summary(record: TickLogRecord, *, detail: bool = False) -> None:
 
 
 def print_retry_requests(requests: list[RetryRequest]) -> None:
-    table = Table(show_header=True, header_style="bold")
+    table = _make_table()
     table.add_column("REQUESTED_AT")
     table.add_column("BY")
     table.add_column("RUN_KEY")
@@ -200,7 +228,7 @@ def print_retry_requests(requests: list[RetryRequest]) -> None:
 
 
 def print_context_list(entries: list[ContextEntry], current: str | None) -> None:
-    table = Table(show_header=True, header_style="bold")
+    table = _make_table()
     table.add_column("")
     table.add_column("NAME")
     table.add_column("CONFIG PATH")
@@ -219,3 +247,4 @@ def print_json(data: str) -> None:
 
 def confirm(message: str) -> bool:
     return Confirm.ask(message, console=console)
+

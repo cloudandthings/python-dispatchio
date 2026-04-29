@@ -18,9 +18,9 @@ from dispatchio import (
     DAILY,
     Job,
     PythonJob,
-    event_dependency,
-    orchestrator,
+    event_dependency
 )
+from dispatchio.config import orchestrator
 
 BASE = Path(__file__).parent
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))

@@ -65,10 +65,9 @@ from dispatchio import (
     MONTHLY,
     Job,
     RunContext,
-    RunSpec,
-    orchestrator,
-    resolve_run_key,
-)
+    RunSpec
+    resolve_run_key)
+from dispatchio.config import orchestrator
 from dispatchio_aws import AthenaJob
 
 BASE = Path(__file__).parent

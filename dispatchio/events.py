@@ -42,7 +42,7 @@ def emit_event(
     namespace exists the event is stored but never consumed — this is safe
     and documented behaviour.
     """
-    from dispatchio.config.loader import _build_state
+    from dispatchio.config.factory import _build_state
     from dispatchio.config.settings import DispatchioSettings
 
     settings = DispatchioSettings()

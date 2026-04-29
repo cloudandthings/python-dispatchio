@@ -25,7 +25,8 @@ sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from uuid import uuid4
 from dispatchio.models import Attempt, TriggerType
-from dispatchio import Status, run_loop
+from dispatchio import Status
+from dispatchio.run_loop import run_loop
 from examples.dependency_modes.jobs import orchestrator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

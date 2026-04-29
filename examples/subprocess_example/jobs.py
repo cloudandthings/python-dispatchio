@@ -23,7 +23,8 @@ import os
 import sys
 from pathlib import Path
 
-from dispatchio import Job, RetryPolicy, SubprocessJob, orchestrator
+from dispatchio import Job, RetryPolicy, SubprocessJob
+from dispatchio.config import orchestrator
 
 BASE = Path(__file__).parent
 

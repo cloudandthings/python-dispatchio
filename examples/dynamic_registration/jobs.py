@@ -12,7 +12,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dispatchio import DAILY, Job, JobDependency, PythonJob, orchestrator
+from dispatchio import DAILY, Job, JobDependency, PythonJob
+from dispatchio.config import orchestrator
 
 BASE = Path(__file__).parent
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))

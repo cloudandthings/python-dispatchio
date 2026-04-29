@@ -130,6 +130,64 @@ class DataStoreSettings(BaseModel):
     namespace: str = "default"
 
 
+class TableSettings(BaseModel):
+    """
+    Rich Table look-and-feel options applied to all CLI tables.
+
+    box:          Box style name from rich.box (e.g. "ROUNDED", "SIMPLE",
+                  "MINIMAL", "HORIZONTALS", "ASCII", "MARKDOWN", "HEAVY").
+                  Use "NONE" to remove all borders. Omit to keep Rich's default
+                  (HEAVY_HEAD).
+    header_style: Rich markup style for column headers. Default: "bold".
+    show_lines:   Draw a separator line between every row. Default: false.
+    show_edge:    Draw the outer table border. Default: true.
+    row_styles:   List of styles cycled across rows for alternating colours,
+                  e.g. ["", "dim"] for zebra-striping.
+    expand:       Expand the table to fill the terminal width. Default: false.
+    border_style: Rich markup style applied to all border characters,
+                  e.g. "dim" or "bright_black".
+
+    Example (dispatchio.toml):
+
+        [dispatchio.cli.table]
+        box          = "ROUNDED"
+        header_style = "bold cyan"
+        show_lines   = true
+        row_styles   = ["", "dim"]
+    """
+
+    box: str | None = None
+    header_style: str = "bold"
+    show_lines: bool = False
+    show_edge: bool = True
+    row_styles: list[str] = Field(default_factory=list)
+    expand: bool = False
+    border_style: str | None = None
+
+
+class CliSettings(BaseModel):
+    """
+    CLI look-and-feel configuration.
+
+    Keys in status_colors and action_icons are merged with built-in defaults;
+    only specified keys are overridden.
+
+    Example (dispatchio.toml):
+
+        [dispatchio.cli.status_colors]
+        done = "bright_green"
+        error = "bold red"
+
+        [dispatchio.cli.action_icons]
+        submitted = "✅"
+        skipped_condition = ""
+    """
+
+    status_colors: dict[str, str] = Field(default_factory=dict)
+    action_icons: dict[str, str] = Field(default_factory=dict)
+    table: TableSettings = Field(default_factory=TableSettings)
+
+
 class DispatchioSettings(BaseSettings):
     """
     Top-level Dispatchio runtime configuration.
@@ -164,6 +222,7 @@ class DispatchioSettings(BaseSettings):
     admission: AdmissionPolicy = Field(default_factory=AdmissionPolicy)
     data_store: DataStoreSettings = Field(default_factory=DataStoreSettings)
     dates: DateSettings = Field(default_factory=DateSettings)
+    cli: CliSettings = Field(default_factory=CliSettings)
     default_cadence: Any = "daily"
     # Accepts a frequency string ("daily", "monthly", etc.) or a full
     # Cadence dict.  Coerced to a DateCadence by _coerce_cadence below.

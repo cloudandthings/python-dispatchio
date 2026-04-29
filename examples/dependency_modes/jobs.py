@@ -30,9 +30,9 @@ from pathlib import Path
 from dispatchio import (
     DependencyMode,
     Job,
-    PythonJob,
-    orchestrator,
+    PythonJob
 )
+from dispatchio.config import orchestrator
 
 BASE = Path(__file__).parent
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))

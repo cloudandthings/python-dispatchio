@@ -26,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
-from dispatchio import run_loop
+from dispatchio.run_loop import run_loop
 from examples.hello_world.jobs import orchestrator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
