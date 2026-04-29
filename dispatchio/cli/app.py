@@ -8,7 +8,6 @@ from rich.traceback import install as _install_rich_tb
 
 from dispatchio.cli import output
 
-
 _install_rich_tb(show_locals=False)
 
 app = typer.Typer(
@@ -31,9 +30,10 @@ def callback(
     if no_color:
         output.console = Console(highlight=False, no_color=True)
         output.error_console = Console(stderr=True, highlight=False, no_color=True)
+    output.apply_cli_settings()
 
 
-from dispatchio.cli import root as _root  # noqa: F401,E402
+from dispatchio.cli import root as _root  # noqa: F401,E402 — registers root commands; must follow app definition
 from dispatchio.cli.ctx import app as ctx_app  # noqa: E402
 from dispatchio.cli.graph import app as graph_app  # noqa: E402
 from dispatchio.cli.record import app as record_app  # noqa: E402

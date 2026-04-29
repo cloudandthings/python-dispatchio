@@ -6,6 +6,9 @@ from typing import Annotated
 from dispatchio.cli.errors import CliUserError, handle_cli_errors
 from dispatchio.cli.loaders import load_store_from_context
 from dispatchio.cli.options import ContextOption
+from dispatchio.config.factory import _build_state
+from dispatchio.config.loader import load_config
+from dispatchio.contexts import ContextStore
 
 job_app = typer.Typer(help="Manage job identity in the registry.", no_args_is_help=True)
 namespace_app = typer.Typer(
@@ -181,8 +184,6 @@ def event_callback() -> None:
 
 def _load(context_name: str | None, namespace: str | None):
     """Load the state store, optionally overriding the namespace."""
-    from dispatchio.config.loader import _build_state, load_config
-    from dispatchio.contexts import ContextStore
 
     entry = ContextStore().resolve(context_name)
     if entry is not None:

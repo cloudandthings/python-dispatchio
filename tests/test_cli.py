@@ -689,7 +689,7 @@ class TestAllNamespacesFlag:
             },
         )()
 
-        with patch("dispatchio.config.loader.load_config", return_value=fake_settings):
+        with patch("dispatchio.cli.loaders.load_config", return_value=fake_settings):
             with patch("dispatchio.contexts.ContextStore") as MockCS:
                 MockCS.return_value.resolve.return_value = None
                 store = load_store_from_context(None, all_namespaces=True)
@@ -719,7 +719,7 @@ class TestAllNamespacesFlag:
             },
         )()
 
-        with patch("dispatchio.config.loader.load_config", return_value=fake_settings):
+        with patch("dispatchio.cli.loaders.load_config", return_value=fake_settings):
             with patch("dispatchio.contexts.ContextStore") as MockCS:
                 MockCS.return_value.resolve.return_value = None
                 store = load_store_from_context(None)

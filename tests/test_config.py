@@ -20,8 +20,8 @@ from dispatchio.config.loader import (
     _CONFIG_INLINE_ENV_VAR,
     _find_config_file,
     load_config,
-    orchestrator,
 )
+from dispatchio.config.factory import orchestrator
 from dispatchio.models import Job, SubprocessJob
 from dispatchio.orchestrator import Orchestrator
 from dispatchio.state import SQLAlchemyStateStore

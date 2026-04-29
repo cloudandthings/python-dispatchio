@@ -16,7 +16,8 @@ import os
 import logging
 from pathlib import Path
 
-from dispatchio import Job, PythonJob, orchestrator
+from dispatchio import Job, PythonJob
+from dispatchio.config import orchestrator
 
 BASE = Path(__file__).parent
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))
@@ -49,6 +50,6 @@ if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
-    # Run a single tick in the orchestrator, for demo purposes.
+    # Run a single tick in the for demo purposes.
     # To run several ticks in a loop, see examples/hello_world/run.py which calls run_loop().
     orchestrator.tick()

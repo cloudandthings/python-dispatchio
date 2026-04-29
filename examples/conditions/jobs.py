@@ -32,9 +32,9 @@ from dispatchio import (
     DayOfWeekCondition,
     Job,
     PythonJob,
-    TimeOfDayCondition,
-    orchestrator,
+    TimeOfDayCondition
 )
+from dispatchio.config import orchestrator
 
 BASE = Path(__file__).parent
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))

@@ -33,7 +33,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
-from dispatchio import WEEKLY, Job, PythonJob, orchestrator, resolve_run_key, run_loop
+from dispatchio import WEEKLY, Job, PythonJob, resolve_run_key
+from dispatchio.config import orchestrator
+from dispatchio.run_loop import run_loop
 from dispatchio.events import event_dependency
 from dispatchio.models import Event
 

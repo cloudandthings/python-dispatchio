@@ -24,10 +24,10 @@ from dispatchio import (
     Job,
     PythonJob,
     RunContext,
-    RunSpec,
-    orchestrator,
-    run_loop,
+    RunSpec
 )
+from dispatchio.config import orchestrator
+from dispatchio.run_loop import run_loop
 
 BASE = Path(__file__).parent
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))

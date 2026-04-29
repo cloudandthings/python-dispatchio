@@ -13,7 +13,8 @@ extra configuration.
 import os
 from pathlib import Path
 
-from dispatchio import DAILY, JobDependency, Job, PythonJob, orchestrator
+from dispatchio import DAILY, JobDependency, Job, PythonJob
+from dispatchio.config import orchestrator
 
 BASE = Path(__file__).parent
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from beartype import beartype
 
-from dispatchio.config.loader import orchestrator
+from dispatchio.config.factory import orchestrator
 from dispatchio.config.settings import DispatchioSettings
 from dispatchio.models import Job
 from dispatchio.orchestrator import Orchestrator
