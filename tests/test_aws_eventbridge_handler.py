@@ -1,0 +1,257 @@
+from __future__ import annotations
+
+from typing import Any
+from uuid import uuid4
+
+import boto3
+from moto import mock_aws
+
+from dispatchio.models import Attempt, Status, TriggerType
+from dispatchio.state.sqlalchemy_ import SQLAlchemyStateStore
+from dispatchio_aws.receiver.sqs import SQSReceiver
+from dispatchio_aws.worker.eventbridge_handler import (
+    AttemptStatusUpdate,
+    build_eventbridge_handler,
+    handler,
+)
+
+
+def test_handler_ignores_event_when_source_handler_returns_none() -> None:
+    def _selective(event: dict[str, Any]) -> AttemptStatusUpdate | None:
+        if event["detail"].get("state") == "RUNNING":
+            return None
+        return AttemptStatusUpdate(
+            trace_key="some_id",
+            trace_value=event["detail"]["id"],
+            status=Status.DONE,
+        )
+
+    custom_handler = build_eventbridge_handler(
+        extra_handlers={"com.example": _selective}
+    )
+
+    response = custom_handler(
+        {"source": "com.example", "detail": {"state": "RUNNING", "id": "x"}}, None
+    )
+    assert response == {"status": "ignored", "source": "com.example"}
+
+
+@mock_aws
+def test_stepfunctions_eventbridge_handler_posts_to_sqs(monkeypatch, tmp_path) -> None:
+    # Reset module-level singleton so this test gets its own DB connection.
+    monkeypatch.setattr("dispatchio_aws.worker.eventbridge_handler._store", None)
+
+    sqs = boto3.client("sqs", region_name="eu-west-1")
+    queue_url = sqs.create_queue(QueueName="dispatchio-completions")["QueueUrl"]
+
+    monkeypatch.setenv("DISPATCHIO_RECEIVER__BACKEND", "sqs")
+    monkeypatch.setenv("DISPATCHIO_RECEIVER__QUEUE_URL", queue_url)
+    monkeypatch.setenv("DISPATCHIO_RECEIVER__REGION", "eu-west-1")
+
+    # Seed the state store with the attempt the completion handler will look up
+    db_path = tmp_path / "dispatchio.db"
+    monkeypatch.setenv("DISPATCHIO_STATE__CONNECTION_STRING", f"sqlite:///{db_path}")
+
+    store = SQLAlchemyStateStore(f"sqlite:///{db_path}")
+    correlation_id = uuid4()
+    execution_arn = (
+        "arn:aws:states:eu-west-1:123456789012:execution:my-sfn:ingest--20260418--0"
+    )
+    record = Attempt(
+        job_name="ingest",
+        run_key="20260418",
+        attempt=0,
+        correlation_id=correlation_id,
+        status=Status.RUNNING,
+        trigger_type=TriggerType.SCHEDULED,
+        trace={
+            "executor": {
+                "execution_arn": execution_arn,
+                "execution_name": "ingest--20260418--0",
+            }
+        },
+    )
+    store.append_attempt(record)
+
+    event = {
+        "source": "aws.states",
+        "detail": {
+            "status": "SUCCEEDED",
+            "executionArn": execution_arn,
+        },
+    }
+
+    response = handler(event, None)
+    assert response["status"] == "ok"
+    assert response["job_name"] == "ingest"
+    assert response["run_key"] == "20260418"
+    assert response["attempt"] == 0
+    assert response["correlation_id"] == str(correlation_id)
+
+    receiver = SQSReceiver(queue_url=queue_url, region="eu-west-1")
+    events = receiver.drain()
+
+    assert len(events) == 1
+    assert events[0].status == Status.DONE
+    assert events[0].correlation_id == correlation_id
+
+
+@mock_aws
+def test_custom_handler_routes_additional_source(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("dispatchio_aws.worker.eventbridge_handler._store", None)
+
+    sqs = boto3.client("sqs", region_name="eu-west-1")
+    queue_url = sqs.create_queue(QueueName="dispatchio-completions")["QueueUrl"]
+
+    monkeypatch.setenv("DISPATCHIO_RECEIVER__BACKEND", "sqs")
+    monkeypatch.setenv("DISPATCHIO_RECEIVER__QUEUE_URL", queue_url)
+    monkeypatch.setenv("DISPATCHIO_RECEIVER__REGION", "eu-west-1")
+
+    db_path = tmp_path / "dispatchio.db"
+    monkeypatch.setenv("DISPATCHIO_STATE__CONNECTION_STRING", f"sqlite:///{db_path}")
+
+    store = SQLAlchemyStateStore(f"sqlite:///{db_path}")
+    correlation_id = uuid4()
+    record = Attempt(
+        job_name="glue-job",
+        run_key="20260418",
+        attempt=0,
+        correlation_id=correlation_id,
+        status=Status.RUNNING,
+        trigger_type=TriggerType.SCHEDULED,
+        trace={"executor": {"glue_job_run_id": "jr_abc123"}},
+    )
+    store.append_attempt(record)
+
+    def _glue_handler(event: dict[str, Any]) -> AttemptStatusUpdate:
+        detail = event["detail"]
+        return AttemptStatusUpdate(
+            trace_key="glue_job_run_id",
+            trace_value=detail["jobRunId"],
+            status=Status.DONE if detail["state"] == "SUCCEEDED" else Status.ERROR,
+        )
+
+    custom_handler = build_eventbridge_handler(
+        extra_handlers={"aws.glue": _glue_handler}
+    )
+
+    event = {
+        "source": "aws.glue",
+        "detail": {"state": "SUCCEEDED", "jobRunId": "jr_abc123"},
+    }
+
+    response = custom_handler(event, None)
+    assert response["status"] == "ok"
+    assert response["job_name"] == "glue-job"
+    assert response["correlation_id"] == str(correlation_id)
+
+    receiver = SQSReceiver(queue_url=queue_url, region="eu-west-1")
+    events = receiver.drain()
+    assert len(events) == 1
+    assert events[0].status == Status.DONE
+    assert events[0].correlation_id == correlation_id
+
+
+@mock_aws
+def test_custom_handler_overrides_builtin_status_mapping(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("dispatchio_aws.worker.eventbridge_handler._store", None)
+
+    sqs = boto3.client("sqs", region_name="eu-west-1")
+    queue_url = sqs.create_queue(QueueName="dispatchio-completions")["QueueUrl"]
+
+    monkeypatch.setenv("DISPATCHIO_RECEIVER__BACKEND", "sqs")
+    monkeypatch.setenv("DISPATCHIO_RECEIVER__QUEUE_URL", queue_url)
+    monkeypatch.setenv("DISPATCHIO_RECEIVER__REGION", "eu-west-1")
+
+    db_path = tmp_path / "dispatchio.db"
+    monkeypatch.setenv("DISPATCHIO_STATE__CONNECTION_STRING", f"sqlite:///{db_path}")
+
+    store = SQLAlchemyStateStore(f"sqlite:///{db_path}")
+    correlation_id = uuid4()
+    record = Attempt(
+        job_name="athena-job",
+        run_key="20260418",
+        attempt=0,
+        correlation_id=correlation_id,
+        status=Status.RUNNING,
+        trigger_type=TriggerType.SCHEDULED,
+        trace={"executor": {"query_execution_id": "qid-override"}},
+    )
+    store.append_attempt(record)
+
+    # Override the built-in aws.athena handler to treat CANCELLED as DONE
+    def _permissive_athena(event: dict[str, Any]) -> AttemptStatusUpdate:
+        detail = event.get("detail", {})
+        state = detail.get("currentState", "")
+        return AttemptStatusUpdate(
+            trace_key="query_execution_id",
+            trace_value=detail["queryExecutionId"],
+            status=Status.DONE if state in {"SUCCEEDED", "CANCELLED"} else Status.ERROR,
+        )
+
+    custom_handler = build_eventbridge_handler(
+        extra_handlers={"aws.athena": _permissive_athena}
+    )
+
+    event = {
+        "source": "aws.athena",
+        "detail": {"currentState": "CANCELLED", "queryExecutionId": "qid-override"},
+    }
+
+    response = custom_handler(event, None)
+    assert response["status"] == "ok"
+
+    receiver = SQSReceiver(queue_url=queue_url, region="eu-west-1")
+    events = receiver.drain()
+    assert len(events) == 1
+    assert events[0].status == Status.DONE  # CANCELLED mapped to DONE by override
+
+
+@mock_aws
+def test_athena_eventbridge_handler_resolves_context_from_state(
+    monkeypatch, tmp_path
+) -> None:
+    # Reset module-level singleton so this test gets its own DB connection.
+    monkeypatch.setattr("dispatchio_aws.worker.eventbridge_handler._store", None)
+
+    sqs = boto3.client("sqs", region_name="eu-west-1")
+    queue_url = sqs.create_queue(QueueName="dispatchio-completions")["QueueUrl"]
+
+    monkeypatch.setenv("DISPATCHIO_RECEIVER__BACKEND", "sqs")
+    monkeypatch.setenv("DISPATCHIO_RECEIVER__QUEUE_URL", queue_url)
+    monkeypatch.setenv("DISPATCHIO_RECEIVER__REGION", "eu-west-1")
+
+    db_path = tmp_path / "dispatchio.db"
+    monkeypatch.setenv("DISPATCHIO_STATE__CONNECTION_STRING", f"sqlite:///{db_path}")
+
+    store = SQLAlchemyStateStore(f"sqlite:///{db_path}")
+    correlation_id = uuid4()
+    record = Attempt(
+        job_name="athena-job",
+        run_key="20260418",
+        attempt=0,
+        correlation_id=correlation_id,
+        status=Status.RUNNING,
+        trigger_type=TriggerType.SCHEDULED,
+        trace={"executor": {"query_execution_id": "qid-123", "workgroup": "primary"}},
+    )
+    store.append_attempt(record)
+
+    event = {
+        "source": "aws.athena",
+        "detail": {
+            "currentState": "SUCCEEDED",
+            "queryExecutionId": "qid-123",
+        },
+    }
+
+    response = handler(event, None)
+    assert response["status"] == "ok"
+    assert response["correlation_id"] == str(correlation_id)
+
+    receiver = SQSReceiver(queue_url=queue_url, region="eu-west-1")
+    events = receiver.drain()
+
+    assert len(events) == 1
+    assert events[0].status == Status.DONE
+    assert events[0].correlation_id == correlation_id

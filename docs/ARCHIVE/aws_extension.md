@@ -52,7 +52,7 @@ python-dispatchio/                  ← repo root
 │   │   │   └── athena.py           ← Athena query submission
 │   │   ├── worker/
 │   │   │   ├── lambda_handler.py   ← harness for dispatchio jobs running in Lambda
-│   │   │   └── completion_handler.py ← thin Lambda for EventBridge → SQS
+│   │   │   └── eventbridge_handler.py ← thin Lambda for EventBridge → SQS
 │   │   └── config.py               ← AWS-specific settings + orchestrator factory
 │   └── tests/
 │       └── ...                     ← AWS code can be tested using moto
@@ -316,7 +316,7 @@ class AthenaJob:
 
 ---
 
-### 7. Thin completion Lambda  `dispatchio_aws.worker.completion_handler`
+### 7. Thin completion Lambda  `dispatchio_aws.worker.eventbridge_handler`
 
 A single reusable Lambda triggered by EventBridge rules for all supported services.
 It normalises service-specific event shapes into dispatchio completion events and
@@ -324,7 +324,7 @@ posts them to SQS.
 
 ```text
 EventBridge (Step Functions status change)  ─┐
-EventBridge (Athena query state change)     ─┴─► completion_handler Lambda ──► SQS
+EventBridge (Athena query state change)     ─┴─► eventbridge_handler Lambda ──► SQS
 EventBridge (Glue job state change, etc.)  ─┘
 ```
 
@@ -341,7 +341,7 @@ state file and queries `SELECT job_name, run_id FROM run_records WHERE metadata 
 For DynamoDB a GSI on the metadata field makes this efficient.
 
 ```python
-# dispatchio_aws/worker/completion_handler.py
+# dispatchio_aws/worker/eventbridge_handler.py
 
 def handler(event, context):
     source = event["source"]           # "aws.states", "aws.athena", ...
@@ -510,7 +510,7 @@ If not yet implemented, add:
 
 1. **Step Functions executor** — `StepFunctionJob` + `start_execution`; embeds `job_name--run_id` in execution name; stores `executionArn` in metadata
 2. **`StepFunctionsExecutor.poke()`** — `describe_execution` for RUNNING records
-3. **Thin completion Lambda** — shared `completion_handler`; EventBridge rules for Step Functions; CDK construct or CloudFormation template
+3. **Thin completion Lambda** — shared `eventbridge_handler`; EventBridge rules for Step Functions; CDK construct or CloudFormation template
 
 ### Phase 5 — Athena + extend thin Lambda
 

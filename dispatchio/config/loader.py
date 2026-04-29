@@ -170,7 +170,11 @@ class _Settings(DispatchioSettings):
 # ---------------------------------------------------------------------------
 
 
-def load_config(path: str | Path | None = None) -> DispatchioSettings:
+def load_config(
+    path: str | Path | None = None,
+    *,
+    _preloaded_data: dict[str, Any] | None = None,
+) -> DispatchioSettings:
     """
     Load DispatchioSettings by merging a config file, environment variables,
     and built-in defaults.
@@ -191,11 +195,19 @@ def load_config(path: str | Path | None = None) -> DispatchioSettings:
     — this is perfectly valid for container-based deployments that use only
     environment variables.
 
+    The `_preloaded_data` parameter is an internal hook for extension packages
+    (e.g. dispatchio[aws]) that fetch config from remote sources before calling
+    this function. When provided, file and inline-env loading is skipped.
+
     Examples:
         settings = load_config()                     # auto-discover
         settings = load_config("config/prod.toml")   # explicit file
         settings = load_config(Path("/etc/dispatchio/dispatchio.toml"))
     """
+    if _preloaded_data is not None:
+        _Settings._data = _preloaded_data
+        return _Settings()
+
     inline = os.environ.get(_CONFIG_INLINE_ENV_VAR)
     if inline:
         data = json.loads(inline)
@@ -224,7 +236,11 @@ def load_config(path: str | Path | None = None) -> DispatchioSettings:
 _cache: dict[str | Path | None, DispatchioSettings] = {}
 
 
-def get_config(path: str | Path | None = None) -> DispatchioSettings:
+def get_config(
+    path: str | Path | None = None,
+    *,
+    _preloaded_data: dict[str, Any] | None = None,
+) -> DispatchioSettings:
     """
     Return DispatchioSettings for the given path, loading and caching on first call.
 
@@ -238,5 +254,5 @@ def get_config(path: str | Path | None = None) -> DispatchioSettings:
 
     """
     if path not in _cache:
-        _cache[path] = load_config(path)
+        _cache[path] = load_config(path, _preloaded_data=_preloaded_data)
     return _cache[path]

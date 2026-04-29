@@ -202,7 +202,7 @@ Affected areas:
 Representative files:
 
 - [dispatchio_aws/executor/base.py](/Users/bjorn/github/cloudandthings/python-dispatchio/dispatchio_aws/executor/base.py)
-- [dispatchio_aws/worker/completion_handler.py](/Users/bjorn/github/cloudandthings/python-dispatchio/dispatchio_aws/worker/completion_handler.py)
+- [dispatchio_aws/worker/eventbridge_handler.py](/Users/bjorn/github/cloudandthings/python-dispatchio/dispatchio_aws/worker/eventbridge_handler.py)
 - [dispatchio_aws/reporter/sqs.py](/Users/bjorn/github/cloudandthings/python-dispatchio/dispatchio_aws/reporter/sqs.py)
 - [dispatchio_aws/worker/lambda_handler.py](/Users/bjorn/github/cloudandthings/python-dispatchio/dispatchio_aws/worker/lambda_handler.py)
 
@@ -248,7 +248,7 @@ Representative files:
 - [tests/test_state.py](/Users/bjorn/github/cloudandthings/python-dispatchio/tests/test_state.py)
 - [tests/test_cli.py](/Users/bjorn/github/cloudandthings/python-dispatchio/tests/test_cli.py)
 - [tests/test_worker.py](/Users/bjorn/github/cloudandthings/python-dispatchio/tests/test_worker.py)
-- [tests/test_aws_completion_handler.py](/Users/bjorn/github/cloudandthings/python-dispatchio/tests/test_aws_completion_handler.py)
+- [tests/test_aws_eventbridge_handler.py](/Users/bjorn/github/cloudandthings/python-dispatchio/tests/test_aws_eventbridge_handler.py)
 
 Impact level: high.
 

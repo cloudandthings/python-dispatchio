@@ -58,6 +58,7 @@ def hello_world(run_key: str) -> None:
     print(f"Hello, World! Running for {run_key}.")
     time.sleep(0.3)
 
+
 # cadence is omitted — default_cadence=DAILY from dispatchio.toml applies.
 @job(depends_on=hello_world)
 def goodbye_world(run_key: str) -> None:
@@ -112,7 +113,8 @@ import os
 import logging
 from pathlib import Path
 
-from dispatchio import Job, PythonJob, orchestrator
+from dispatchio import Job, PythonJob
+from dispatchio.config import orchestrator
 
 BASE = Path(__file__).parent
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))
@@ -142,8 +144,10 @@ JOBS = [hello_world, goodbye_world]
 orchestrator = orchestrator(JOBS, config=CONFIG_FILE)
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    # Run a single tick in the orchestrator, for demo purposes.
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
+    # Run a single tick in the for demo purposes.
     # To run several ticks in a loop, see examples/hello_world/run.py which calls run_loop().
     orchestrator.tick()
 ```
@@ -179,7 +183,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
-from dispatchio import run_loop
+from dispatchio.run_loop import run_loop
 from examples.hello_world.jobs import orchestrator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -225,7 +229,8 @@ import os
 import sys
 from pathlib import Path
 
-from dispatchio import Job, RetryPolicy, SubprocessJob, orchestrator
+from dispatchio import Job, RetryPolicy, SubprocessJob
+from dispatchio.config import orchestrator
 
 BASE = Path(__file__).parent
 
@@ -349,12 +354,8 @@ Run with:
 import os
 from pathlib import Path
 
-from dispatchio import (
-    DependencyMode,
-    Job,
-    PythonJob,
-    orchestrator,
-)
+from dispatchio import DependencyMode, Job, PythonJob
+from dispatchio.config import orchestrator
 
 BASE = Path(__file__).parent
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))
@@ -478,7 +479,8 @@ sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from uuid import uuid4
 from dispatchio.models import Attempt, TriggerType
-from dispatchio import Status, run_loop
+from dispatchio import Status
+from dispatchio.run_loop import run_loop
 from examples.dependency_modes.jobs import orchestrator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -583,14 +585,8 @@ import os
 from datetime import time
 from pathlib import Path
 
-from dispatchio import (
-    AllOf,
-    DayOfWeekCondition,
-    Job,
-    PythonJob,
-    TimeOfDayCondition,
-    orchestrator,
-)
+from dispatchio import AllOf, DayOfWeekCondition, Job, PythonJob, TimeOfDayCondition
+from dispatchio.config import orchestrator
 
 BASE = Path(__file__).parent
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))
@@ -677,16 +673,8 @@ Run with:
 import os
 from pathlib import Path
 
-from dispatchio import (
-    DAILY,
-    MONTHLY,
-    WEEKLY,
-    YESTERDAY,
-    JobDependency,
-    Job,
-    PythonJob,
-    orchestrator,
-)
+from dispatchio import DAILY, MONTHLY, WEEKLY, YESTERDAY, JobDependency, Job, PythonJob
+from dispatchio.config import orchestrator
 
 BASE = Path(__file__).parent
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))
@@ -754,7 +742,8 @@ extra configuration.
 import os
 from pathlib import Path
 
-from dispatchio import DAILY, JobDependency, Job, PythonJob, orchestrator
+from dispatchio import DAILY, JobDependency, Job, PythonJob
+from dispatchio.config import orchestrator
 
 BASE = Path(__file__).parent
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))
@@ -803,7 +792,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
-from dispatchio import run_loop
+from dispatchio.run_loop import run_loop
 from examples.data_store.jobs import orchestrator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -857,7 +846,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dispatchio import Job, PythonJob, orchestrator
+from dispatchio import Job, PythonJob
+from dispatchio.config import orchestrator
 
 BASE = Path(__file__).parent
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))
@@ -1001,13 +991,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dispatchio import (
-    DAILY,
-    Job,
-    PythonJob,
-    event_dependency,
-    orchestrator,
-)
+from dispatchio import DAILY, Job, PythonJob, event_dependency
+from dispatchio.config import orchestrator
 
 BASE = Path(__file__).parent
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))
@@ -1189,7 +1174,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dispatchio import DAILY, Job, JobDependency, PythonJob, orchestrator
+from dispatchio import DAILY, Job, JobDependency, PythonJob
+from dispatchio.config import orchestrator
 
 BASE = Path(__file__).parent
 CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))
@@ -1380,7 +1366,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
-from dispatchio import run_loop
+from dispatchio.run_loop import run_loop
 from dispatchio.graph import load_graph, orchestrator_from_graph
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -1489,7 +1475,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
-from dispatchio import WEEKLY, Job, PythonJob, orchestrator, resolve_run_key, run_loop
+from dispatchio import WEEKLY, Job, PythonJob, resolve_run_key
+from dispatchio.config import orchestrator
+from dispatchio.run_loop import run_loop
 from dispatchio.events import event_dependency
 from dispatchio.models import Event
 
@@ -1726,4 +1714,285 @@ backend = "sqs"
 # Override in env for real use.
 queue_url = "https://sqs.eu-west-1.amazonaws.com/123456789012/dispatchio-completions"
 region = "eu-west-1"
+```
+
+---
+
+## Parametrized Runs
+
+> Auto-discovered example (add example.toml for richer cookbook metadata).
+
+**Run:** `python examples/parametrized_runs/run.py`
+
+**`jobs.py`**
+
+```python
+"""
+Parametrized Runs and DateContext example.
+
+Demonstrates RunContext, RunSpec, and DateContext date variables — using a
+month-to-date AWS Athena query job.
+
+The job queries a partitioned events table over a date range. The date range
+depends on whether the job is running normally or as part of a backfill:
+
+  Normal daily mode:
+    - Always queries from the first of the current month up to today (month-to-date).
+    - On days 1–5 of a new month, also runs a full previous-month query to process
+      any late-arriving data.
+
+  Backfill mode:
+    - A single full-month query is run, keyed to the month (e.g. M202601).
+    - resolve_run_key(MONTHLY, rc.reference_time) produces the same key for every
+      day in January, so backfill-enqueue can iterate daily reference times and
+      state idempotency ensures only one submission per month is made.
+
+Run keys produced:
+
+  Normal (any day except days 1–5):
+    D20260415:current_month
+
+  Normal (days 1–5 — overlap window active):
+    D20260503:current_month
+    D20260503:previous_month
+
+  Backfill (one per month regardless of how many days are iterated):
+    M202601
+    M202602
+    ...
+
+CLI usage:
+
+  # Plan a full-year backfill before committing
+  dispatchio backfill-plan \\
+      --job athena_daily_events \\
+      --start 2025-01-01 --end 2025-12-31 \\
+      --order asc
+
+  # Enqueue — 12 monthly runs, warns and skips any already DONE
+  dispatchio backfill-enqueue \\
+      --job athena_daily_events \\
+      --start 2025-01-01 --end 2025-12-31 \\
+      --order asc --submitted-by bjorn --reason "initial backfill"
+
+  # One-off manual correction with explicit dates, bypassing the runs callable
+  dispatchio dispatch \\
+      --job athena_daily_events \\
+      --variant q1_correction \\
+      --param start_date=2025-01-01 \\
+      --param end_date=2025-03-31 \\
+      --run-date 2025-03-31 \\
+      --submitted-by bjorn \\
+      --reason "restate Q1 after source fix"
+"""
+
+import os
+from pathlib import Path
+
+from dispatchio import DAILY, MONTHLY, Job, RunContext, RunSpec, resolve_run_key
+from dispatchio.config import orchestrator
+from dispatchio_aws import AthenaJob
+
+BASE = Path(__file__).parent
+CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))
+
+# The query accepts two date parameters injected at submission time.
+EVENTS_QUERY = """
+    SELECT
+        event_date,
+        event_type,
+        count(*)        AS event_count,
+        count(DISTINCT user_id) AS unique_users
+    FROM events_db.raw_events
+    WHERE event_date BETWEEN DATE '{start_date}' AND DATE '{end_date}'
+    GROUP BY 1, 2
+    ORDER BY 1, 2
+"""
+
+
+def athena_runs(rc: RunContext) -> list[RunSpec]:
+    if rc.is_backfill:
+        # Backfill mode: return a run_key keyed to the month rather than the day.
+        # resolve_run_key(MONTHLY, ...) produces "M202601" for any day in January,
+        # so backfill-enqueue can iterate daily reference times across a full year
+        # and state idempotency ensures only one submission fires per month.
+        return [
+            RunSpec(
+                run_key=resolve_run_key(MONTHLY, rc.reference_time),
+                params={
+                    # Dates are dash-delimited (yyyymmddD) to match Athena's DATE literal syntax.
+                    "start_date": rc.dates["mon0_first_yyyymmddD"],
+                    "end_date": rc.dates["mon0_last_yyyymmddD"],
+                },
+            )
+        ]
+
+    # Normal daily mode: always include a month-to-date run for the current month.
+    runs = [
+        RunSpec(
+            variant="current_month",
+            params={
+                # First of the current month to today gives the month-to-date window.
+                "start_date": rc.dates["mon0_first_yyyymmddD"],
+                "end_date": rc.dates["day0_yyyymmddD"],
+            },
+        )
+    ]
+
+    # Overlap window check: compare the month of today against the month of five
+    # days ago. If they differ, today is within the first five days of a new month,
+    # meaning some late data from last month may still be arriving. Add a full
+    # previous-month run to cover it.
+    #
+    # Example: today = 2026-05-03
+    #   day0_yyyymm = "202605"
+    #   day5_yyyymm = "202604"  ← different, so we are in the overlap window
+    #
+    # Example: today = 2026-05-08
+    #   day0_yyyymm = "202605"
+    #   day5_yyyymm = "202605"  ← same, overlap window has closed
+    if rc.dates["day0_yyyymm"] != rc.dates["day5_yyyymm"]:
+        runs.append(
+            RunSpec(
+                variant="previous_month",
+                params={
+                    "start_date": rc.dates["mon1_first_yyyymmddD"],
+                    "end_date": rc.dates["mon1_last_yyyymmddD"],
+                },
+            )
+        )
+
+    return runs
+
+
+athena_daily_events = Job.create(
+    "athena_daily_events",
+    AthenaJob(
+        query_string=EVENTS_QUERY,
+        database="events_db",
+        output_location="s3://my-bucket/athena-results/",
+    ),
+    cadence=DAILY,
+    runs=athena_runs,
+)
+
+JOBS = [athena_daily_events]
+orchestrator = orchestrator(JOBS, config=CONFIG_FILE)
+```
+
+**`my_work.py`**
+
+```python
+"""
+Parametrized Runs example worker.
+
+Reads date-range parameters from DISPATCHIO_PARAM_* environment variables
+injected by the orchestrator at submit time, then reports completion via
+the Dispatchio harness.
+
+In the real world, this function would do some useful work.
+Here we just print and exit.
+"""
+
+import os
+
+
+def process(run_key: str) -> None:
+    start_date = os.environ.get("DISPATCHIO_PARAM_START_DATE", "<not set>")
+    end_date = os.environ.get("DISPATCHIO_PARAM_END_DATE", "<not set>")
+    print(f"[{run_key}] Processing date range: {start_date} → {end_date}")
+```
+
+**`run.py`**
+
+```python
+"""
+Parametrized Runs example runner.
+
+Demonstrates RunSpec / RunContext / DateContext with a PythonJob that
+simulates a month-to-date pattern from jobs.py.
+
+Normal mode:
+  - Submits a "current_month" run from month-start to today.
+  - On days 1-5 of a new month, also submits a "previous_month" run.
+
+Run:
+    python examples/parametrized_runs/run.py
+"""
+
+import logging
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parents[2]))
+
+from dispatchio import DAILY, Job, PythonJob, RunContext, RunSpec
+from dispatchio.config import orchestrator
+from dispatchio.run_loop import run_loop
+
+BASE = Path(__file__).parent
+CONFIG_FILE = os.getenv("DISPATCHIO_CONFIG", str(BASE / "dispatchio.toml"))
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+
+def date_range_runs(rc: RunContext) -> list[RunSpec]:
+    runs = [
+        RunSpec(
+            variant="current_month",
+            params={
+                "start_date": rc.dates["mon0_first_yyyymmddD"],
+                "end_date": rc.dates["day0_yyyymmddD"],
+            },
+        )
+    ]
+    # Overlap window: if today and 5 days ago are in different months,
+    # also run a full previous-month query to catch late-arriving data.
+    if rc.dates["day0_yyyymm"] != rc.dates["day5_yyyymm"]:
+        runs.append(
+            RunSpec(
+                variant="previous_month",
+                params={
+                    "start_date": rc.dates["mon1_first_yyyymmddD"],
+                    "end_date": rc.dates["mon1_last_yyyymmddD"],
+                },
+            )
+        )
+    return runs
+
+
+process_date_range = Job.create(
+    "process_date_range",
+    PythonJob(
+        script=str(BASE / "my_work.py"),
+        function="process",
+    ),
+    cadence=DAILY,
+    runs=date_range_runs,
+)
+
+JOBS = [process_date_range]
+_orchestrator = orchestrator(JOBS, config=CONFIG_FILE)
+
+if __name__ == "__main__":
+    run_loop(_orchestrator)
+```
+
+**`dispatchio.toml`**
+
+```toml
+# Dispatchio configuration — parametrized_runs example (local dev)
+
+[dispatchio]
+log_level = "INFO"
+default_cadence = "daily"
+
+[dispatchio.state]
+backend = "sqlalchemy"
+connection_string = "sqlite:///dispatchio.db"
+
+[dispatchio.receiver]
+backend  = "filesystem"
+drop_dir = ".dispatchio/completions"
 ```
